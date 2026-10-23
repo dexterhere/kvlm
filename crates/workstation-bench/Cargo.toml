@@ -1,0 +1,15 @@
+[package]
+name = "workstation-bench"
+description = "Reproducible inference benchmarking for Local AI Workstation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+workstation-core.workspace = true
+workstation-runtimes.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    "crates/workstation-core",
+    "crates/workstation-runtimes",
+    "crates/workstation-bench",
+    "crates/workstation-app",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+workstation-core = { path = "crates/workstation-core" }
+workstation-runtimes = { path = "crates/workstation-runtimes" }
+workstation-bench = { path = "crates/workstation-bench" }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "macros"] }
+async-channel = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+lto = "thin"
+strip = "debuginfo"

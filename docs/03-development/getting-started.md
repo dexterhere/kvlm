@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Linux, Rust stable (edition 2024; Rust 1.85+), Cargo, rustfmt, and Clippy.
+- Linux, Rust stable (edition 2024; Rust 1.92+), Cargo, rustfmt, and Clippy.
 - GTK 4.12+ and Libadwaita 1.4+ headers and libraries.
 - C compiler, linker, and pkg-config.
 - Python 3.11+ for repository checks.
