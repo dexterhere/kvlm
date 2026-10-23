@@ -1,0 +1,48 @@
+# Git workflow
+
+Use `main` as the integration branch and a focused branch for each contribution.
+There is no remote configured by this setup; commits are local until maintainers
+choose a hosting location and publish it.
+
+## Small, frequent checkpoints
+
+Commit coherent units as they become reviewable: documentation organization,
+workspace foundation, UI shell, build integration, or a focused bug fix. Avoid a
+single end-of-task dump and avoid commits that only exist to inflate commit count.
+
+Use an imperative subject with a useful prefix:
+
+```text
+docs: organize product and contributor guidance
+build: initialize four-crate Rust workspace
+feat: add GNOME application shell
+test: validate repository metadata
+```
+
+Explain non-obvious intent or validation in the body when useful. Stage specific
+paths and inspect the staged diff before committing. Do not rewrite a contributor's
+history or discard unrelated working-tree changes without agreement.
+
+## Authorship
+
+Use the real configured Git author. Never invent an identity. Do not add
+`Co-authored-by` trailers, generated assistant attribution, or tool signatures.
+This does not remove legal copyright notices or authorize inaccurate authorship.
+No sign-off trailer, CLA, or copyright assignment is required by this project.
+
+## Before review
+
+Run the [development checks](getting-started.md). Keep credentials, personal paths,
+generated files, model weights, and database contents out of commits. Update docs
+and tests with behavior changes. A pull request should explain the resulting
+behavior and any meaningful validation limits.
+
+## Before community publication
+
+- Choose the public repository and add its real URL to project metadata.
+- Configure a private vulnerability-reporting route and conduct contact.
+- Set branch protections and required CI checks on the hosting service.
+- Keep the current application ID provisional until the namespace is confirmed.
+- Validate release licensing, AppStream content, and distribution packaging.
+
+These are host configuration tasks, not settings that local files can enforce.
