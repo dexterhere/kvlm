@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Local AI Workstation
+Comment=Explore hardware fit and local AI runtime performance
+Exec=local-ai-workstation
+TryExec=local-ai-workstation
+Icon=org.gnome.LocalAIWorkstation
+Terminal=false
+Categories=Development;
+Keywords=AI;local;inference;models;benchmark;
+StartupNotify=true

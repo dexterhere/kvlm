@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<schemalist>
+  <schema id="org.gnome.LocalAIWorkstation" path="/org/gnome/LocalAIWorkstation/">
+    <key name="local-only-mode" type="b">
+      <default>true</default>
+      <summary>Allow only local inference</summary>
+      <description>Future runtime integrations must block cloud-routed models when enabled.
+      The development foundation does not connect to any runtime or read this setting.</description>
+    </key>
+  </schema>
+</schemalist>

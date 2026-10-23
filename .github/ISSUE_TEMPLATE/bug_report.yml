@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a reproducible problem in implemented behavior
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project is an early development foundation. Check the roadmap before
+        reporting a planned feature as broken. Follow SECURITY.md for vulnerabilities;
+        do not post tokens, private prompts, or sensitive system details here.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include a minimal example that another contributor can follow.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit ID, distribution, Rust, GTK, and Libadwaita versions; GPU/runtime if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Reviewed logs or screenshots
+      description: Remove credentials, private paths, hostnames, and prompts.

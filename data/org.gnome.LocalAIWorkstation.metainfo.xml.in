@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<component type="desktop-application">
+  <id>org.gnome.LocalAIWorkstation</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Local AI Workstation</name>
+  <summary>Explore hardware fit and local AI runtime performance</summary>
+  <developer>
+    <name>Local AI Workstation contributors</name>
+  </developer>
+  <description>
+    <p>A community project building a native desktop control plane for local AI inference.</p>
+    <p>This development foundation provides the application shell. Hardware discovery,
+    model catalogs, runtime management, and benchmarking are planned features.</p>
+  </description>
+  <launchable type="desktop-id">org.gnome.LocalAIWorkstation.desktop</launchable>
+  <provides>
+    <binary>local-ai-workstation</binary>
+  </provides>
+  <categories>
+    <category>Development</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </supports>
+</component>

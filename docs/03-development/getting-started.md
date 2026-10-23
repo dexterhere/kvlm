@@ -55,15 +55,21 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 python3 scripts/check_repository.py
+python3 -m unittest discover -s tests -p 'test_*.py'
 glib-compile-schemas --strict --dry-run data
-desktop-file-validate data/org.gnome.LocalAIWorkstation.desktop.in
-appstreamcli validate --no-net data/org.gnome.LocalAIWorkstation.metainfo.xml.in
+appstreamcli validate --no-net --override=url-homepage-missing=info \
+  data/org.gnome.LocalAIWorkstation.metainfo.xml.in
 ```
 
 `Cargo.lock` is committed because this workspace ships an application. Use `--locked`
 for normal builds and CI; update dependencies intentionally and commit lockfile changes.
 For offline builds, first cache dependencies with `cargo fetch --locked`, then add
 `--offline`. CI does not download models or connect to an inference runtime.
+
+Validate the generated `.desktop` file with `meson test` after Meson setup below;
+`desktop-file-validate` rejects the source template's `.in` extension. AppStream
+currently reports the missing public homepage as informational because the project
+is unpublished. Add the real URL and remove this override before release.
 
 ## Build and install with Meson
 
@@ -82,7 +88,8 @@ icon, AppStream metadata, and settings schema. Run the installed binary as
 DESTDIR="$PWD/stage" meson install -C build
 ```
 
-Meson initially builds with Cargo's release profile. Its Cargo target directory is
+Meson builds Cargo's development profile by default; use `--buildtype=release`
+with `meson setup` for a release build. Its Cargo target directory is
 inside the build tree so it does not interfere with regular Cargo builds. This is
 a native build foundation, not completed `.deb`, `.rpm`, AppImage, or Flatpak packaging.
 

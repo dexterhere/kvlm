@@ -20,7 +20,7 @@ engine, or privileged system daemon. No usage analytics or crash-report uploads.
 
 ## Get started
 
-Use Linux, Rust stable with edition 2024 support, GTK 4.12+, Libadwaita 1.4+,
+Use Linux, Rust stable (1.92+), GTK 4.12+, Libadwaita 1.4+,
 a C toolchain, and pkg-config. See the
 [development guide](docs/03-development/getting-started.md) for system dependencies.
 
@@ -72,3 +72,5 @@ before accepting public reports; no repository URL or reporting address is inven
 GPL-3.0-or-later. See [COPYING](COPYING) for the full license. Contributions are
 accepted under the same license, with no copyright assignment or contributor
 license agreement. Third-party models and runtime binaries retain their own licenses.
+The AppStream metadata file is CC0-1.0 so software catalogs can redistribute its
+descriptions; see [the CC0 text](LICENSES/CC0-1.0.txt).

@@ -1,0 +1,25 @@
+name: Feature proposal
+description: Discuss a community use case or improvement
+body:
+  - type: markdown
+    attributes:
+      value: Check the roadmap and existing proposals first. Small, concrete use cases help us prioritize.
+  - type: textarea
+    id: need
+    attributes:
+      label: What problem would this solve?
+      description: Describe who needs this and the current workaround.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful version and any alternatives.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Roadmap and constraints
+      description: Mention relevant milestones, hardware, runtime, accessibility, or privacy constraints.
