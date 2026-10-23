@@ -81,7 +81,7 @@ meson install -C build
 ```
 
 Meson calls Cargo with the committed lockfile, installs the executable, launcher,
-icon, AppStream metadata, and settings schema. Run the installed binary as
+icon, AppStream metadata, settings schema, and license texts. Run the installed binary as
 `~/.local/bin/local-ai-workstation`. For a staging installation:
 
 ```sh

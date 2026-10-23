@@ -72,5 +72,5 @@ before accepting public reports; no repository URL or reporting address is inven
 GPL-3.0-or-later. See [COPYING](COPYING) for the full license. Contributions are
 accepted under the same license, with no copyright assignment or contributor
 license agreement. Third-party models and runtime binaries retain their own licenses.
-The AppStream metadata file is CC0-1.0 so software catalogs can redistribute its
-descriptions; see [the CC0 text](LICENSES/CC0-1.0.txt).
+The AppStream metadata file, including contributions to that file, is CC0-1.0 so
+software catalogs can redistribute its descriptions; see [the CC0 text](LICENSES/CC0-1.0.txt).

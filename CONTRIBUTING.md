@@ -53,6 +53,8 @@ Assume good intent, give specific feedback, and help new contributors reproduce
 problems. A contribution does not guarantee acceptance; maintainers review fit,
 correctness, safety, and maintenance cost.
 
-By contributing, you offer your changes under GPL-3.0-or-later. No copyright
-assignment or CLA is required. Keep third-party license notices and identify the
-origin of reused material.
+By contributing, you offer changes under the license of the files you modify:
+GPL-3.0-or-later for project code and documentation, and CC0-1.0 for AppStream
+metadata as marked in that file. New project source files use GPL-3.0-or-later.
+No copyright assignment or CLA is required. Keep third-party license notices and
+identify the origin of reused material.

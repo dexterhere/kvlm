@@ -48,6 +48,8 @@ install_data(
   'data/icons/hicolor/scalable/apps' / app_id + '.svg',
   install_dir: get_option('datadir') / 'icons/hicolor/scalable/apps',
 )
+install_data('COPYING', 'LICENSES/CC0-1.0.txt',
+  install_dir: get_option('datadir') / 'licenses/local-ai-workstation')
 gnome.post_install(
   glib_compile_schemas: true,
   gtk_update_icon_cache: true,
