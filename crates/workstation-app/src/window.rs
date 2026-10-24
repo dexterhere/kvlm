@@ -8,6 +8,8 @@ use crate::bridge::{self, CoreCommand, UiEvent};
 use crate::views;
 
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
+    let (commands, events) = bridge::start(runtime);
+    let runtimes = views::runtimes::Runtimes::new(commands.clone());
     let stack = adw::ViewStack::new();
     stack.set_vexpand(true);
     stack.add_titled_with_icon(
@@ -23,7 +25,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         "system-search-symbolic",
     );
     stack.add_titled_with_icon(
-        &views::runtimes::build(),
+        &runtimes.widget,
         Some("runtimes"),
         "Runtimes",
         "network-server-symbolic",
@@ -53,7 +55,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
 
     let bottom_switcher = adw::ViewSwitcherBar::builder().stack(&stack).build();
     let status = gtk::Label::builder()
-        .label("Starting background worker…")
+        .label("Checking attached Ollama…")
         .wrap(true)
         .margin_top(8)
         .margin_bottom(8)
@@ -101,14 +103,27 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         );
     }
 
-    let (commands, events) = bridge::start(runtime);
-    if commands.send(CoreCommand::Initialize).is_err() {
+    if commands.try_send(CoreCommand::Initialize).is_err() {
         status.set_label("Background worker unavailable.");
     }
+    let refresh = gio::SimpleAction::new("refresh-runtime", None);
+    let weak_refresh = runtimes.refresh.downgrade();
+    refresh.connect_activate(move |_, _| {
+        if let Some(button) = weak_refresh.upgrade() {
+            button.emit_clicked();
+        }
+    });
+    window.add_action(&refresh);
+    app.set_accels_for_action("win.refresh-runtime", &["<Primary>r"]);
+    runtimes.request();
     let closing_events = events.clone();
     window.connect_close_request(move |_| {
         closing_events.close();
         glib::Propagation::Proceed
+    });
+    let shutdown_events = events.clone();
+    app.connect_shutdown(move |_| {
+        shutdown_events.close();
     });
     let weak_status = status.downgrade();
     glib::MainContext::default().spawn_local(async move {
@@ -117,9 +132,18 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
             let Some(status) = weak_status.upgrade() else {
                 break;
             };
+            runtimes.receive(&event);
             match event {
-                UiEvent::WorkerReady => {
-                    status.set_label("Development foundation · No runtime connected")
+                UiEvent::WorkerReady => {}
+                UiEvent::OllamaDiscovered(discovery) => status.set_label(
+                    if discovery.installed.is_ok() && discovery.running.is_ok() {
+                        "Connected: Ollama · Attached :11434"
+                    } else {
+                        "Connected: Ollama · Model discovery incomplete"
+                    },
+                ),
+                UiEvent::OllamaFailed(_) => {
+                    status.set_label("Ollama unavailable · See Runtimes to retry")
                 }
             }
         }
