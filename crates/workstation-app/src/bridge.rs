@@ -5,15 +5,19 @@ use crate::fit_workflow::{FitReport, FitRequest, estimate};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use workstation_core::hardware::HardwareProfile;
+use workstation_runtimes::ollama::{Discovery, OllamaAdapter};
 
 #[derive(Debug)]
 pub enum CoreCommand {
     DetectHardware,
+    DiscoverOllama,
     EstimateFit(FitRequest),
 }
 
 #[derive(Debug)]
 pub enum UiEvent {
+    OllamaDiscovered(Box<Discovery>),
+    OllamaFailed(String),
     HardwareDetected(Box<HardwareProfile>),
     HardwareFailed(String),
     FitFinished {
@@ -72,6 +76,17 @@ fn start_with_workers(
                             .map(|issue| format!("{}: {}", issue.component, issue.message))
                             .collect::<Vec<_>>().join("\n")),
                         Err(error) => UiEvent::HardwareFailed(format!("Hardware worker failed: {error}")),
+                    };
+                    if events.send(event).await.is_err() { break; }
+                }
+                CoreCommand::DiscoverOllama => {
+                    let result = tokio::select! {
+                        _ = events.closed() => break,
+                        result = async { OllamaAdapter::new()?.discover().await } => result,
+                    };
+                    let event = match result {
+                        Ok(discovery) => UiEvent::OllamaDiscovered(Box::new(discovery)),
+                        Err(message) => UiEvent::OllamaFailed(message),
                     };
                     if events.send(event).await.is_err() { break; }
                 }

@@ -9,7 +9,8 @@ use crate::views;
 
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
     let (commands, events) = bridge::start(runtime);
-    let overview = views::overview::Overview::new(commands);
+    let overview = views::overview::Overview::new(commands.clone());
+    let runtimes = views::runtimes::Runtimes::new(commands);
     let stack = adw::ViewStack::new();
     stack.set_vexpand(true);
     stack.add_titled_with_icon(
@@ -25,7 +26,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         "system-search-symbolic",
     );
     stack.add_titled_with_icon(
-        &views::runtimes::build(),
+        &runtimes.widget,
         Some("runtimes"),
         "Runtimes",
         "network-server-symbolic",
@@ -55,7 +56,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
 
     let bottom_switcher = adw::ViewSwitcherBar::builder().stack(&stack).build();
     let status = gtk::Label::builder()
-        .label("Detecting hardware · No runtime connected")
+        .label("Detecting hardware · Ollama not checked")
         .wrap(true)
         .margin_top(8)
         .margin_bottom(8)
@@ -103,15 +104,25 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         );
     }
 
-    let refresh = gio::SimpleAction::new("refresh-hardware", None);
-    let weak_refresh = overview.refresh.downgrade();
+    let refresh = gio::SimpleAction::new("refresh", None);
+    let weak_stack = stack.downgrade();
+    let weak_hardware = overview.refresh.downgrade();
+    let weak_runtime = runtimes.refresh.downgrade();
     refresh.connect_activate(move |_, _| {
-        if let Some(button) = weak_refresh.upgrade() {
+        let Some(stack) = weak_stack.upgrade() else {
+            return;
+        };
+        let button = match stack.visible_child_name().as_deref() {
+            Some("overview") => weak_hardware.upgrade(),
+            Some("runtimes") => weak_runtime.upgrade(),
+            _ => None,
+        };
+        if let Some(button) = button {
             button.emit_clicked();
         }
     });
     window.add_action(&refresh);
-    app.set_accels_for_action("win.refresh-hardware", &["<Primary>r"]);
+    app.set_accels_for_action("win.refresh", &["<Primary>r"]);
     overview.request();
     let closing_events = events.clone();
     window.connect_close_request(move |_| {
@@ -124,16 +135,30 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     });
     let weak_status = status.downgrade();
     glib::MainContext::default().spawn_local(async move {
+        let mut hardware_status = "Detecting hardware";
+        let mut runtime_status = "Ollama not checked";
         while let Ok(event) = events.recv().await {
             let Some(status) = weak_status.upgrade() else {
                 break;
             };
             overview.receive(&event);
-            status.set_label(match event {
-                UiEvent::HardwareDetected(_) => "Hardware snapshot ready · No runtime connected",
-                UiEvent::HardwareFailed(_) => "Hardware detection failed · No runtime connected",
+            runtimes.receive(&event);
+            match event {
+                UiEvent::HardwareDetected(_) => hardware_status = "Hardware snapshot ready",
+                UiEvent::HardwareFailed(_) => hardware_status = "Hardware detection failed",
+                UiEvent::OllamaDiscovered(discovery) => {
+                    runtime_status = if discovery.installed.is_ok() && discovery.running.is_ok() {
+                        "Connected: Ollama · Attached :11434"
+                    } else {
+                        "Connected: Ollama · Model discovery incomplete"
+                    }
+                }
+                UiEvent::OllamaFailed(_) => {
+                    runtime_status = "Ollama unavailable · See Runtimes to retry"
+                }
                 UiEvent::FitFinished { .. } => continue,
-            });
+            }
+            status.set_label(&format!("{hardware_status} · {runtime_status}"));
         }
     });
 
