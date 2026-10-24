@@ -14,6 +14,10 @@ Shared sanitized data belongs in [fixtures](fixtures/README.md). Routine CI must
 not need a GPU, installed runtime, network service, gated token, or model download.
 Live runtime/hardware tests should be explicitly opt-in and document their setup.
 
+GGUF integration tests in `crates/workstation-core/tests/gguf_metadata_tests.rs`
+build synthetic byte fixtures, including malformed headers and tensor ranges.
+They need no model downloads and verify that inspection avoids tensor payload reads.
+
 The repository validator has standard-library Python regression tests:
 
 ```sh

@@ -5,6 +5,11 @@ Promotion remains `develop → staging → main`, with PRs at every stage and no
 commits to those branches. Leave PRs unmerged until merging is requested. New branches
 normally use `codex/`. Policy hooks/CI from the hardware PR are not integrated on this
 independent branch; follow these rules explicitly.
+A dependent integration PR may carry prerequisite commits onto a feature branch
+created from `develop`, without merging prerequisite PRs or changing `develop`,
+`staging`, or `main`. List dependencies in its description, review them first, and
+refresh the dependent branch after integration. Reuse their implementations.
+
 `origin` is configured as `https://github.com/dexterhere/kvlm.git`. Adding the remote
 does not publish commits or establish an upstream tracking branch. Push changes
 only when publication is requested.

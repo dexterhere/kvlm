@@ -4,7 +4,8 @@ A community-built GNOME desktop application for understanding what local AI mode
 your hardware can run, managing inference runtimes safely, and measuring performance.
 
 **Status: development foundation.** The workspace and four-view application shell
-are in place, plus a supplied-metadata static memory-fit calculator in core. Hardware
+are in place, plus a supplied-metadata static memory-fit calculator and bounded
+local GGUF metadata inspection in core. Hardware
 and attached-Ollama discovery are separate, unmerged PRs. Desktop fit badges, inference,
 downloads, database storage, and benchmarks are not implemented on this branch yet.
 This is an independent community project;
@@ -44,6 +45,9 @@ cache storage, buffers, and runtime allowance, then classifies one selected CPU/
 placement. Missing metadata or unverified compatibility remains Unknown; shared memory
 is never added to host RAM. This does not grant benchmark verification. See the
 [calculator guide](docs/03-development/static-memory-fit.md) for scope and checks.
+
+For local GGUF inspection, see the [metadata guide](docs/03-development/gguf-metadata.md).
+This reports declarations and tensor layout; runtime compatibility remains unverified.
 
 ```sh
 cargo fmt --all --check
