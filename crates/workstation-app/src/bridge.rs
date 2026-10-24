@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Typed messages keep GTK objects out of blocking hardware probes.
 
+use crate::fit_workflow::{FitReport, FitRequest, estimate};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use workstation_core::hardware::HardwareProfile;
@@ -8,33 +9,50 @@ use workstation_core::hardware::HardwareProfile;
 #[derive(Debug)]
 pub enum CoreCommand {
     DetectHardware,
+    EstimateFit(FitRequest),
 }
 
 #[derive(Debug)]
 pub enum UiEvent {
     HardwareDetected(Box<HardwareProfile>),
     HardwareFailed(String),
+    FitFinished {
+        id: u64,
+        result: Result<Box<FitReport>, String>,
+    },
 }
 
 pub fn start(
     runtime: &tokio::runtime::Handle,
 ) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
-    start_with_probe(runtime, HardwareProfile::detect)
+    start_with_workers(runtime, HardwareProfile::detect, estimate)
 }
 
+#[cfg(test)]
 fn start_with_probe(
     runtime: &tokio::runtime::Handle,
     probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
 ) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
+    start_with_workers(runtime, probe, estimate)
+}
+
+fn start_with_workers(
+    runtime: &tokio::runtime::Handle,
+    probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
+    fit: impl Fn(FitRequest) -> Result<FitReport, String> + Send + Sync + 'static,
+) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
     let (commands, mut command_rx) = mpsc::channel(1);
     let (events, event_rx) = async_channel::bounded(1);
     let probe = Arc::new(probe);
+    let fit = Arc::new(fit);
     runtime.spawn(async move {
+        let mut pending = None;
         loop {
-            let command = tokio::select! {
+            if events.is_closed() { break; }
+            let command = if let Some(command) = pending.take() { command } else { tokio::select! {
                 _ = events.closed() => break,
                 command = command_rx.recv() => match command { Some(command) => command, None => break },
-            };
+            }};
             match command {
                 CoreCommand::DetectHardware => {
                     let probe = Arc::clone(&probe);
@@ -42,8 +60,12 @@ fn start_with_probe(
                         _ = events.closed() => break,
                         result = tokio::task::spawn_blocking(move || probe()) => result,
                     };
-                    // All queued requests are for the same snapshot; do not build a refresh backlog.
-                    while command_rx.try_recv().is_ok() {}
+                    // Coalesce only refreshes; a queued fit request must not be discarded.
+                    while let Ok(command) = command_rx.try_recv() {
+                        if matches!(command, CoreCommand::DetectHardware) { continue; }
+                        pending = Some(command);
+                        break;
+                    }
                     let event = match result {
                         Ok(profile) if profile.has_readings() => UiEvent::HardwareDetected(Box::new(profile)),
                         Ok(profile) => UiEvent::HardwareFailed(profile.issues.iter()
@@ -52,6 +74,19 @@ fn start_with_probe(
                         Err(error) => UiEvent::HardwareFailed(format!("Hardware worker failed: {error}")),
                     };
                     if events.send(event).await.is_err() { break; }
+                }
+                CoreCommand::EstimateFit(request) => {
+                    let id = request.id;
+                    let fit = Arc::clone(&fit);
+                    let result = tokio::select! {
+                        _ = events.closed() => break,
+                        result = tokio::task::spawn_blocking(move || fit(request)) => result,
+                    };
+                    let result = result
+                        .map_err(|_| "Model inspection worker failed. Try again with a local GGUF file.".into())
+                        .and_then(|result| result)
+                        .map(Box::new);
+                    if events.send(UiEvent::FitFinished { id, result }).await.is_err() { break; }
                 }
             }
         }
@@ -187,5 +222,127 @@ mod tests {
         let closed = tokio::time::timeout(Duration::from_secs(2), commands.closed()).await;
         release.send(()).unwrap();
         assert!(closed.is_ok());
+    }
+
+    fn fit_request(id: u64) -> CoreCommand {
+        use workstation_core::fit::{gguf_fit::LayoutAssumption, memory_math::KvCacheType};
+        CoreCommand::EstimateFit(FitRequest {
+            id,
+            path: "unused-fixture-path".into(),
+            scenario: crate::fit_workflow::parse_scenario(
+                "4096",
+                "512",
+                KvCacheType::F16,
+                KvCacheType::F16,
+            )
+            .unwrap(),
+            layout: LayoutAssumption::Unconfirmed,
+        })
+    }
+
+    #[tokio::test]
+    async fn hardware_coalescing_preserves_a_queued_fit_request() {
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let gate = Mutex::new(gate);
+        let (commands, events) = start_with_workers(
+            &tokio::runtime::Handle::current(),
+            move || {
+                started.send(()).unwrap();
+                gate.lock().unwrap().recv().unwrap();
+                snapshot()
+            },
+            |_| Err("Fixture inspection failure".into()),
+        );
+        commands.try_send(CoreCommand::DetectHardware).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        commands.try_send(fit_request(42)).unwrap();
+        release.send(()).unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::HardwareDetected(_)
+        ));
+        assert!(matches!(receive(&events).await,
+            UiEvent::FitFinished { id: 42, result: Err(message) } if message == "Fixture inspection failure"));
+    }
+
+    #[tokio::test]
+    async fn fit_jobs_are_not_coalesced_and_do_not_block_the_async_executor() {
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let gate = Mutex::new(gate);
+        let (commands, events) = start_with_workers(
+            &tokio::runtime::Handle::current(),
+            snapshot,
+            move |request| {
+                started.send(request.id).unwrap();
+                gate.lock().unwrap().recv().unwrap();
+                Err("Fixture fit result".into())
+            },
+        );
+        commands.try_send(fit_request(1)).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+                .await
+                .unwrap(),
+            Some(1)
+        );
+        commands.try_send(fit_request(2)).unwrap();
+        release.send(()).unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::FitFinished { id: 1, .. }
+        ));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+                .await
+                .unwrap(),
+            Some(2)
+        );
+        release.send(()).unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::FitFinished { id: 2, .. }
+        ));
+        drop(commands);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), events.recv())
+                .await
+                .unwrap()
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_window_releases_commands_during_fit_and_panics_are_reported() {
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let gate = Mutex::new(gate);
+        let (commands, events) =
+            start_with_workers(&tokio::runtime::Handle::current(), snapshot, move |_| {
+                started.send(()).unwrap();
+                let _ = gate.lock().unwrap().recv();
+                Err("Fixture ended".into())
+            });
+        commands.try_send(fit_request(9)).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        events.close();
+        let closed = tokio::time::timeout(Duration::from_secs(2), commands.closed()).await;
+        release.send(()).unwrap();
+        assert!(closed.is_ok());
+
+        let (commands, events) =
+            start_with_workers(&tokio::runtime::Handle::current(), snapshot, |_| {
+                panic!("Fixture inspection panic")
+            });
+        commands.try_send(fit_request(10)).unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::FitFinished { id: 10, result: Err(message) } if message.contains("Model inspection worker failed")));
     }
 }
