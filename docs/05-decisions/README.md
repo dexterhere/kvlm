@@ -5,6 +5,7 @@ Include status, context, decision, consequences, and validation requirements. Ke
 routine implementation details in code or the relevant development document.
 
 - [0001: Workspace foundation](0001-workspace-foundation.md) — accepted.
+- [0005: Bounded GGUF metadata inspection](0005-gguf-metadata.md) — accepted for this feature branch; numbers 0002–0004 are reserved by pending feature PRs.
 - [Open questions](open-questions.md) — unresolved specification details, not decisions.
 
 When a decision changes the master specification, explicitly update the relevant

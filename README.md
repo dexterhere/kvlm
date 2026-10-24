@@ -4,7 +4,8 @@ A community-built GNOME desktop application for understanding what local AI mode
 your hardware can run, managing inference runtimes safely, and measuring performance.
 
 **Status: development foundation.** The workspace and four-view application shell
-are in place. Hardware discovery, inference, downloads, fit analysis, database storage,
+are in place, along with bounded, read-only inspection of local GGUF metadata in core.
+Hardware discovery, inference, downloads, fit analysis, database storage,
 and benchmarks are not implemented yet. This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 
@@ -30,6 +31,10 @@ cargo run --locked -p workstation-app
 
 The shell does not require Ollama, a GPU, or model downloads. It makes no network
 requests at startup. Cargo may download build dependencies.
+
+For local GGUF inspection, see the [metadata guide](docs/03-development/gguf-metadata.md).
+This reports declarations and tensor layout; runtime compatibility and memory fit
+remain unverified.
 
 ```sh
 cargo fmt --all --check

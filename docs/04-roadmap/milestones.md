@@ -8,6 +8,7 @@ owns the detailed acceptance criteria. This page tracks actual status.
 - [x] Four-crate Cargo workspace and documented module ownership.
 - [x] Minimal GNOME shell, four navigation views, Tokio/GLib bridge.
 - [x] Native build foundation, desktop metadata, community docs, and validation checks.
+- [x] Bounded local GGUF v3 metadata and tensor-directory inspection in core (this feature branch).
 - [ ] Hardware detection for CPU/RAM, NVIDIA NVML, AMD VRAM/GTT.
 - [ ] Attached Ollama discovery, model listing, and loaded-memory inspection.
 - [ ] Validated memory-fit calculations and architecture metadata integration.
@@ -23,7 +24,14 @@ M0 checklist complete until the behavior is implemented and verified.
 [Hardware discovery in Overview](next-feature-hardware-discovery.md) is the next
 implementation slice: CPU/RAM detection, NVIDIA and AMD memory probing, and an
 asynchronous Overview display with explicit partial-failure states. This is a
-plan only; feature implementation has not started.
+plan. Hardware, Ollama discovery, and static-fit implementation PRs are pending
+review; they remain separate from this branch and have not been merged.
+
+This branch adds the [GGUF inspection slice](../03-development/gguf-metadata.md).
+After review and integration through `develop`, the next step is to combine
+declared artifact metadata with explicit runtime settings and the static-fit
+calculator, preserving unknown/unsupported states. Overview fit badges follow
+that integration; live benchmark and persistence acceptance remain later M0 work.
 
 ## Delivery order
 

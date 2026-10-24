@@ -6,6 +6,8 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 ### Added
 
+- Bounded, read-only local GGUF v3 metadata inspection, tensor-range validation,
+  adversarial fixtures, and a CLI example; no runtime compatibility or fit claim.
 - Rust 2024 workspace with four crates and the specified module layout.
 - Minimal GNOME application shell with four views and a Tokio/GLib event bridge.
 - GNOME desktop metadata, settings schema, and development icon.

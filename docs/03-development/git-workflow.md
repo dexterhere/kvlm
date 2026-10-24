@@ -1,6 +1,11 @@
 # Git workflow
 
-Use `main` as the integration branch and a focused branch for each contribution.
+Use `develop` for feature integration, `staging` for release validation, and `main`
+for stable releases. Promote changes by reviewed PRs in that order:
+`codex/<feature>` → `develop` → `staging` → `main`.
+Create feature branches from `origin/develop`; do not merge pending feature branches
+into one another. While the current instruction is PR-only, leave every PR open
+for review and do not merge or enable auto-merge.
 `origin` is configured as `https://github.com/dexterhere/kvlm.git`. Adding the remote
 does not publish commits or establish an upstream tracking branch. Push changes
 only when publication is requested.

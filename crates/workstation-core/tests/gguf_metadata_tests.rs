@@ -446,12 +446,16 @@ fn recognizes_new_layout_markers_in_isolation() {
             LayoutWarning::HybridMetadata,
         ),
         (
-            b"llama.adapters.lora".as_slice(),
+            b"llama.adapters.lora_rank".as_slice(),
             LayoutWarning::AdapterMetadata,
         ),
         (b"adapter.type".as_slice(), LayoutWarning::AdapterMetadata),
         (
-            b"llama.moe_expert_count".as_slice(),
+            b"llama.moe_every_n_layers".as_slice(),
+            LayoutWarning::ExpertMetadata,
+        ),
+        (
+            b"llama.experts_per_group".as_slice(),
             LayoutWarning::ExpertMetadata,
         ),
         (
