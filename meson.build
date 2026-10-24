@@ -60,8 +60,7 @@ test('repository', python, args: [files('scripts/check_repository.py')])
 test('python-checks', python, args: ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py'],
   workdir: meson.project_source_root())
 test('desktop', find_program('desktop-file-validate'), args: [desktop_file])
-# The unpublished scaffold has no homepage yet. Keep all other validation at its normal severity.
 test('appstream', find_program('appstreamcli'),
-  args: ['validate', '--no-net', '--override=url-homepage-missing=info', metainfo_file])
+  args: ['validate', '--no-net', metainfo_file])
 test('settings', find_program('glib-compile-schemas'),
   args: ['--strict', '--dry-run', meson.project_source_root() / 'data'])
