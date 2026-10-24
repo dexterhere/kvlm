@@ -5,8 +5,8 @@ your hardware can run, managing inference runtimes safely, and measuring perform
 
 **Status: development foundation.** The workspace and four-view application shell
 are in place, plus a supplied-metadata static memory-fit calculator and bounded
-local GGUF metadata inspection in core. Hardware
-and attached-Ollama discovery are separate, unmerged PRs. Desktop fit badges, inference,
+local GGUF metadata inspection in core. Hardware and attached-Ollama discovery
+are separate, unmerged PRs. Desktop fit badges, inference,
 downloads, database storage, and benchmarks are not implemented on this branch yet.
 This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
@@ -48,6 +48,9 @@ is never added to host RAM. This does not grant benchmark verification. See the
 
 For local GGUF inspection, see the [metadata guide](docs/03-development/gguf-metadata.md).
 This reports declarations and tensor layout; runtime compatibility remains unverified.
+The [GGUF fit scenario guide](docs/03-development/gguf-fit.md) connects those
+declarations to explicit settings and a supplied budget. It requires an explicit
+layout assumption for a breakdown and cannot return a positive fit classification.
 
 ```sh
 cargo fmt --all --check
