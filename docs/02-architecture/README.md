@@ -21,6 +21,12 @@ workstation-app ──> workstation-bench ──> workstation-runtimes ──> w
 Dependencies flow toward core; core must not import GTK or runtime/UI crates.
 Workspace dependency versions are centralized in the root `Cargo.toml`.
 
+Core exposes synchronous, bounded local GGUF inspection through `models::gguf`.
+It validates a supported header/directory subset and computes tensor storage bytes
+without reading payloads. Architecture values remain declarations, not runtime
+configuration or fit evidence. See [the inspection guide](../03-development/gguf-metadata.md).
+Future UI callers must use `spawn_blocking`; the current caller is a CLI example.
+
 ## Execution model
 
 The application creates one multi-thread Tokio runtime. GTK widgets remain on the
