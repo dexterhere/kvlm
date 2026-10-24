@@ -2,9 +2,11 @@
 
 Branch each focused contribution from `develop` and open its PR against `develop`.
 Promotion remains `develop → staging → main`, with PRs at every stage and no direct
-commits to those branches. Leave PRs unmerged until merging is requested. New branches
+commits to those branches. Leave PRs unmerged and auto-merge disabled until merging
+is requested. New branches
 normally use `codex/`. Policy hooks/CI from the hardware PR are not integrated on this
-independent branch; follow these rules explicitly.
+feature branch; follow these rules explicitly.
+
 A dependent integration PR may carry prerequisite commits onto a feature branch
 created from `develop`, without merging prerequisite PRs or changing `develop`,
 `staging`, or `main`. List dependencies in its description, review them first, and
