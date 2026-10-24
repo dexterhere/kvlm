@@ -41,6 +41,7 @@ pub struct GgufFitAssessment {
 }
 
 /// Estimate a supplied scenario using only explicit LLaMA dimensions.
+/// Expects a successfully inspected snapshot; it does not check file identity or freshness.
 /// A layout assumption can enable a breakdown, never Comfortable/Constrained.
 /// NotRecommended, if returned, applies only to this scenario's supplied budget.
 /// This pure adapter does not read files, probe hardware or contact runtimes.

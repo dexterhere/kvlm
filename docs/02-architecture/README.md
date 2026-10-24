@@ -27,6 +27,12 @@ without reading payloads. Architecture values remain declarations, not runtime
 configuration or fit evidence. See [the inspection guide](../03-development/gguf-metadata.md).
 Future UI callers must use `spawn_blocking`; the current caller is a CLI example.
 
+`fit::gguf_fit` connects inspected declarations to the static calculator with an
+explicit runtime scenario and available-memory budget. Only a labeled uniform
+full-attention assumption, complete dimensions, and one sequence allow a breakdown.
+Warnings block that path; absence of warnings does not establish support. Runtime
+compatibility stays Unknown. See [the scenario guide](../03-development/gguf-fit.md).
+
 ## Execution model
 
 The application creates one multi-thread Tokio runtime. GTK widgets remain on the
@@ -35,7 +41,7 @@ GLib main thread. UI commands use Tokio mpsc, and worker events return through
 Blocking SQLite, NVML, and sysfs calls must use `spawn_blocking` when implemented.
 Closing the application must cancel worker work and release owned resources.
 
-On this independent branch, the foundation bridge only confirms that the worker is
+On this dependent feature branch, the foundation bridge only confirms that the worker is
 available. Hardware and attached-Ollama discovery remain in their separate unmerged PRs.
 The core calculator is pure: callers supply supported model/runtime metadata and
 available-memory readings; it performs no probing, network, database, or GTK work.
@@ -50,8 +56,9 @@ Catalog metadata → digest match against existing blobs → user-requested down
 Shared GPU memory overlaps physical system RAM. The initial calculator caps its
 resident footprint by both GPU mapping and host-RAM budgets, without adding them.
 CPU-only and selected GPU placement policies are defined in
-[decision 0004](../05-decisions/0004-static-memory-fit.md). Offload, metadata extraction,
-and desktop integration remain separate work.
+[decision 0004](../05-decisions/0004-static-memory-fit.md). Offload, verified layout
+and compatibility evidence, actual runtime settings, and desktop integration remain
+separate work.
 
 ## Ownership and storage
 
