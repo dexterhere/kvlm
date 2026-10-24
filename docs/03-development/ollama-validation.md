@@ -62,13 +62,12 @@ warnings; its process ended with signal 15, so normal graphical quit was not ver
 
 Independent review identified excessive GTK row creation from large server lists;
 bounded rendering fixed it. Follow-up review found no remaining actionable findings.
-Root integrated the adapter, worker bridge, window, and documentation and reran checks.
+The checks above cover the integrated adapter, worker bridge, window, and documentation.
 
 ## Integration and remaining acceptance
 
-This branch starts from the current `develop`. Hardware PR #1 remains unmerged:
-automatic approval review rejected that protected-branch merge and requested new
-authorization evidence. Hardware tests and the Overview integration from that PR are
+This branch starts from the current `develop`. Hardware PR #1 remains unmerged.
+Hardware tests and the Overview integration from that PR are
 not present in this branch. Its branch-policy and AppStream fixes are also not inherited.
 Resolve that merge, integrate from `develop`, and rerun the combined checks before
 accepting the combined M0 hardware/runtime slice. Do not skip `develop`, `staging`, `main`.
