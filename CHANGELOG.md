@@ -6,6 +6,8 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 ### Added
 
+- Read-only attached Ollama discovery, installed/loaded model lists, runtime-reported
+  allocation splits, cloud metadata warnings, and retry/stale states in Runtimes.
 - Rust 2024 workspace with four crates and the specified module layout.
 - Minimal GNOME application shell with four views and a Tokio/GLib event bridge.
 - GNOME desktop metadata, settings schema, and development icon.
@@ -16,5 +18,5 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 - Moved the original master specification into `docs/01-product/` without altering its contents.
 
-Hardware probes, runtime adapters, model catalog/downloads, fit calculations,
+Hardware probes, other runtime adapters, model catalog/downloads, fit calculations,
 SQLite persistence, configuration exports, and benchmark execution remain planned.

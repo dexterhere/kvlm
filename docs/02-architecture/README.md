@@ -29,8 +29,10 @@ GLib main thread. UI commands use Tokio mpsc, and worker events return through
 Blocking SQLite, NVML, and sysfs calls must use `spawn_blocking` when implemented.
 Closing the application must cancel worker work and release owned resources.
 
-The foundation bridge only confirms that the worker is available. It does not probe
-hardware, touch models, connect to runtimes, or create the database.
+The bridge supports asynchronous, read-only Ollama discovery and bounded command/event
+queues. Pending HTTP work is dropped when the window closes or the app quits. It does
+not control processes, execute models, or create the database. Hardware discovery is
+tracked separately in PR #1 and is not integrated on this branch yet.
 
 ## Intended data flow
 

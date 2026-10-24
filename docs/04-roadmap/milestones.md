@@ -9,7 +9,7 @@ owns the detailed acceptance criteria. This page tracks actual status.
 - [x] Minimal GNOME shell, four navigation views, Tokio/GLib bridge.
 - [x] Native build foundation, desktop metadata, community docs, and validation checks.
 - [ ] Hardware detection for CPU/RAM, NVIDIA NVML, AMD VRAM/GTT.
-- [ ] Attached Ollama discovery, model listing, and loaded-memory inspection.
+- [x] Attached Ollama discovery, model listing, and loaded-memory inspection (mocked HTTP).
 - [ ] Validated memory-fit calculations and architecture metadata integration.
 - [ ] Quick streaming benchmark with resource sampling and SQLite persistence.
 - [ ] Persisted empirical badge after restart.
@@ -20,10 +20,18 @@ M0 checklist complete until the behavior is implemented and verified.
 
 ## Next feature
 
-[Hardware discovery in Overview](next-feature-hardware-discovery.md) is the next
-implementation slice: CPU/RAM detection, NVIDIA and AMD memory probing, and an
-asynchronous Overview display with explicit partial-failure states. This is a
-plan only; feature implementation has not started.
+[Hardware discovery in Overview](next-feature-hardware-discovery.md) is implemented
+in PR #1, pending merge into `develop`. This feature branch adds read-only attached
+Ollama discovery from the current `develop`; integration with the hardware view awaits
+that merge. A live Ollama acceptance run remains outstanding.
+
+The next domain slice is static memory fit. Resolve the CPU-only/shared-memory
+classification, KV accounting, and metadata provenance questions first. Then implement
+a GTK-independent calculator with exact byte arithmetic and boundary tests, followed
+by an Overview presentation using actual hardware and installed-model metadata.
+Unknown architecture/context inputs must produce an explicit unknown result. A static
+estimate must never create a Benchmark Verified badge. Inference and persistence follow
+in a separate slice.
 
 ## Delivery order
 

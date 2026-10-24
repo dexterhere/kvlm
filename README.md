@@ -4,8 +4,9 @@ A community-built GNOME desktop application for understanding what local AI mode
 your hardware can run, managing inference runtimes safely, and measuring performance.
 
 **Status: development foundation.** The workspace and four-view application shell
-are in place. Hardware discovery, inference, downloads, fit analysis, database storage,
-and benchmarks are not implemented yet. This is an independent community project;
+are in place, with read-only attached Ollama discovery in Runtimes. Hardware discovery,
+inference, downloads, fit analysis, database storage, and benchmarks are not implemented
+on this branch yet. This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 
 ## Goals
@@ -28,8 +29,16 @@ a C toolchain, and pkg-config. See the
 cargo run --locked -p workstation-app
 ```
 
-The shell does not require Ollama, a GPU, or model downloads. It makes no network
-requests at startup. Cargo may download build dependencies.
+The shell does not require Ollama, a GPU, or model downloads. At startup and on
+Refresh, it reads the existing Ollama service at `http://127.0.0.1:11434` using
+`/api/version`, `/api/tags`, and `/api/ps`. A missing service is recoverable; start
+Ollama separately and retry from Runtimes (Ctrl+3, then Ctrl+R). It never starts,
+stops, downloads, or runs models. Cargo may download build dependencies.
+
+Model lists can fail independently. Retained snapshots are marked stale after a
+failed refresh. Allocations are runtime reports, not independent RAM/GPU measurements.
+Cloud metadata produces a warning; absent metadata leaves routing unverified.
+See [Ollama validation](docs/03-development/ollama-validation.md) for limits.
 
 ```sh
 cargo fmt --all --check

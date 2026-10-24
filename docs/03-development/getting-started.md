@@ -43,10 +43,15 @@ cargo run --locked -p workstation-app
 ```
 
 Run from a graphical session. A headless build can run unit tests without showing
-a window. The initial app has four navigation pages, keyboard navigation, and a
-background-worker readiness message. Empty pages describe unimplemented features;
-they do not show synthetic hardware or inference results. Source-tree execution
+a window. The initial app has four navigation pages, keyboard navigation, and
+read-only attached Ollama discovery in Runtimes (Ctrl+3). Ctrl+R retries discovery.
+An absent service is expected and does not prevent startup. Empty pages describe
+unimplemented features; they do not show synthetic hardware or inference results. Source-tree execution
 does not require installed desktop metadata or a compiled settings schema.
+
+Discovery only reads IPv4 loopback port 11434, ignoring proxy settings and rejecting
+redirects. Start your existing Ollama service separately; this app does not install
+or launch it. See [Ollama validation](ollama-validation.md) for failure cases and limits.
 
 ## Check changes
 

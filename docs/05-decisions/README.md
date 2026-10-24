@@ -5,6 +5,8 @@ Include status, context, decision, consequences, and validation requirements. Ke
 routine implementation details in code or the relevant development document.
 
 - [0001: Workspace foundation](0001-workspace-foundation.md) — accepted.
+- [0003: Attached Ollama discovery](0003-attached-ollama-discovery.md) — accepted;
+  0002 belongs to the hardware feature awaiting integration.
 - [Open questions](open-questions.md) — unresolved specification details, not decisions.
 
 When a decision changes the master specification, explicitly update the relevant

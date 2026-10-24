@@ -1,6 +1,10 @@
 # Git workflow
 
-Use `main` as the integration branch and a focused branch for each contribution.
+Create focused feature branches from `develop` and submit their PRs to `develop`.
+Promote through `develop → staging → main`, using PRs at each stage. Never commit
+directly to those protected branches or skip a stage. New feature branches normally
+use the `codex/` prefix. Local hook and CI policy enforcement is part of hardware PR #1;
+until it is integrated, follow these rules explicitly rather than relying on hooks.
 `origin` is configured as `https://github.com/dexterhere/kvlm.git`. Adding the remote
 does not publish commits or establish an upstream tracking branch. Push changes
 only when publication is requested.
