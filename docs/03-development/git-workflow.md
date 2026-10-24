@@ -1,20 +1,69 @@
 # Git workflow
 
-Branch each focused contribution from `develop` and open its PR against `develop`.
-Promotion remains `develop → staging → main`, with PRs at every stage and no direct
-commits to those branches. Leave PRs unmerged and auto-merge disabled until merging
-is requested. New branches
-normally use `codex/`. Policy hooks/CI from the hardware PR are not integrated on this
-feature branch; follow these rules explicitly.
+`origin` is `https://github.com/dexterhere/kvlm.git`. The existing foundation was
+published as the initial baseline on 2026-10-24. All subsequent work follows:
 
-A dependent integration PR may carry prerequisite commits onto a feature branch
-created from `develop`, without merging prerequisite PRs or changing `develop`,
-`staging`, or `main`. List dependencies in its description, review them first, and
-refresh the dependent branch after integration. Reuse their implementations.
+```text
+feature/* → develop → staging → main
+```
 
-`origin` is configured as `https://github.com/dexterhere/kvlm.git`. Adding the remote
-does not publish commits or establish an upstream tracking branch. Push changes
-only when publication is requested.
+- `develop`: integration of tested feature work. Branch features from here and
+  target feature pull requests here. Community fork branches are welcome.
+- `staging`: release-candidate validation. Its pull requests come only from this
+  repository's `develop`; fixes go through a feature branch and develop first.
+- `main`: stable validated history. Its pull requests come only from this
+  repository's `staging` after the acceptance evidence is reviewed.
+
+Never skip a stage, force-push shared branches, or commit directly to these three
+branches. The initial foundation bootstrap is the sole direct-push exception.
+Do not label a milestone complete just because it has been merged.
+
+A dependent feature PR may carry prerequisite commits onto a branch created from
+`develop`. List those dependencies, review them first, and refresh the dependent
+branch after their integration. This does not merge the prerequisite PRs or change
+`develop`, `staging`, or `main`. While the user requests PR-only work, leave every
+PR unmerged and auto-merge disabled.
+
+## Enforcement
+
+CI's `git-policy` check rejects incorrect pull-request routes and co-author trailers
+across all proposed commits. `foundation` runs build, lint, tests, and packaging checks.
+Both checks are intended to be required by server-side protection on `develop`,
+`staging`, and `main`, with force pushes/deletions forbidden and pull requests required.
+Server settings must be inspected separately; local files cannot enforce them.
+
+Verified server configuration on 2026-10-24: all three branches require a PR,
+`git-policy` and `foundation`, resolved conversations, administrator enforcement,
+and no force pushes or deletion. Both status checks are bound to GitHub Actions.
+`develop` requires an up-to-date feature head. `staging` and `main` use non-strict
+status checks so promotion merge commits do not force reverse ancestry merges.
+Every promotion PR runs CI against its merge candidate; review current checks
+again if the target branch changes. Promotion is deliberate, not automatic.
+No minimum count of formal approvals is imposed; maintainer acceptance review
+remains required by project policy. Squash and rebase merges are disabled in the
+repository so frequent commits and promotion ancestry are retained.
+
+Enable this checkout's local commit-message hook:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+It rejects commits directly on integration branches and co-author trailers. Hooks
+are a convenience, not a substitute for the required CI/server rules. Use the
+configured Git identity; no generated attribution or sign-off is added automatically.
+
+For example, start a new feature from an up-to-date develop branch:
+
+```sh
+git fetch origin
+git switch develop
+git pull --ff-only origin develop
+git switch -c feature/my-change
+```
+
+Use merge commits for promotions so ancestry is preserved; do not squash or rebase
+`develop → staging` or `staging → main`. Open a new feature PR for later fixes.
 
 ## Small, frequent checkpoints
 
