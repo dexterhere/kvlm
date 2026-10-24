@@ -1,9 +1,52 @@
 # Git workflow
 
-Use `main` as the integration branch and a focused branch for each contribution.
-`origin` is configured as `https://github.com/dexterhere/kvlm.git`. Adding the remote
-does not publish commits or establish an upstream tracking branch. Push changes
-only when publication is requested.
+`origin` is `https://github.com/dexterhere/kvlm.git`. The existing foundation was
+published as the initial baseline on 2026-10-24. All subsequent work follows:
+
+```text
+feature/* → develop → staging → main
+```
+
+- `develop`: integration of tested feature work. Branch features from here and
+  target feature pull requests here. Community fork branches are welcome.
+- `staging`: release-candidate validation. Its pull requests come only from this
+  repository's `develop`; fixes go through a feature branch and develop first.
+- `main`: stable validated history. Its pull requests come only from this
+  repository's `staging` after the acceptance evidence is reviewed.
+
+Never skip a stage, force-push shared branches, or commit directly to these three
+branches. The initial foundation bootstrap is the sole direct-push exception.
+Do not label a milestone complete just because it has been merged.
+
+## Enforcement
+
+CI's `git-policy` check rejects incorrect pull-request routes and co-author trailers
+across all proposed commits. `foundation` runs build, lint, tests, and packaging checks.
+Both checks are intended to be required by server-side protection on `develop`,
+`staging`, and `main`, with force pushes/deletions forbidden and pull requests required.
+Server settings must be inspected separately; local files cannot enforce them.
+
+Enable this checkout's local commit-message hook:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+It rejects commits directly on integration branches and co-author trailers. Hooks
+are a convenience, not a substitute for the required CI/server rules. Use the
+configured Git identity; no generated attribution or sign-off is added automatically.
+
+For example, start a new feature from an up-to-date develop branch:
+
+```sh
+git fetch origin
+git switch develop
+git pull --ff-only origin develop
+git switch -c feature/my-change
+```
+
+Use merge commits for promotions so ancestry is preserved; do not squash or rebase
+`develop → staging` or `staging → main`. Open a new feature PR for later fixes.
 
 ## Small, frequent checkpoints
 
