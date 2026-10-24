@@ -57,7 +57,7 @@ cargo test --workspace --locked
 python3 scripts/check_repository.py
 python3 -m unittest discover -s tests -p 'test_*.py'
 glib-compile-schemas --strict --dry-run data
-appstreamcli validate --no-net --override=url-homepage-missing=info \
+appstreamcli validate --no-net \
   data/org.gnome.LocalAIWorkstation.metainfo.xml.in
 ```
 
@@ -68,8 +68,7 @@ For offline builds, first cache dependencies with `cargo fetch --locked`, then a
 
 Validate the generated `.desktop` file with `meson test` after Meson setup below;
 `desktop-file-validate` rejects the source template's `.in` extension. AppStream
-currently reports the missing public homepage as informational because the project
-is unpublished. Add the real URL and remove this override before release.
+uses the public repository URL and normal validation severity without network access.
 
 ## Build and install with Meson
 

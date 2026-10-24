@@ -6,7 +6,7 @@
   <project_license>GPL-3.0-or-later</project_license>
   <name>Local AI Workstation</name>
   <summary>Explore hardware fit and local AI runtime performance</summary>
-  <developer>
+  <developer id="io.github.dexterhere">
     <name>Local AI Workstation contributors</name>
   </developer>
   <description>
@@ -14,6 +14,8 @@
     <p>This development foundation provides the application shell. Hardware discovery,
     model catalogs, runtime management, and benchmarking are planned features.</p>
   </description>
+  <url type="homepage">https://github.com/dexterhere/kvlm</url>
+  <url type="bugtracker">https://github.com/dexterhere/kvlm/issues</url>
   <launchable type="desktop-id">org.gnome.LocalAIWorkstation.desktop</launchable>
   <provides>
     <binary>local-ai-workstation</binary>
