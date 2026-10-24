@@ -16,3 +16,5 @@ routine implementation details in code or the relevant development document.
 When a decision changes the master specification, explicitly update the relevant
 section and explain the change. Do not silently treat illustrative snippets as
 compiled contracts or claim an unresolved choice has been approved.
+
+- [0003: Attached Ollama discovery](0003-attached-ollama-discovery.md)
