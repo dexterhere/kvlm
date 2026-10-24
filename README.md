@@ -4,8 +4,10 @@ A community-built GNOME desktop application for understanding what local AI mode
 your hardware can run, managing inference runtimes safely, and measuring performance.
 
 **Status: development foundation.** The workspace and four-view application shell
-are in place. Hardware discovery, inference, downloads, fit analysis, database storage,
-and benchmarks are not implemented yet. This is an independent community project;
+are in place, plus a supplied-metadata static memory-fit calculator in core. Hardware
+and attached-Ollama discovery are separate, unmerged PRs. Desktop fit badges, inference,
+downloads, database storage, and benchmarks are not implemented on this branch yet.
+This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 
 ## Goals
@@ -30,6 +32,18 @@ cargo run --locked -p workstation-app
 
 The shell does not require Ollama, a GPU, or model downloads. It makes no network
 requests at startup. Cargo may download build dependencies.
+
+Exercise the core calculator without a GPU, model, or runtime:
+
+```sh
+cargo run --locked -p workstation-core --example memory_fit
+```
+
+The example clearly labels synthetic inputs. The API estimates weights, separate K/V
+cache storage, buffers, and runtime allowance, then classifies one selected CPU/GPU
+placement. Missing metadata or unverified compatibility remains Unknown; shared memory
+is never added to host RAM. This does not grant benchmark verification. See the
+[calculator guide](docs/03-development/static-memory-fit.md) for scope and checks.
 
 ```sh
 cargo fmt --all --check

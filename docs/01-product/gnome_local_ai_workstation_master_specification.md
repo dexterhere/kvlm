@@ -264,6 +264,8 @@ pub struct HardwareProfile {
 - **Intel / Fallback Vulkan Probe (`vulkan.rs`):** Query `VkPhysicalDeviceMemoryProperties` via `ash` (dynamic Vulkan loader) or parse `vulkaninfo --summary` if present to detect Intel Arc / integrated GPU heaps.
 
 ### 4.4 Mathematical Memory Fit Formula
+**Implementation clarification (2026-10-24):** The initial core calculator supports one uniform full-attention sequence with supplied single-GGUF bytes and explicit K/V dimensions. GGML Q8_0 storage is 34 bytes per 32 elements, rather than the illustrative 1.0 byte coefficient below; Q4_0 is 18 bytes per 32. Context padding and separate K/V types are accounted for. The four-part result remains an estimate, and `llmfit` integration is deferred after API evaluation. See [decision 0004](../05-decisions/0004-static-memory-fit.md) for the supported scope, pinned upstream evidence, and unknown-input rules. The original target formula is retained below for traceability.
+
 Given a `ModelArtifact`, a `RuntimeConfig` (context window $C$, batch size $B$, KV cache data type $Q_{\text{KV}}$), and a `HardwareProfile`, the total required memory is broken into four components:
 
 $$M_{\text{required}} = M_{\text{weights}} + M_{\text{KV}} + M_{\text{buffers}} + M_{\text{overhead}}$$
@@ -292,6 +294,8 @@ $$M_{\text{required}} = M_{\text{weights}} + M_{\text{KV}} + M_{\text{buffers}} 
    - CPU-only runtime: $64\text{ MiB}$
 
 ### 4.5 Fit Classification Rules
+**Initial implementation policy (2026-10-24):** Classification applies to the selected fully resident placement. CPU uses 70%/75% available-RAM limits; dedicated GPU uses 85%/96%; shared GPU uses the minimum of its GPU-mapping and host-RAM limits rather than adding the pools. Limits are inclusive, and exceeding the maximum means NotRecommended for that placement. Missing metadata/readings or unverified compatibility stays Unknown. Partial offload and automatic alternative plans are not implemented. These are conservative static policies, not calibrated throughput claims or benchmark evidence; see [decision 0004](../05-decisions/0004-static-memory-fit.md). The broader target below remains pending integration.
+
 Let $V_{\text{avail}}$ be the usable GPU memory (`dedicated_vram_free_bytes`, or `shared_gtt_free_bytes` on unified memory systems) and $R_{\text{avail}}$ be `system_ram_available_bytes`:
 
 - **`Comfortable`:**

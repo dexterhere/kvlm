@@ -5,11 +5,11 @@ the affected feature; they do not block the directory foundation.
 
 | Area | Question to resolve |
 | --- | --- |
-| Fit classification (§4.5) | What is the complete CPU-only classification, and how are values between stated thresholds classified? |
-| Unified memory (§4.1, §4.5) | How do GPU-mappable shared memory and physical host RAM share one capacity budget without double-counting? |
-| KV math (§4.4) | How are block overhead, concurrency/slots, separate K/V data types, and nonstandard architectures accounted for? |
-| Artifact sizing (§4.4, §6.1) | How are sharded safetensors bundles and on-disk versus resident memory represented? |
-| Architecture tables (§4.4) | Which maintained `llmfit` integration/API and license will be used, and what happens with missing metadata? |
+| Fit classification (§4.5) | Initial resident-placement CPU/GPU limits and gap handling are defined in [0004](0004-static-memory-fit.md); explicit offload plans and calibration remain open. |
+| Unified memory (§4.1, §4.5) | [0004](0004-static-memory-fit.md) caps by both mappings and host RAM without addition. Live allocation overlap/calibration remains open. |
+| KV math (§4.4) | [0004](0004-static-memory-fit.md) covers standard uniform attention, separate K/V blocks and one padded sequence. Other layouts, slots and concurrency remain unsupported. |
+| Artifact sizing (§4.4, §6.1) | Single-GGUF file bytes are an explicit resident-weight estimate. Shards, safetensors, repacking and measured residence still need a validated metadata contract. |
+| Architecture tables (§4.4) | `llmfit-core` 1.1.17 (MIT) was evaluated and deferred; [0004](0004-static-memory-fit.md) explains why. Missing/unsupported metadata stays Unknown; a validated extraction adapter remains open. |
 | Domain contracts (§4.2, §5.3) | Complete the omitted request/profile/event types; `ComputeBackend` with `String` payloads cannot derive `Copy`. |
 | Benchmark persistence (§4.5, §8) | Define success/failure/cancellation, immutable profile snapshots, runtime versions, and repeated-run aggregation. |
 | Token timing (§7.1–7.2) | Streaming chunks may contain multiple tokens; distinguish chunk arrival timing from true per-token ITL. |

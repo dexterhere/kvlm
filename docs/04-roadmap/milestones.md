@@ -11,6 +11,7 @@ owns the detailed acceptance criteria. This page tracks actual status.
 - [ ] Hardware detection for CPU/RAM, NVIDIA NVML, AMD VRAM/GTT.
 - [ ] Attached Ollama discovery, model listing, and loaded-memory inspection.
 - [ ] Validated memory-fit calculations and architecture metadata integration.
+- [x] Pure supplied-metadata calculator, placement policy, offline example, and tests.
 - [ ] Quick streaming benchmark with resource sampling and SQLite persistence.
 - [ ] Persisted empirical badge after restart.
 - [ ] Full M0 unit, mocked HTTP, and real-hardware acceptance evidence.
@@ -20,16 +21,24 @@ M0 checklist complete until the behavior is implemented and verified.
 
 ## Next feature
 
-[Hardware discovery in Overview](next-feature-hardware-discovery.md) is the next
-implementation slice: CPU/RAM detection, NVIDIA and AMD memory probing, and an
-asynchronous Overview display with explicit partial-failure states. This is a
-plan only; feature implementation has not started.
+Hardware discovery ([PR #1](https://github.com/dexterhere/kvlm/pull/1)) and attached
+Ollama discovery ([PR #2](https://github.com/dexterhere/kvlm/pull/2)) remain separate,
+unmerged features. This branch implements the independent
+[static calculator core](../03-development/static-memory-fit.md). It does not combine
+those branches or mark full M0 Step 4 complete.
+
+Next: supply validated complete GGUF architecture metadata, actual runtime configuration,
+and verified artifact/backend/cache compatibility. Then connect real hardware readings
+and model selection to the core result, exposing estimate breakdowns and Unknown reasons
+in desktop fit badges. Unsupported architectures and offload plans must stay explicit.
+Calibrate against runtime allocations before claiming general recommendation accuracy.
+Streaming benchmarks and persisted empirical verification follow in a separate slice.
 
 ## Delivery order
 
 | Milestone | Outcome | Status |
 | --- | --- | --- |
-| M0 | Hardware → attached Ollama → static fit → quick benchmark → persisted verification | Foundation only |
+| M0 | Hardware → attached Ollama → static fit → quick benchmark → persisted verification | Core estimate and open feature PRs; integration pending |
 | M1 | Live model catalog, normalized artifacts, resumable downloads, deduplication, Secret Service | Planned |
 | M2 | Managed portable llama.cpp, lifecycle/logs, ownership guards, developer exports | Planned |
 | M3 | Controlled A/B benchmarks, cold/warm separation, sampling, diagnostics | Planned |
