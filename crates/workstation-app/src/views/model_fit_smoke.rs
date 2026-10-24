@@ -118,7 +118,7 @@ fn desktop_fit_widget_flow() {
             .inner
             .status_label
             .label()
-            .contains("Layout warning markers")
+            .contains("layout this estimate cannot evaluate")
     );
 
     set_selected_file(&panel.inner, clean.clone());
