@@ -26,6 +26,17 @@ Both checks are intended to be required by server-side protection on `develop`,
 `staging`, and `main`, with force pushes/deletions forbidden and pull requests required.
 Server settings must be inspected separately; local files cannot enforce them.
 
+Verified server configuration on 2026-10-24: all three branches require a PR,
+`git-policy` and `foundation`, resolved conversations, administrator enforcement,
+and no force pushes or deletion. Both status checks are bound to GitHub Actions.
+`develop` requires an up-to-date feature head. `staging` and `main` use non-strict
+status checks so promotion merge commits do not force reverse ancestry merges.
+Every promotion PR runs CI against its merge candidate; review current checks
+again if the target branch changes. Promotion is deliberate, not automatic.
+No minimum count of formal approvals is imposed; maintainer acceptance review
+remains required by project policy. Squash and rebase merges are disabled in the
+repository so frequent commits and promotion ancestry are retained.
+
 Enable this checkout's local commit-message hook:
 
 ```sh

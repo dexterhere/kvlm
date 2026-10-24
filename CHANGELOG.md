@@ -6,6 +6,12 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 ### Added
 
+- Read-only CPU topology/instruction flags, available RAM, NVIDIA NVML, and AMD DRM memory probes.
+- Overview hardware cards with asynchronous startup detection and manual/keyboard Refresh.
+- Explicit partial-probe notices, stale snapshot retention after refresh failure, and refresh coalescing.
+- Fixture-backed hardware tests and an opt-in local snapshot example.
+- Protected `develop → staging → main` workflow with required branch-policy CI,
+  local commit checks, and merge-commit promotion.
 - Rust 2024 workspace with four crates and the specified module layout.
 - Minimal GNOME application shell with four views and a Tokio/GLib event bridge.
 - GNOME desktop metadata, settings schema, and development icon.
@@ -16,5 +22,5 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 - Moved the original master specification into `docs/01-product/` without altering its contents.
 
-Hardware probes, runtime adapters, model catalog/downloads, fit calculations,
-SQLite persistence, configuration exports, and benchmark execution remain planned.
+Runtime adapters, model catalog/downloads, fit calculations, SQLite persistence,
+configuration exports, and benchmark execution remain planned.
