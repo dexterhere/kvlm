@@ -25,6 +25,9 @@ telemetry, root requirements, plaintext credentials, or untrusted model-code exe
 
 ## Workflow
 
+- Branch from `develop`; submit feature PRs to `develop`, then promote
+  `develop → staging → main`. Never commit directly to those three branches or
+  skip stages. Read `docs/03-development/git-workflow.md` before Git operations.
 - Make small, frequent commits at coherent checkpoints when implementing work.
 - No `Co-authored-by` trailers or generated assistant attribution. Preserve existing
   copyright and use the configured Git identity. Never invent an identity.

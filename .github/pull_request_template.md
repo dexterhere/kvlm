@@ -9,6 +9,7 @@ for visual changes and reviewed hardware evidence when relevant.
 
 ## Contributor checklist
 
+- [ ] The target follows feature → develop → staging → main without skipping stages.
 - [ ] The change is focused and follows CONTRIBUTING.md and the Code of Conduct.
 - [ ] Relevant tests and documentation are included.
 - [ ] No credentials, model weights, private data, or generated build artifacts are included.
