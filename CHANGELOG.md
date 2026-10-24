@@ -6,9 +6,10 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 ### Added
 
+- GGUF-to-calculator scenario adapter and CLI, with explicit layout assumptions,
+  sequence and metadata gates, and compatibility kept unverified.
 - Bounded, read-only local GGUF v3 metadata inspection, tensor-range validation,
   adversarial fixtures, and a CLI example; no runtime compatibility or fit claim.
-
 - Supplied-metadata static memory-fit calculator with checked byte arithmetic,
   separate K/V formats, CPU/GPU/shared placement limits, explicit unknown/error
   states, an offline reference example, and independent integration tests.

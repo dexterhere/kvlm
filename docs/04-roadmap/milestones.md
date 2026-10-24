@@ -6,6 +6,7 @@ owns the detailed acceptance criteria. This page tracks actual status.
 ## Current status: foundation, M0 incomplete
 
 - [x] Bounded local GGUF v3 metadata and tensor-directory inspection in core.
+- [x] GGUF-to-calculator scenario adapter with explicit settings and unverified compatibility.
 - [x] Four-crate Cargo workspace and documented module ownership.
 - [x] Minimal GNOME shell, four navigation views, Tokio/GLib bridge.
 - [x] Native build foundation, desktop metadata, community docs, and validation checks.
@@ -27,8 +28,10 @@ Ollama discovery ([PR #2](https://github.com/dexterhere/kvlm/pull/2)) remain
 separate, unmerged features. This dependent feature branch carries the
 [calculator core](../03-development/static-memory-fit.md) and
 [GGUF inspector](../03-development/gguf-metadata.md) from PRs #3 and #4.
-No prerequisite PR has been merged. Metadata/runtime-settings integration
-is the current slice; desktop wiring, real runtime settings discovery,
+No prerequisite PR has been merged. The [scenario adapter](../03-development/gguf-fit.md)
+connects declarations and explicit settings without promoting assumptions to support.
+Next: collect trustworthy runtime/layout evidence and connect model selection and
+real hardware readings to desktop estimates. Actual runtime settings discovery,
 live allocation calibration, streaming benchmarks, and persisted empirical
 verification remain pending. M0 is incomplete.
 

@@ -18,6 +18,10 @@ GGUF integration tests in `crates/workstation-core/tests/gguf_metadata_tests.rs`
 build synthetic byte fixtures, including malformed headers and tensor ranges.
 They need no model downloads and verify that inspection avoids tensor payload reads.
 
+`crates/workstation-core/tests/gguf_fit_tests.rs` exercises inspected synthetic
+GGUFs through the calculator adapter, including missing dimensions, unconfirmed
+layout, non-single-sequence plans, explicit K/V geometry, and budget-only rejection.
+
 The repository validator has standard-library Python regression tests:
 
 ```sh
