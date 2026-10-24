@@ -10,7 +10,7 @@ owns the detailed acceptance criteria. This page tracks actual status.
 - [x] Four-crate Cargo workspace and documented module ownership.
 - [x] Minimal GNOME shell, four navigation views, Tokio/GLib bridge.
 - [x] Native build foundation, desktop metadata, community docs, and validation checks.
-- [ ] Hardware detection for CPU/RAM, NVIDIA NVML, AMD VRAM/GTT.
+- [x] Hardware detection for CPU/RAM, NVIDIA NVML, AMD VRAM/GTT (carried from PR #1).
 - [ ] Attached Ollama discovery, model listing, and loaded-memory inspection.
 - [ ] Validated memory-fit calculations and architecture metadata integration.
 - [x] Pure supplied-metadata calculator, placement policy, offline example, and tests.

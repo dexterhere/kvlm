@@ -5,8 +5,9 @@ your hardware can run, managing inference runtimes safely, and measuring perform
 
 **Status: development foundation.** The workspace and four-view application shell
 are in place, plus a supplied-metadata static memory-fit calculator and bounded
-local GGUF metadata inspection in core. Hardware and attached-Ollama discovery
-are separate, unmerged PRs. Desktop fit badges, inference,
+local GGUF metadata inspection in core. This dependent branch also includes hardware
+discovery in Overview. Attached-Ollama discovery remains a separate, unmerged PR.
+Desktop fit badges, inference,
 downloads, database storage, and benchmarks are not implemented on this branch yet.
 This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
