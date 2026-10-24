@@ -6,6 +6,9 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 ### Added
 
+- Supplied-metadata static memory-fit calculator with checked byte arithmetic,
+  separate K/V formats, CPU/GPU/shared placement limits, explicit unknown/error
+  states, an offline reference example, and independent integration tests.
 - Rust 2024 workspace with four crates and the specified module layout.
 - Minimal GNOME application shell with four views and a Tokio/GLib event bridge.
 - GNOME desktop metadata, settings schema, and development icon.
@@ -16,5 +19,5 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 - Moved the original master specification into `docs/01-product/` without altering its contents.
 
-Hardware probes, runtime adapters, model catalog/downloads, fit calculations,
+Hardware probes, runtime adapters, model catalog/downloads, desktop fit integration,
 SQLite persistence, configuration exports, and benchmark execution remain planned.

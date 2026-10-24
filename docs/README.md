@@ -11,15 +11,19 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Repository layout](03-development/repository-layout.md) | Where code, fixtures, metadata, and documentation belong |
 | 03 | [Git workflow](03-development/git-workflow.md) | Small commits, authorship, review, publication |
 | 03 | [Foundation validation](03-development/validation.md) | Checks performed and practical limits |
+| 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
 | 04 | [Milestones](04-roadmap/milestones.md) | Current state and M0–M4 delivery order |
 | 04 | [Next feature: hardware discovery](04-roadmap/next-feature-hardware-discovery.md) | Implementation sequence, scope, and acceptance checks for M0 Step 2 |
 | 05 | [Decisions](05-decisions/README.md) | How to record architecture decisions |
 | 05 | [Foundation decision](05-decisions/0001-workspace-foundation.md) | Accepted setup choices |
+| 05 | [Static memory-fit decision](05-decisions/0004-static-memory-fit.md) | Supported layouts, byte accounting, and placement thresholds |
 | 05 | [Open questions](05-decisions/open-questions.md) | Specification gaps to resolve before affected implementation |
 
 Also read [contributing](../CONTRIBUTING.md), [security](../SECURITY.md),
 [conduct](../CODE_OF_CONDUCT.md), [support](../SUPPORT.md), and [changelog](../CHANGELOG.md).
 
-The master specification retains its original filename and contents at its new
-location. Do not keep a second editable copy at the repository root. Update this
-index when adding or moving documents; use relative links within repository files.
+The master specification retains its original filename and target text at its new
+location, with dated implementation notes linking validated decisions. The original
+import is preserved in Git history. Do not keep a second editable copy at the
+repository root. Update this index when adding or moving documents; use relative
+links within repository files.
