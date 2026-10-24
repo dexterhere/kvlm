@@ -25,13 +25,17 @@ Core exposes synchronous, bounded local GGUF inspection through `models::gguf`.
 It validates a supported header/directory subset and computes tensor storage bytes
 without reading payloads. Architecture values remain declarations, not runtime
 configuration or fit evidence. See [the inspection guide](../03-development/gguf-metadata.md).
-Future UI callers must use `spawn_blocking`; the current caller is a CLI example.
+CLI examples call it synchronously. Overview sends typed fit requests to a blocking
+worker; no file inspection or hardware probing occurs on the GTK thread.
 
 `fit::gguf_fit` connects inspected declarations to the static calculator with an
 explicit runtime scenario and available-memory budget. Only a labeled uniform
 full-attention assumption, complete dimensions, and one sequence allow a breakdown.
 Warnings block that path; absence of warnings does not establish support. Runtime
 compatibility stays Unknown. See [the scenario guide](../03-development/gguf-fit.md).
+The [desktop CPU workflow](../03-development/desktop-cpu-fit.md) reuses that adapter
+and reads Linux `MemAvailable` afresh for each estimate without probing GPUs again.
+Request generations discard replies after file, scenario, or hardware changes.
 
 ## Execution model
 
@@ -58,8 +62,8 @@ Shared GPU memory overlaps physical system RAM. The initial calculator caps its
 resident footprint by both GPU mapping and host-RAM budgets, without adding them.
 CPU-only and selected GPU placement policies are defined in
 [decision 0004](../05-decisions/0004-static-memory-fit.md). Offload, verified layout
-and compatibility evidence, actual runtime settings, and desktop integration remain
-separate work.
+and compatibility evidence, actual runtime settings, and GPU fit wiring remain
+separate work. CPU estimates in Overview are explicitly labeled scenarios.
 
 ## Ownership and storage
 

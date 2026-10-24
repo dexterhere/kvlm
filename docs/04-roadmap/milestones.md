@@ -7,6 +7,7 @@ owns the detailed acceptance criteria. This page tracks actual status.
 
 - [x] Bounded local GGUF v3 metadata and tensor-directory inspection in core.
 - [x] GGUF-to-calculator scenario adapter with explicit settings and unverified compatibility.
+- [x] Overview CPU scenario form with local-file inspection, fresh RAM, and stale-reply protection.
 - [x] Four-crate Cargo workspace and documented module ownership.
 - [x] Minimal GNOME shell, four navigation views, Tokio/GLib bridge.
 - [x] Native build foundation, desktop metadata, community docs, and validation checks.
@@ -23,15 +24,14 @@ M0 checklist complete until the behavior is implemented and verified.
 
 ## Next feature
 
-Hardware discovery ([PR #1](https://github.com/dexterhere/kvlm/pull/1)) and
-Ollama discovery ([PR #2](https://github.com/dexterhere/kvlm/pull/2)) remain
-separate, unmerged features. This dependent feature branch carries the
-[calculator core](../03-development/static-memory-fit.md) and
-[GGUF inspector](../03-development/gguf-metadata.md) from PRs #3 and #4.
-No prerequisite PR has been merged. The [scenario adapter](../03-development/gguf-fit.md)
-connects declarations and explicit settings without promoting assumptions to support.
-Next: collect trustworthy runtime/layout evidence and connect model selection and
-real hardware readings to desktop estimates. Actual runtime settings discovery,
+This dependent branch carries hardware discovery from [PR #1](https://github.com/dexterhere/kvlm/pull/1)
+and the scenario prerequisites from [PR #5](https://github.com/dexterhere/kvlm/pull/5),
+which includes #3 and #4. All remain unmerged. Ollama discovery in
+[PR #2](https://github.com/dexterhere/kvlm/pull/2) remains separate.
+The [desktop CPU workflow](../03-development/desktop-cpu-fit.md) now connects local
+model selection, explicit settings, and fresh RAM without promoting assumptions
+to verified support. Next: collect trustworthy runtime/layout evidence and connect
+attached-runtime selection to the desktop flow. Actual runtime settings discovery,
 live allocation calibration, streaming benchmarks, and persisted empirical
 verification remain pending. M0 is incomplete.
 
