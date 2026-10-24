@@ -4,6 +4,13 @@
 use super::{CpuFeatures, CpuProfile, MemoryPool};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Read Linux RAM availability only; async/UI callers must use `spawn_blocking`.
+pub fn read_memory() -> Result<MemoryPool, String> {
+    std::fs::read_to_string("/proc/meminfo")
+        .map_err(|_| "System RAM could not be read from /proc/meminfo.".into())
+        .and_then(|input| parse_memory(&input))
+}
+
 pub(super) fn parse_cpu(input: &str) -> Result<CpuProfile, String> {
     let blocks: Vec<BTreeMap<_, _>> = input
         .split("\n\n")

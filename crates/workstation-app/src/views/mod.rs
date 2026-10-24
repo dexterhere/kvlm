@@ -3,5 +3,6 @@
 
 pub mod bench_lab;
 pub mod catalog;
+pub mod model_fit;
 pub mod overview;
 pub mod runtimes;
