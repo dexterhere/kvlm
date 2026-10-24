@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Runtime integration boundaries. No runtime discovery or process control exists yet.
+//! Runtime integrations. Attached Ollama discovery is read-only; process control is planned.
 
 pub mod llamacpp;
 pub mod lmstudio;
