@@ -50,8 +50,8 @@ workflow; no PR merge is implied by this decision.
 ## Validation
 
 Workspace formatting, Clippy with warnings denied, all 65 normal Rust tests, repository
-validation, and 9 Python tests passed. The normal run ignores the graphical test;
-Meson build, all five checks, and staged installation passed as well.
+validation, and 9 Python tests passed. Meson build, all five checks, and staged
+installation passed as well. The normal run ignores the graphical test;
 that GTK widget-flow test passed separately on an isolated Broadway display. It uses
 private local path selection to avoid depending on an external file chooser. Its command and
 configuration requirements are documented in the [desktop CPU fit guide](../03-development/desktop-cpu-fit.md#optional-gtk-widget-flow-check).
