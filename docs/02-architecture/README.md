@@ -41,8 +41,9 @@ GLib main thread. UI commands use Tokio mpsc, and worker events return through
 Blocking SQLite, NVML, and sysfs calls must use `spawn_blocking` when implemented.
 Closing the application must cancel worker work and release owned resources.
 
-On this dependent feature branch, the foundation bridge only confirms that the worker is
-available. Hardware and attached-Ollama discovery remain in their separate unmerged PRs.
+On this dependent feature branch, hardware discovery runs in `spawn_blocking` and
+returns typed snapshots to Overview. The attached-Ollama PR remains separate and
+unmerged. Hardware, fit, and GGUF prerequisite PRs have not been merged either.
 The core calculator is pure: callers supply supported model/runtime metadata and
 available-memory readings; it performs no probing, network, database, or GTK work.
 

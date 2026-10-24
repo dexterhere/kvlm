@@ -6,6 +6,7 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 ### Added
 
+- Read-only Linux CPU, RAM, NVIDIA and AMD hardware discovery in Overview.
 - GGUF-to-calculator scenario adapter and CLI, with explicit layout assumptions,
   sequence and metadata gates, and compatibility kept unverified.
 - Bounded, read-only local GGUF v3 metadata inspection, tensor-range validation,

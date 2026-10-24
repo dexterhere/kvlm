@@ -14,6 +14,9 @@ Shared sanitized data belongs in [fixtures](fixtures/README.md). Routine CI must
 not need a GPU, installed runtime, network service, gated token, or model download.
 Live runtime/hardware tests should be explicitly opt-in and document their setup.
 
+Hardware fixtures and probe tests live in `crates/workstation-core`; see the
+[hardware validation record](../docs/03-development/hardware-validation.md).
+
 GGUF integration tests in `crates/workstation-core/tests/gguf_metadata_tests.rs`
 build synthetic byte fixtures, including malformed headers and tensor ranges.
 They need no model downloads and verify that inspection avoids tensor payload reads.
