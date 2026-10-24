@@ -25,6 +25,12 @@ They need no model downloads and verify that inspection avoids tensor payload re
 GGUFs through the calculator adapter, including missing dimensions, unconfirmed
 layout, non-single-sequence plans, explicit K/V geometry, and budget-only rejection.
 
+App tests cover fit request generations, validation, fresh-memory error semantics,
+queue preservation, background execution, and shutdown. The ignored GTK widget-flow
+test is opt-in and needs a display; see the [desktop guide](../docs/03-development/desktop-cpu-fit.md#optional-gtk-widget-flow-check).
+Normal CI does not open GTK windows. The display test uses synthetic files and the
+real fit worker; it bypasses native file-chooser interaction.
+
 The repository validator has standard-library Python regression tests:
 
 ```sh

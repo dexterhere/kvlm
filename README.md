@@ -7,8 +7,9 @@ your hardware can run, managing inference runtimes safely, and measuring perform
 are in place, plus a supplied-metadata static memory-fit calculator and bounded
 local GGUF metadata inspection in core. This dependent branch also includes hardware
 discovery in Overview. Attached-Ollama discovery remains a separate, unmerged PR.
-Desktop fit badges, inference,
-downloads, database storage, and benchmarks are not implemented on this branch yet.
+Overview now includes local GGUF inspection and CPU scenario estimates with explicit
+assumptions and fresh RAM readings. Runtime compatibility, inference, downloads,
+database storage, and benchmarks remain unimplemented on this branch.
 This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 
@@ -52,6 +53,8 @@ This reports declarations and tensor layout; runtime compatibility remains unver
 The [GGUF fit scenario guide](docs/03-development/gguf-fit.md) connects those
 declarations to explicit settings and a supplied budget. It requires an explicit
 layout assumption for a breakdown and cannot return a positive fit classification.
+Use the [desktop CPU workflow](docs/03-development/desktop-cpu-fit.md) to select a
+local file and configure a scenario directly in Overview. No inference runs.
 
 ```sh
 cargo fmt --all --check
