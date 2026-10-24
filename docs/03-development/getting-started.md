@@ -44,6 +44,8 @@ cargo run --locked -p workstation-app
 
 Run from a graphical session. A headless build can run unit tests without showing
 a window. Overview shows real hardware snapshots with Refresh and `Ctrl+R`. The
+local [CPU scenario panel](desktop-cpu-fit.md) inspects user-selected GGUF metadata
+and estimates explicitly configured inputs on a background worker. The
 other three navigation pages still describe planned features; no synthetic
 inference results are displayed. Source-tree execution
 does not require installed desktop metadata or a compiled settings schema.

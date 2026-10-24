@@ -10,6 +10,7 @@ routine implementation details in code or the relevant development document.
   0003 belongs to the separate Ollama PR.
 - [0005: Bounded GGUF metadata inspection](0005-gguf-metadata.md) — implemented inspector.
 - [0006: GGUF fit integration](0006-gguf-fit-integration.md) — explicit scenario adapter.
+- [0007: Desktop CPU fit](0007-desktop-cpu-fit.md) — asynchronous Overview workflow.
 - [Open questions](open-questions.md) — unresolved specification details, not decisions.
 
 When a decision changes the master specification, explicitly update the relevant

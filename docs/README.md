@@ -15,6 +15,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
 | 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection example, supported subset, and limits |
 | 03 | [GGUF fit scenarios](03-development/gguf-fit.md) | Local declarations with explicit settings, assumptions, and unknown compatibility |
+| 03 | [Desktop CPU fit workflow](03-development/desktop-cpu-fit.md) | File selection, explicit inputs, fresh RAM, asynchronous estimates, and validation limits |
 | 04 | [Milestones](04-roadmap/milestones.md) | Current state and M0–M4 delivery order |
 | 04 | [Next feature: hardware discovery](04-roadmap/next-feature-hardware-discovery.md) | Implementation sequence, scope, and acceptance checks for M0 Step 2 |
 | 05 | [Decisions](05-decisions/README.md) | How to record architecture decisions |
@@ -23,6 +24,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 05 | [Static memory-fit decision](05-decisions/0004-static-memory-fit.md) | Supported layouts, byte accounting, and placement thresholds |
 | 05 | [GGUF metadata decision](05-decisions/0005-gguf-metadata.md) | Bounded declarations and tensor layout without runtime or fit claims |
 | 05 | [GGUF fit integration decision](05-decisions/0006-gguf-fit-integration.md) | Metadata gates and scenario-only estimates |
+| 05 | [Desktop CPU fit decision](05-decisions/0007-desktop-cpu-fit.md) | GTK workflow, fresh readings, and stale-reply handling |
 | 05 | [Open questions](05-decisions/open-questions.md) | Specification gaps to resolve before affected implementation |
 
 Also read [contributing](../CONTRIBUTING.md), [security](../SECURITY.md),
