@@ -6,7 +6,7 @@ your hardware can run, managing inference runtimes safely, and measuring perform
 **Status: development foundation.** The workspace and four-view application shell
 are in place, plus a supplied-metadata static memory-fit calculator and bounded
 local GGUF metadata inspection in core. This dependent branch also includes hardware
-discovery in Overview. Attached-Ollama discovery remains a separate, unmerged PR.
+discovery in Overview. Read-only attached-Ollama discovery is also carried from its unmerged PR.
 Overview now includes local GGUF inspection and CPU scenario estimates with explicit
 assumptions and fresh RAM readings. Runtime compatibility, inference, downloads,
 database storage, and benchmarks remain unimplemented on this branch.

@@ -46,8 +46,8 @@ Blocking SQLite, NVML, and sysfs calls must use `spawn_blocking` when implemente
 Closing the application must cancel worker work and release owned resources.
 
 On this dependent feature branch, hardware discovery runs in `spawn_blocking` and
-returns typed snapshots to Overview. The attached-Ollama PR remains separate and
-unmerged. Hardware, fit, and GGUF prerequisite PRs have not been merged either.
+returns typed snapshots to Overview. Attached-Ollama discovery is carried from its unmerged PR and runs asynchronously
+on Tokio; it never changes runtime state. Hardware, fit, and GGUF prerequisite PRs have not been merged either.
 The core calculator is pure: callers supply supported model/runtime metadata and
 available-memory readings; it performs no probing, network, database, or GTK work.
 
