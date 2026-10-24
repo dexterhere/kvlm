@@ -4,14 +4,16 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use workstation_core::APP_NAME;
 
-use crate::bridge::{self, CoreCommand, UiEvent};
+use crate::bridge::{self, UiEvent};
 use crate::views;
 
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
+    let (commands, events) = bridge::start(runtime);
+    let overview = views::overview::Overview::new(commands);
     let stack = adw::ViewStack::new();
     stack.set_vexpand(true);
     stack.add_titled_with_icon(
-        &views::overview::build(),
+        &overview.widget,
         Some("overview"),
         "Overview",
         "utilities-system-monitor-symbolic",
@@ -39,7 +41,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         .stack(&stack)
         .policy(adw::ViewSwitcherPolicy::Wide)
         .build();
-    let title = adw::WindowTitle::new(APP_NAME, "Development foundation");
+    let title = adw::WindowTitle::new(APP_NAME, "Development preview");
     let header = adw::HeaderBar::builder().title_widget(&switcher).build();
     let menu = gio::Menu::new();
     menu.append(Some("Quit"), Some("app.quit"));
@@ -53,7 +55,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
 
     let bottom_switcher = adw::ViewSwitcherBar::builder().stack(&stack).build();
     let status = gtk::Label::builder()
-        .label("Starting background worker…")
+        .label("Detecting hardware · No runtime connected")
         .wrap(true)
         .margin_top(8)
         .margin_bottom(8)
@@ -101,27 +103,36 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         );
     }
 
-    let (commands, events) = bridge::start(runtime);
-    if commands.send(CoreCommand::Initialize).is_err() {
-        status.set_label("Background worker unavailable.");
-    }
+    let refresh = gio::SimpleAction::new("refresh-hardware", None);
+    let weak_refresh = overview.refresh.downgrade();
+    refresh.connect_activate(move |_, _| {
+        if let Some(button) = weak_refresh.upgrade() {
+            button.emit_clicked();
+        }
+    });
+    window.add_action(&refresh);
+    app.set_accels_for_action("win.refresh-hardware", &["<Primary>r"]);
+    overview.request();
     let closing_events = events.clone();
     window.connect_close_request(move |_| {
         closing_events.close();
         glib::Propagation::Proceed
     });
+    let shutdown_events = events.clone();
+    app.connect_shutdown(move |_| {
+        shutdown_events.close();
+    });
     let weak_status = status.downgrade();
     glib::MainContext::default().spawn_local(async move {
-        let _commands = commands;
         while let Ok(event) = events.recv().await {
             let Some(status) = weak_status.upgrade() else {
                 break;
             };
-            match event {
-                UiEvent::WorkerReady => {
-                    status.set_label("Development foundation · No runtime connected")
-                }
-            }
+            overview.receive(&event);
+            status.set_label(match event {
+                UiEvent::HardwareDetected(_) => "Hardware snapshot ready · No runtime connected",
+                UiEvent::HardwareFailed(_) => "Hardware detection failed · No runtime connected",
+            });
         }
     });
 
