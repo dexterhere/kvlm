@@ -19,6 +19,10 @@ use workstation_core::{
 
 const GIB: f64 = 1_073_741_824.0;
 
+#[cfg(test)]
+#[path = "model_fit_smoke.rs"]
+mod smoke;
+
 struct PanelState {
     requests: FitState,
     selected_path: Option<PathBuf>,
