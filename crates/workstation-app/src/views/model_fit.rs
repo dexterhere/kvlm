@@ -550,9 +550,7 @@ fn assessment_text(assessment: &FitAssessment) -> String {
                 "Context allocation rounded to {allocated_context_tokens} tokens."
             ));
         }
-        None => {
-            lines.push("Memory breakdown unavailable until required inputs are confirmed.".into())
-        }
+        None => lines.push("Memory breakdown unavailable for these inputs and assumptions.".into()),
     }
     match assessment.limits {
         Some(MemoryLimits {
@@ -618,17 +616,21 @@ fn status_text(status: GgufFitStatus) -> &'static str {
         GgufFitStatus::UnsupportedArchitecture => {
             "Architecture is not supported by this narrow estimate."
         }
-        GgufFitStatus::LayoutWarnings => "Layout warning markers prevent shape promotion.",
+        GgufFitStatus::LayoutWarnings => {
+            "This model declares a layout this estimate cannot evaluate."
+        }
         GgufFitStatus::UnknownSequenceCount => {
             "Sequence count is unknown; one-sequence fit math is unavailable."
         }
         GgufFitStatus::MultipleSequences => "This estimate supports one sequence only.",
         GgufFitStatus::UnconfirmedLayout => {
-            "Layout is unconfirmed; no architecture shape was promoted."
+            "Layout is unconfirmed. An explicit attention assumption is required for a conditional estimate."
         }
-        GgufFitStatus::MissingDimensions => "Required typed architecture dimensions are missing.",
+        GgufFitStatus::MissingDimensions => {
+            "Required architecture dimensions are missing; no complete estimate is available."
+        }
         GgufFitStatus::AssumedGeometry => {
-            "Uniform full-attention geometry is an explicit assumption, not verified."
+            "This estimate uses an explicit assumption of uniform full attention; model layout is unverified."
         }
     }
 }
@@ -636,9 +638,9 @@ fn status_text(status: GgufFitStatus) -> &'static str {
 fn fit_class_text(class: FitClass) -> &'static str {
     match class {
         FitClass::Comfortable | FitClass::Constrained => {
-            "Unexpected positive classification; not presented as supported"
+            "Unverified; a memory estimate cannot establish runtime support"
         }
-        FitClass::NotRecommended => "Not recommended for this supplied CPU budget",
+        FitClass::NotRecommended => "Not recommended for this CPU scenario",
         FitClass::Unknown => "Unknown",
     }
 }
