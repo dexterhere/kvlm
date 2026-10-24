@@ -5,8 +5,9 @@ Include status, context, decision, consequences, and validation requirements. Ke
 routine implementation details in code or the relevant development document.
 
 - [0001: Workspace foundation](0001-workspace-foundation.md) — accepted.
+- [0002: Hardware discovery](0002-hardware-snapshots.md) — implemented snapshots.
 - [0004: Static memory fit](0004-static-memory-fit.md) — implemented core policy;
-  0002 and 0003 belong to the separate hardware and Ollama PRs.
+  0003 belongs to the separate Ollama PR.
 - [0005: Bounded GGUF metadata inspection](0005-gguf-metadata.md) — implemented inspector.
 - [0006: GGUF fit integration](0006-gguf-fit-integration.md) — explicit scenario adapter.
 - [Open questions](open-questions.md) — unresolved specification details, not decisions.
