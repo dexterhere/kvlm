@@ -820,6 +820,9 @@ dependencies = [
 [[package]]
 name = "workstation-core"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "workstation-runtimes"
