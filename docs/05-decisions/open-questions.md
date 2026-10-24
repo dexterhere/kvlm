@@ -17,8 +17,8 @@ the affected feature; they do not block the directory foundation.
 | Runtime import (§6.3) | Validate version-specific Ollama create/import semantics and which process can access a local blob path. |
 | Runtime downloads (§5.1) | Confirm available official bundles, checksum provenance, backend support, and archive extraction protections. |
 | Local-only mode (§5.4, §9.2) | Define how cloud routing is recognized and blocked when runtime metadata is incomplete. |
-| Distribution (§9) | Confirm the application namespace and repository URL; `org.gnome.LocalAIWorkstation` is provisional and does not imply GNOME affiliation. |
-| Public contribution | Configure real private security/conduct contacts and public hosting before publication. |
+| Distribution (§9) | Confirm the application namespace; `org.gnome.LocalAIWorkstation` is provisional and does not imply GNOME affiliation. The selected repository is `https://github.com/dexterhere/kvlm`, configured as origin on 2026-10-24. |
+| Public contribution | Configure real private security/conduct contacts and verify hosting/reporting settings before publication. |
 
 Treat runtime flags, wire formats, third-party integrations, and packaging examples
 as version-sensitive. Verify against official upstream documentation when implementing

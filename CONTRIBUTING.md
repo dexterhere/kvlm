@@ -8,8 +8,9 @@ testing, and code contributions are all welcome.
 
 1. Read the [Code of Conduct](CODE_OF_CONDUCT.md).
 2. Follow the [development guide](docs/03-development/getting-started.md).
-3. Check the [roadmap](docs/04-roadmap/milestones.md) and existing issues or pull requests
-   on the project's eventual hosting service to avoid duplicating work.
+3. Check the [roadmap](docs/04-roadmap/milestones.md) and existing
+   [issues](https://github.com/dexterhere/kvlm/issues) or
+   [pull requests](https://github.com/dexterhere/kvlm/pulls) to avoid duplicating work.
 4. Discuss large features, dependency additions, and architecture changes first.
 
 Work on the current M0 foundation before taking on later runtime integrations.

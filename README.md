@@ -40,6 +40,8 @@ python3 scripts/check_repository.py
 
 ## Repository
 
+Source repository: [dexterhere/kvlm](https://github.com/dexterhere/kvlm).
+
 | Path | Responsibility |
 | --- | --- |
 | `crates/workstation-core/` | Domain types, hardware probes, fit, models, SQLite, exports |
@@ -64,8 +66,8 @@ are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), the
 easier to review. Discuss changes to scope or safety boundaries before implementing them.
 
 See [SUPPORT.md](SUPPORT.md) for questions and [SECURITY.md](SECURITY.md) for
-vulnerability reporting. Project hosting and a private contact must be configured
-before accepting public reports; no repository URL or reporting address is invented here.
+vulnerability reporting. Private reporting and a verified maintainer contact still
+need to be configured before accepting sensitive reports.
 
 ## License
 

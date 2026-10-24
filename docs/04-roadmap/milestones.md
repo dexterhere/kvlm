@@ -18,6 +18,13 @@ owns the detailed acceptance criteria. This page tracks actual status.
 The shell does not fulfill the M0 vertical slice. Do not mark the specification's
 M0 checklist complete until the behavior is implemented and verified.
 
+## Next feature
+
+[Hardware discovery in Overview](next-feature-hardware-discovery.md) is the next
+implementation slice: CPU/RAM detection, NVIDIA and AMD memory probing, and an
+asynchronous Overview display with explicit partial-failure states. This is a
+plan only; feature implementation has not started.
+
 ## Delivery order
 
 | Milestone | Outcome | Status |

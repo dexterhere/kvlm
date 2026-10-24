@@ -12,9 +12,11 @@ Do not post secrets, working exploits, or sensitive system information in public
 issues. Use the host's private vulnerability-reporting facility **if maintainers
 have enabled it**, or an explicitly published private maintainer contact.
 
-**Publication prerequisite:** no public repository or private security contact is
-configured in this checkout. Maintainers must enable private reporting and publish
-a verified contact here before inviting public vulnerability submissions. An
+**Publication prerequisite:** the configured repository is
+[dexterhere/kvlm](https://github.com/dexterhere/kvlm), but private reporting availability
+has not been verified and no private contact is published here. Maintainers must
+enable private reporting and publish a verified contact before inviting public
+vulnerability submissions. An
 unconfigured reporting route must not be advertised as available. No response-time
 or bounty promise is made.
 

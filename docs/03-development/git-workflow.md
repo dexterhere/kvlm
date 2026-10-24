@@ -1,8 +1,9 @@
 # Git workflow
 
 Use `main` as the integration branch and a focused branch for each contribution.
-There is no remote configured by this setup; commits are local until maintainers
-choose a hosting location and publish it.
+`origin` is configured as `https://github.com/dexterhere/kvlm.git`. Adding the remote
+does not publish commits or establish an upstream tracking branch. Push changes
+only when publication is requested.
 
 ## Small, frequent checkpoints
 
@@ -39,7 +40,8 @@ behavior and any meaningful validation limits.
 
 ## Before community publication
 
-- Choose the public repository and add its real URL to project metadata.
+- Publish the intended commits to the chosen repository and add its URL to
+  distribution metadata, including AppStream.
 - Configure a private vulnerability-reporting route and conduct contact.
 - Set branch protections and required CI checks on the hosting service.
 - Keep the current application ID provisional until the namespace is confirmed.
