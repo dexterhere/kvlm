@@ -5,9 +5,10 @@ implementation and integration tests under the owning crate's `tests/` directory
 This root is not a Cargo package; standalone Rust files here would not execute.
 
 The initial application tests exercise real Tokio command/event delivery and worker
-channel shutdown without initializing GTK. Future memory-fit tests belong in
-`crates/workstation-core/tests/`; mock Ollama HTTP tests belong in
-`crates/workstation-runtimes/tests/`. Add them when the behavior is implemented.
+channel shutdown without initializing GTK. Supplied-metadata memory-fit tests live in
+`crates/workstation-core/tests/fit_calculation_tests.rs`; they run without hardware,
+models, or network access. Mock Ollama HTTP tests belong in
+the separate runtime feature until its PR is integrated.
 
 Shared sanitized data belongs in [fixtures](fixtures/README.md). Routine CI must
 not need a GPU, installed runtime, network service, gated token, or model download.

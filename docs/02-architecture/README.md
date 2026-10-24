@@ -29,8 +29,10 @@ GLib main thread. UI commands use Tokio mpsc, and worker events return through
 Blocking SQLite, NVML, and sysfs calls must use `spawn_blocking` when implemented.
 Closing the application must cancel worker work and release owned resources.
 
-The foundation bridge only confirms that the worker is available. It does not probe
-hardware, touch models, connect to runtimes, or create the database.
+On this independent branch, the foundation bridge only confirms that the worker is
+available. Hardware and attached-Ollama discovery remain in their separate unmerged PRs.
+The core calculator is pure: callers supply supported model/runtime metadata and
+available-memory readings; it performs no probing, network, database, or GTK work.
 
 ## Intended data flow
 
@@ -39,8 +41,11 @@ An independent successful run for the artifact/hardware pair → empirical verif
 Runtime adapter → stream timings + telemetry → stored benchmark → diagnostic advice.
 Catalog metadata → digest match against existing blobs → user-requested download if needed.
 
-Shared GPU memory may overlap physical system RAM. Never count it as extra physical
-capacity; the detailed accounting and CPU-only classification remain open decisions.
+Shared GPU memory overlaps physical system RAM. The initial calculator caps its
+resident footprint by both GPU mapping and host-RAM budgets, without adding them.
+CPU-only and selected GPU placement policies are defined in
+[decision 0004](../05-decisions/0004-static-memory-fit.md). Offload, metadata extraction,
+and desktop integration remain separate work.
 
 ## Ownership and storage
 
