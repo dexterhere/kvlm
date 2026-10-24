@@ -132,6 +132,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
             status.set_label(match event {
                 UiEvent::HardwareDetected(_) => "Hardware snapshot ready · No runtime connected",
                 UiEvent::HardwareFailed(_) => "Hardware detection failed · No runtime connected",
+                UiEvent::FitFinished { .. } => continue,
             });
         }
     });
