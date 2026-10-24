@@ -233,6 +233,20 @@ mod tests {
     }
 
     #[test]
+    fn cpu_only_inventory_remains_useful_without_gpu_devices() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let mut profile =
+            HardwareProfile::detect_linux(&root.join("proc"), &root.join("drm-empty"));
+        profile.update_hash();
+        assert!(profile.has_readings());
+        assert!(profile.cpu.is_some());
+        assert!(profile.system_ram.is_some());
+        assert!(profile.gpus.is_empty());
+        assert!(profile.issues.is_empty());
+        assert!(profile.profile_hash.is_some());
+    }
+
+    #[test]
     fn missing_sources_are_explicit_and_have_no_identity() {
         let root = Path::new("/this-path-does-not-exist-kvlm-test");
         let mut profile = HardwareProfile::detect_linux(root, root);
