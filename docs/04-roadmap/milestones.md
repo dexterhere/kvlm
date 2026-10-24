@@ -5,6 +5,7 @@ owns the detailed acceptance criteria. This page tracks actual status.
 
 ## Current status: foundation, M0 incomplete
 
+- [x] Bounded local GGUF v3 metadata and tensor-directory inspection in core.
 - [x] Four-crate Cargo workspace and documented module ownership.
 - [x] Minimal GNOME shell, four navigation views, Tokio/GLib bridge.
 - [x] Native build foundation, desktop metadata, community docs, and validation checks.
@@ -21,18 +22,15 @@ M0 checklist complete until the behavior is implemented and verified.
 
 ## Next feature
 
-Hardware discovery ([PR #1](https://github.com/dexterhere/kvlm/pull/1)) and attached
-Ollama discovery ([PR #2](https://github.com/dexterhere/kvlm/pull/2)) remain separate,
-unmerged features. This branch implements the independent
-[static calculator core](../03-development/static-memory-fit.md). It does not combine
-those branches or mark full M0 Step 4 complete.
-
-Next: supply validated complete GGUF architecture metadata, actual runtime configuration,
-and verified artifact/backend/cache compatibility. Then connect real hardware readings
-and model selection to the core result, exposing estimate breakdowns and Unknown reasons
-in desktop fit badges. Unsupported architectures and offload plans must stay explicit.
-Calibrate against runtime allocations before claiming general recommendation accuracy.
-Streaming benchmarks and persisted empirical verification follow in a separate slice.
+Hardware discovery ([PR #1](https://github.com/dexterhere/kvlm/pull/1)) and
+Ollama discovery ([PR #2](https://github.com/dexterhere/kvlm/pull/2)) remain
+separate, unmerged features. This dependent feature branch carries the
+[calculator core](../03-development/static-memory-fit.md) and
+[GGUF inspector](../03-development/gguf-metadata.md) from PRs #3 and #4.
+No prerequisite PR has been merged. Metadata/runtime-settings integration
+is the current slice; desktop wiring, real runtime settings discovery,
+live allocation calibration, streaming benchmarks, and persisted empirical
+verification remain pending. M0 is incomplete.
 
 ## Delivery order
 
