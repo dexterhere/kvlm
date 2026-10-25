@@ -70,7 +70,7 @@ impl Benchmarks {
             .css_classes(["title-1"])
             .build();
         let note = gtk::Label::builder()
-            .label("Choose an installed model, then Check and Run. Known cloud-routed models are excluded. The runtime checks local-only support before inference. A request may load the model and use memory; this app never changes Ollama's service configuration.")
+            .label("Choose an installed model, then Check and Run. Models with reported cloud routing are excluded. Every run checks local-only support before inference. A request may load the model and use memory; this app never changes Ollama's service configuration.")
             .xalign(0.0)
             .wrap(true)
             .build();
