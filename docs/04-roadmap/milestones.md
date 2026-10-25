@@ -12,7 +12,8 @@ owns the detailed acceptance criteria. This page tracks actual status.
 - [x] Minimal GNOME shell, four navigation views, Tokio/GLib bridge.
 - [x] Native build foundation, desktop metadata, community docs, and validation checks.
 - [x] Hardware detection for CPU/RAM, NVIDIA NVML, AMD VRAM/GTT (carried from PR #1).
-- [ ] Attached Ollama discovery, model listing, and loaded-memory inspection.
+- [x] Attached Ollama discovery, model listing, and loaded-memory inspection (carried from PR #2).
+- [x] Installed-model selection with read-only declarations and fresh loaded readings.
 - [ ] Validated memory-fit calculations and architecture metadata integration.
 - [x] Pure supplied-metadata calculator, placement policy, offline example, and tests.
 - [ ] Quick streaming benchmark with resource sampling and SQLite persistence.
@@ -24,16 +25,17 @@ M0 checklist complete until the behavior is implemented and verified.
 
 ## Next feature
 
-This dependent branch carries hardware discovery from [PR #1](https://github.com/dexterhere/kvlm/pull/1)
-and the scenario prerequisites from [PR #5](https://github.com/dexterhere/kvlm/pull/5),
-which includes #3 and #4. All remain unmerged. Ollama discovery in
-[PR #2](https://github.com/dexterhere/kvlm/pull/2) remains separate.
-The [desktop CPU workflow](../03-development/desktop-cpu-fit.md) now connects local
-model selection, explicit settings, and fresh RAM without promoting assumptions
-to verified support. Next: collect trustworthy runtime/layout evidence and connect
-attached-runtime selection to the desktop flow. Actual runtime settings discovery,
-live allocation calibration, streaming benchmarks, and persisted empirical
-verification remain pending. M0 is incomplete.
+This dependent branch carries [PR #2](https://github.com/dexterhere/kvlm/pull/2)
+and [PR #6](https://github.com/dexterhere/kvlm/pull/6), including the hardware, static
+calculator, GGUF, and scenario prerequisites in #1, #3, #4, and #5. All remain unmerged.
+The [desktop CPU workflow](../03-development/desktop-cpu-fit.md) and
+[Ollama model inspection](../03-development/ollama-inspection.md) now coexist.
+Inspection keeps declared defaults separate from fresh loaded context and allocation;
+it does not prove local execution, artifact identity, or runtime compatibility.
+Next: define a fail-closed local-execution guard and reproducible quick streaming
+benchmark, then add SQLite persistence and restart verification. Actual K/V types,
+concurrency, micro-batch settings, layout evidence, and allocation calibration remain
+open. M0 is incomplete.
 
 ## Delivery order
 

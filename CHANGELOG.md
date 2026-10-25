@@ -6,6 +6,10 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 ### Added
 
+- Installed Ollama model selection, read-only metadata inspection, and fresh loaded
+  context/allocation with explicit unknowns and stale-reply protection.
+- Attached Ollama discovery, carried from its unmerged prerequisite PR.
+
 - Local GGUF CPU scenario estimates in Overview, with editable settings, fresh RAM,
   asynchronous inspection, explicit assumptions, and stale-result protection.
 - Read-only Linux CPU, RAM, NVIDIA and AMD hardware discovery in Overview.
@@ -26,5 +30,5 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 - Moved the original master specification into `docs/01-product/` without altering its contents.
 
-Hardware probes, runtime adapters, model catalog/downloads, desktop fit integration,
-SQLite persistence, configuration exports, and benchmark execution remain planned.
+Verified runtime-fit integration, model catalog/downloads, SQLite persistence,
+configuration exports, managed runtime control, and benchmark execution remain planned.

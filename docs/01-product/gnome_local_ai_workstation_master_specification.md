@@ -395,6 +395,14 @@ pub trait RuntimeAdapter: Send + Sync {
 ```
 
 ### 5.4 Engine-Specific Wire Protocols
+
+**Implementation note (2026-10-25):** Attached Ollama discovery and per-model inspection
+are read-only. `POST /api/show` supplies model declarations, while fresh `/api/ps`
+supplies reported loaded context/allocation. Defaults never become loaded settings,
+missing routing data never proves local execution, and runtime digests do not verify
+an Overview file. See [decision 0008](../05-decisions/0008-ollama-model-inspection.md).
+Inference, model mutations, verified fit, and benchmark persistence remain pending.
+
 - **Ollama Adapter (`ollama.rs`):**
   - Default Endpoint: `http://127.0.0.1:11434`
   - Health & Version: `GET /api/version`

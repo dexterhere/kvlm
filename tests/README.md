@@ -7,8 +7,9 @@ This root is not a Cargo package; standalone Rust files here would not execute.
 The initial application tests exercise real Tokio command/event delivery and worker
 channel shutdown without initializing GTK. Supplied-metadata memory-fit tests live in
 `crates/workstation-core/tests/fit_calculation_tests.rs`; they run without hardware,
-models, or network access. Mock Ollama HTTP tests belong in
-the separate runtime feature until its PR is integrated.
+models, or network access. Mock Ollama HTTP tests live in `crates/workstation-runtimes/src/ollama/tests.rs`.
+They bind ephemeral loopback ports without connecting to an installed runtime or the
+Internet, and cover discovery plus read-only model inspection.
 
 Shared sanitized data belongs in [fixtures](fixtures/README.md). Routine CI must
 not need a GPU, installed runtime, network service, gated token, or model download.
@@ -36,3 +37,7 @@ The repository validator has standard-library Python regression tests:
 ```sh
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
+
+The ignored Ollama inspection widget-flow test drives real Refresh/Inspect controls
+with typed fixtures; see the [inspection guide](../docs/03-development/ollama-inspection.md#optional-gtk-checks).
+It checks selected-model rendering, stale-result handling, retries, and narrow layout.
