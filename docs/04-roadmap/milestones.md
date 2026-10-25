@@ -16,7 +16,8 @@ owns the detailed acceptance criteria. This page tracks actual status.
 - [x] Installed-model selection with read-only declarations and fresh loaded readings.
 - [ ] Validated memory-fit calculations and architecture metadata integration.
 - [x] Pure supplied-metadata calculator, placement policy, offline example, and tests.
-- [ ] Quick streaming benchmark with resource sampling and SQLite persistence.
+- [x] One explicit streaming Quick Benchmark with local-only checks, client/server timing, and cancellation.
+- [ ] Quick benchmark resource sampling and SQLite persistence.
 - [ ] Persisted empirical badge after restart.
 - [ ] Full M0 unit, mocked HTTP, and real-hardware acceptance evidence.
 
@@ -25,15 +26,18 @@ M0 checklist complete until the behavior is implemented and verified.
 
 ## Next feature
 
-This dependent branch carries [PR #2](https://github.com/dexterhere/kvlm/pull/2)
-and [PR #6](https://github.com/dexterhere/kvlm/pull/6), including the hardware, static
-calculator, GGUF, and scenario prerequisites in #1, #3, #4, and #5. All remain unmerged.
+This dependent branch carries [PR #7](https://github.com/dexterhere/kvlm/pull/7),
+including prerequisites #1 through #6. All remain unmerged.
 The [desktop CPU workflow](../03-development/desktop-cpu-fit.md) and
 [Ollama model inspection](../03-development/ollama-inspection.md) now coexist.
 Inspection keeps declared defaults separate from fresh loaded context and allocation;
 it does not prove local execution, artifact identity, or runtime compatibility.
-Next: define a fail-closed local-execution guard and reproducible quick streaming
-benchmark, then add SQLite persistence and restart verification. Actual K/V types,
+The [Quick Benchmark](../03-development/quick-benchmark.md) now requires affirmative
+cloud-disable status and immutable local digest references before one explicit request.
+It records client first-response latency and independent server decode metrics, with
+partial failure/cancellation outcomes and no empirical verification badge.
+Next: define immutable artifact/hardware/runtime snapshots, add resource sampling and
+SQLite persistence, then verify results across restarts. Actual K/V types,
 concurrency, micro-batch settings, layout evidence, and allocation calibration remain
 open. M0 is incomplete.
 

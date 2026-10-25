@@ -13,8 +13,10 @@ assumptions and fresh RAM readings. Runtimes now supports selecting an installed
 Ollama model for read-only metadata
 inspection and fresh loaded-allocation readings. Declared defaults stay separate
 from loaded settings, and routing remains unverified when evidence is missing.
-Runtime compatibility, inference, downloads, database storage, and benchmarks remain
-unimplemented on this branch.
+Benchmark Lab now runs one explicitly requested Ollama text benchmark after
+execution-time local-only checks, with cancellation and separate client/server
+measurements. Verified runtime fit, downloads, SQLite storage, resource sampling,
+and restart verification remain unimplemented on this branch.
 This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 
@@ -61,7 +63,9 @@ layout assumption for a breakdown and cannot return a positive fit classificatio
 Use the [desktop CPU workflow](docs/03-development/desktop-cpu-fit.md) to select a
 local file and configure a scenario directly in Overview. Use the
 [Ollama inspection workflow](docs/03-development/ollama-inspection.md) to inspect an
-installed model in Runtimes. No inference runs.
+installed model in Runtimes. Those inspection workflows do not run inference.
+The [Quick Benchmark workflow](docs/03-development/quick-benchmark.md) sends one
+fixed inference request only after Check and Run in Benchmark Lab.
 
 ```sh
 cargo fmt --all --check

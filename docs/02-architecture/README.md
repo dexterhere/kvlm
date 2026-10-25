@@ -56,6 +56,13 @@ events; UI generations reject stale replies. `/api/show` and fresh `/api/ps` req
 run concurrently on Tokio. Their partial failures remain separate. Declared metadata
 is not converted into loaded settings or a fit classification; see
 [decision 0008](../05-decisions/0008-ollama-model-inspection.md).
+Quick Benchmark runs one separately tracked Tokio task alongside other commands.
+The bridge rejects duplicate runs and aborts its task set when the UI closes.
+Out-of-band watch cancellation drops the HTTP future; no external process is signaled.
+`workstation-runtimes` owns execution-time local-only checks, bounded NDJSON parsing,
+and client arrival timestamps; `workstation-bench` owns the fixed workload, outcome,
+overall deadline, and server-derived decode rate. See
+[decision 0009](../05-decisions/0009-quick-benchmark.md). No output text or result is persisted.
 The core calculator is pure: callers supply supported model/runtime metadata and
 available-memory readings; it performs no probing, network, database, or GTK work.
 
