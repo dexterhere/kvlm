@@ -3,6 +3,7 @@
 
 use crate::{
     runner::{self, BenchmarkOutcome},
+    sampler,
     workloads::{QUICK_WORKLOAD_ID, quick_request},
 };
 use sha2::{Digest, Sha256};
@@ -17,7 +18,10 @@ use workstation_core::{
         self, HistoryEntry, HistoryStore, PartialMetrics, RunCompletion, RunMetrics, RunOutcome,
         RunSnapshot, WorkloadSnapshot,
     },
-    hardware::HardwareProfile,
+    hardware::{
+        HardwareProfile,
+        resources::{MemoryProbe, ResourceSummary},
+    },
 };
 use workstation_runtimes::ollama::{GenerationProgress, InstalledModel};
 
@@ -25,6 +29,7 @@ use workstation_runtimes::ollama::{GenerationProgress, InstalledModel};
 pub struct PersistedRun {
     pub outcome: BenchmarkOutcome,
     pub saved: Result<i64, String>,
+    pub resources: Option<ResourceSummary>,
 }
 
 pub fn load_default() -> Result<Vec<HistoryEntry>, String> {
@@ -36,15 +41,25 @@ pub async fn run(model: InstalledModel, cancel: watch::Receiver<bool>) -> Persis
         Ok(path) => path,
         Err(message) => return storage_failure(message),
     };
-    persist(path, model, cancel, HardwareProfile::detect, runner::run).await
+    persist(
+        path,
+        model,
+        cancel,
+        HardwareProfile::detect,
+        |model, cancel, hardware| async move {
+            let mut probe = MemoryProbe::new(&hardware);
+            sampler::measure(runner::run(model, cancel), move || probe.sample()).await
+        },
+    )
+    .await
 }
 
-async fn persist<B: Future<Output = BenchmarkOutcome>>(
+async fn persist<B: Future<Output = (BenchmarkOutcome, ResourceSummary)>>(
     path: PathBuf,
     model: InstalledModel,
     cancel: watch::Receiver<bool>,
     probe: impl FnOnce() -> HardwareProfile + Send + 'static,
-    run: impl FnOnce(InstalledModel, watch::Receiver<bool>) -> B,
+    run: impl FnOnce(InstalledModel, watch::Receiver<bool>, HardwareProfile) -> B,
 ) -> PersistedRun {
     let request = quick_request();
     let snapshot_model = model.clone();
@@ -56,7 +71,7 @@ async fn persist<B: Future<Output = BenchmarkOutcome>>(
             model_name: snapshot_model.name,
             model_digest: snapshot_model.digest,
             model_size_bytes: snapshot_model.size,
-            hardware: Some(hardware),
+            hardware: Some(hardware.clone()),
             hardware_notice: None,
             runtime_endpoint: "http://127.0.0.1:11434".into(),
             workload: WorkloadSnapshot {
@@ -69,11 +84,12 @@ async fn persist<B: Future<Output = BenchmarkOutcome>>(
                 think: false,
             },
         };
-        HistoryStore::open(&start_path)?.start(&snapshot)
+        let id = HistoryStore::open(&start_path)?.start(&snapshot)?;
+        Ok((id, hardware))
     })
     .await;
-    let id = match start {
-        Ok(Ok(id)) => id,
+    let (id, hardware) = match start {
+        Ok(Ok(started)) => started,
         Ok(Err(message)) => return storage_failure(message),
         Err(_) => {
             return storage_failure(
@@ -81,13 +97,14 @@ async fn persist<B: Future<Output = BenchmarkOutcome>>(
             );
         }
     };
-    let outcome = run(model, cancel).await;
-    let completion = match completion(&outcome) {
+    let (outcome, resources) = run(model, cancel, hardware).await;
+    let completion = match completion(&outcome, resources.clone()) {
         Ok(completion) => completion,
         Err(message) => {
             return PersistedRun {
                 outcome,
                 saved: Err(message),
+                resources: Some(resources),
             };
         }
     };
@@ -99,7 +116,11 @@ async fn persist<B: Future<Output = BenchmarkOutcome>>(
     .unwrap_or_else(|_| {
         Err("History save worker failed. The current result remains available.".into())
     });
-    PersistedRun { outcome, saved }
+    PersistedRun {
+        outcome,
+        saved,
+        resources: Some(resources),
+    }
 }
 
 fn storage_failure(message: String) -> PersistedRun {
@@ -109,6 +130,7 @@ fn storage_failure(message: String) -> PersistedRun {
             partial: GenerationProgress::default(),
         },
         saved: Err(message),
+        resources: None,
     }
 }
 fn now() -> Result<u64, String> {
@@ -128,7 +150,10 @@ fn partial(progress: &GenerationProgress) -> Result<PartialMetrics, String> {
         response_chunks: progress.response_chunks,
     })
 }
-fn completion(outcome: &BenchmarkOutcome) -> Result<RunCompletion, String> {
+fn completion(
+    outcome: &BenchmarkOutcome,
+    resources: ResourceSummary,
+) -> Result<RunCompletion, String> {
     let mut runtime_version = None;
     let mut model_digest = None;
     let outcome = match outcome {
@@ -161,6 +186,7 @@ fn completion(outcome: &BenchmarkOutcome) -> Result<RunCompletion, String> {
         runtime_version,
         model_digest,
         outcome,
+        resources: Some(resources),
     })
 }
 
@@ -218,7 +244,7 @@ mod tests {
             model(),
             cancel,
             hardware,
-            move |_, _| async move {
+            move |_, _, _| async move {
                 let rows = tokio::task::spawn_blocking(move || {
                     HistoryStore::open(&check_path).unwrap().recent().unwrap()
                 })
@@ -232,15 +258,27 @@ mod tests {
                     rows[0].snapshot.model_digest.as_deref(),
                     Some("fixture-digest")
                 );
-                BenchmarkOutcome::TimedOut(GenerationProgress {
-                    first_output_after: Some(Duration::from_millis(3)),
-                    response_chunks: 7,
-                })
+                (
+                    BenchmarkOutcome::TimedOut(GenerationProgress {
+                        first_output_after: Some(Duration::from_millis(3)),
+                        response_chunks: 7,
+                    }),
+                    ResourceSummary {
+                        samples: 3,
+                        peak_system_ram_nonavailable_bytes: Some(42),
+                        ..ResourceSummary::default()
+                    },
+                )
             },
         )
         .await;
         assert!(result.saved.is_ok());
+        assert_eq!(result.resources.as_ref().unwrap().samples, 3);
         let rows = HistoryStore::open(&path).unwrap().recent().unwrap();
+        assert_eq!(
+            rows[0].completion.as_ref().unwrap().resources,
+            result.resources
+        );
         assert!(matches!(
             rows[0].completion.as_ref().unwrap().outcome,
             RunOutcome::TimedOut(PartialMetrics {
@@ -257,7 +295,7 @@ mod tests {
             model(),
             cancel,
             hardware,
-            |_, _| async { panic!("inference must not start") },
+            |_, _, _| async { panic!("inference must not start") },
         )
         .await;
         assert!(result.saved.is_err());
@@ -271,7 +309,7 @@ mod tests {
         let path = directory.database();
         let sabotage = path.clone();
         let (_cancel, cancel) = watch::channel(false);
-        let result = persist(path, model(), cancel, hardware, move |_, _| async move {
+        let result = persist(path, model(), cancel, hardware, move |_, _, _| async move {
             tokio::task::spawn_blocking(move || {
                 let store = HistoryStore::open(&sabotage).unwrap();
                 let id = store.recent().unwrap()[0].id;
@@ -280,6 +318,7 @@ mod tests {
                         id,
                         &RunCompletion {
                             finished_at_unix_ms: 1,
+                            resources: None,
                             runtime_version: None,
                             model_digest: None,
                             outcome: RunOutcome::Cancelled(PartialMetrics {
@@ -292,13 +331,16 @@ mod tests {
             })
             .await
             .unwrap();
-            BenchmarkOutcome::Failed {
-                message: "original stream failure".into(),
-                partial: GenerationProgress {
-                    first_output_after: None,
-                    response_chunks: 9,
+            (
+                BenchmarkOutcome::Failed {
+                    message: "original stream failure".into(),
+                    partial: GenerationProgress {
+                        first_output_after: None,
+                        response_chunks: 9,
+                    },
                 },
-            }
+                ResourceSummary::default(),
+            )
         })
         .await;
         assert!(result.saved.is_err());
@@ -317,7 +359,7 @@ mod tests {
             model(),
             cancel,
             hardware,
-            move |_, _| async move {
+            move |_, _, _| async move {
                 started.send(()).unwrap();
                 std::future::pending().await
             },
