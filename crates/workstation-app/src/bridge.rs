@@ -4,7 +4,11 @@
 use crate::fit_workflow::{FitReport, FitRequest, estimate};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use workstation_bench::runner::{self, BenchmarkOutcome};
+use workstation_bench::{
+    history::{self, PersistedRun},
+    runner::BenchmarkOutcome,
+};
+use workstation_core::db::HistoryEntry;
 use workstation_core::hardware::HardwareProfile;
 use workstation_runtimes::ollama::{
     Discovery, GenerationProgress, InstalledModel, ModelInspection, OllamaAdapter,
@@ -12,6 +16,9 @@ use workstation_runtimes::ollama::{
 
 #[derive(Debug)]
 pub enum CoreCommand {
+    LoadBenchmarkHistory {
+        id: u64,
+    },
     DetectHardware,
     DiscoverOllama,
     InspectOllama {
@@ -28,6 +35,14 @@ pub enum CoreCommand {
 
 #[derive(Debug)]
 pub enum UiEvent {
+    BenchmarkHistoryLoaded {
+        id: u64,
+        result: Result<Vec<HistoryEntry>, String>,
+    },
+    BenchmarkHistorySaved {
+        benchmark_id: u64,
+        result: Result<i64, String>,
+    },
     BenchmarkFinished {
         id: u64,
         outcome: BenchmarkOutcome,
@@ -85,7 +100,15 @@ where
     D: std::future::Future<Output = Result<Discovery, String>> + Send,
     I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
 {
-    start_with_all_workers(runtime, probe, fit, discover, inspect, runner::run)
+    start_with_all_workers(
+        runtime,
+        probe,
+        fit,
+        discover,
+        inspect,
+        history::run,
+        history::load_default,
+    )
 }
 
 fn start_with_all_workers<D, I, B>(
@@ -95,16 +118,18 @@ fn start_with_all_workers<D, I, B>(
     discover: impl Fn() -> D + Send + 'static,
     inspect: impl Fn(String) -> I + Send + 'static,
     run_benchmark: impl Fn(InstalledModel, tokio::sync::watch::Receiver<bool>) -> B + Send + 'static,
+    load_history: impl Fn() -> Result<Vec<HistoryEntry>, String> + Send + Sync + 'static,
 ) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>)
 where
     D: std::future::Future<Output = Result<Discovery, String>> + Send,
     I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
-    B: std::future::Future<Output = BenchmarkOutcome> + Send + 'static,
+    B: std::future::Future<Output = PersistedRun> + Send + 'static,
 {
     let (commands, mut command_rx) = mpsc::channel(1);
     let (events, event_rx) = async_channel::bounded(1);
     let probe = Arc::new(probe);
     let fit = Arc::new(fit);
+    let load_history = Arc::new(load_history);
     runtime.spawn(async move {
         let mut pending = None;
         let mut benchmark_jobs = tokio::task::JoinSet::new();
@@ -114,16 +139,25 @@ where
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
                 _ = events.closed() => break,
                 result = benchmark_jobs.join_next(), if !benchmark_jobs.is_empty() => {
-                    let outcome = match result {
-                        Some(Ok(outcome)) => outcome,
-                        _ => BenchmarkOutcome::Failed { message: "Benchmark worker failed. Try again.".into(), partial: GenerationProgress::default() },
+                    let PersistedRun { outcome, saved } = match result {
+                        Some(Ok(result)) => result,
+                        _ => PersistedRun { outcome: BenchmarkOutcome::Failed { message: "Benchmark worker failed. Try again.".into(), partial: GenerationProgress::default() }, saved: Err("Benchmark worker stopped; reload history to inspect unfinished runs.".into()) },
                     };
                     if events.send(UiEvent::BenchmarkFinished { id: benchmark_id, outcome }).await.is_err() { break; }
+                    if events.send(UiEvent::BenchmarkHistorySaved { benchmark_id, result: saved }).await.is_err() { break; }
                     continue;
                 }
                 command = command_rx.recv() => match command { Some(command) => command, None => break },
             }};
             match command {
+                CoreCommand::LoadBenchmarkHistory { id } => {
+                    let load = Arc::clone(&load_history);
+                    let result = tokio::select! {
+                        _ = events.closed() => break,
+                        result = tokio::task::spawn_blocking(move || load()) => result,
+                    }.unwrap_or_else(|_| Err("History worker failed. Reload to retry.".into()));
+                    if events.send(UiEvent::BenchmarkHistoryLoaded { id, result }).await.is_err() { break; }
+                }
                 CoreCommand::RunQuickBenchmark { id, model, cancel } => {
                     if benchmark_jobs.is_empty() {
                         benchmark_id = id;
@@ -556,7 +590,16 @@ mod tests {
             |_| Err("unused fit".into()),
             || async { Err("fixture discovery failure".into()) },
             |_| async { Err("unused inspection".into()) },
-            run,
+            move |model, cancel| {
+                let future = run(model, cancel);
+                async move {
+                    PersistedRun {
+                        outcome: future.await,
+                        saved: Ok(1),
+                    }
+                }
+            },
+            || Ok(vec![]),
         )
     }
 
@@ -607,6 +650,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn history_is_loaded_by_request_and_result_precedes_save_feedback() {
+        let (commands, events) = with_benchmark(|_, _| async {
+            BenchmarkOutcome::Cancelled(GenerationProgress::default())
+        });
+        commands
+            .send(CoreCommand::LoadBenchmarkHistory { id: 10 })
+            .await
+            .unwrap();
+        assert!(
+            matches!(receive(&events).await, UiEvent::BenchmarkHistoryLoaded { id: 10, result: Ok(rows) } if rows.is_empty())
+        );
+        let (_cancel, cancel) = tokio::sync::watch::channel(false);
+        commands
+            .send(CoreCommand::RunQuickBenchmark {
+                id: 11,
+                model: benchmark_model(),
+                cancel,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::BenchmarkFinished { id: 11, .. }
+        ));
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::BenchmarkHistorySaved {
+                benchmark_id: 11,
+                result: Ok(1)
+            }
+        ));
+    }
+
+    #[tokio::test]
     async fn benchmark_worker_panics_become_retryable_failures() {
         let (commands, events) = with_benchmark(|_, _| async { panic!("fixture benchmark panic") });
         for id in [81, 82] {
@@ -620,6 +697,9 @@ mod tests {
                 .unwrap();
             assert!(
                 matches!(receive(&events).await, UiEvent::BenchmarkFinished { id: reply_id, outcome: BenchmarkOutcome::Failed { .. } } if reply_id == id)
+            );
+            assert!(
+                matches!(receive(&events).await, UiEvent::BenchmarkHistorySaved { benchmark_id, result: Err(_) } if benchmark_id == id)
             );
         }
     }
