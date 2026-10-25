@@ -2,14 +2,17 @@
 
 use std::{
     fs,
+    os::unix::fs::{PermissionsExt, symlink},
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use rusqlite::{Connection, TransactionBehavior};
 use workstation_core::db::{
     HistoryStore, PartialMetrics, RunCompletion, RunMetrics, RunOutcome, RunSnapshot,
     WorkloadSnapshot,
+    schema::{APPLICATION_ID, VERSION},
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -173,7 +176,167 @@ fn incompatible_or_corrupt_existing_database_is_preserved() {
     let path = TempDb::new();
     fs::create_dir_all(path.0.parent().unwrap()).unwrap();
     fs::write(&path.0, b"not sqlite").unwrap();
+    fs::set_permissions(&path.0, fs::Permissions::from_mode(0o600)).unwrap();
     let before = fs::read(&path.0).unwrap();
     assert!(HistoryStore::open(&path.0).is_err());
     assert_eq!(fs::read(&path.0).unwrap(), before);
+}
+
+#[test]
+fn unknown_identity_version_and_unversioned_data_are_rejected_without_changes() {
+    for (application_id, version) in [(1, VERSION), (APPLICATION_ID, VERSION + 1), (0, 0)] {
+        let path = TempDb::new();
+        fs::create_dir_all(path.0.parent().unwrap()).unwrap();
+        let connection = Connection::open(&path.0).unwrap();
+        connection
+            .execute_batch("PRAGMA journal_mode=DELETE; CREATE TABLE marker(value TEXT);")
+            .unwrap();
+        connection
+            .execute("INSERT INTO marker VALUES ('keep me')", [])
+            .unwrap();
+        connection
+            .pragma_update(None, "application_id", application_id)
+            .unwrap();
+        connection
+            .pragma_update(None, "user_version", version)
+            .unwrap();
+        drop(connection);
+        fs::set_permissions(&path.0, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(HistoryStore::open(&path.0).is_err());
+
+        let connection = Connection::open(&path.0).unwrap();
+        let journal: String = connection
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        let value: String = connection
+            .query_row("SELECT value FROM marker", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal, "delete");
+        assert_eq!(value, "keep me");
+    }
+}
+
+#[test]
+fn known_schema_with_missing_columns_is_rejected() {
+    let path = TempDb::new();
+    fs::create_dir_all(path.0.parent().unwrap()).unwrap();
+    let connection = Connection::open(&path.0).unwrap();
+    connection
+        .execute("CREATE TABLE benchmark_runs(id INTEGER PRIMARY KEY)", [])
+        .unwrap();
+    connection
+        .pragma_update(None, "application_id", APPLICATION_ID)
+        .unwrap();
+    connection
+        .pragma_update(None, "user_version", VERSION)
+        .unwrap();
+    drop(connection);
+    fs::set_permissions(&path.0, fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert!(HistoryStore::open(&path.0).is_err());
+}
+
+#[test]
+fn writer_lock_times_out_quickly_and_open_succeeds_after_release() {
+    let path = TempDb::new();
+    drop(HistoryStore::open(&path.0).unwrap());
+    let mut connection = Connection::open(&path.0).unwrap();
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+
+    let started = Instant::now();
+    assert!(HistoryStore::open(&path.0).is_err());
+    assert!(started.elapsed() < Duration::from_secs(3));
+
+    drop(transaction);
+    drop(connection);
+    let store = HistoryStore::open(&path.0).unwrap();
+    store.start(&snapshot("after lock")).unwrap();
+}
+
+#[test]
+fn invalid_snapshot_json_errors_without_removing_rows() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    let invalid = store.start(&snapshot("invalid")).unwrap();
+    store.start(&snapshot("valid")).unwrap();
+    drop(store);
+    let connection = Connection::open(&path.0).unwrap();
+    connection
+        .execute(
+            "UPDATE benchmark_runs SET snapshot_json='{' WHERE id=?1",
+            [invalid],
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = HistoryStore::open(&path.0).unwrap();
+    assert!(store.recent().is_err());
+    drop(store);
+    let connection = Connection::open(&path.0).unwrap();
+    let count: i64 = connection
+        .query_row("SELECT count(*) FROM benchmark_runs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn storage_permissions_are_private_and_leaf_symlinks_are_rejected() {
+    let path = TempDb::new();
+    drop(HistoryStore::open(&path.0).unwrap());
+    assert_eq!(
+        fs::metadata(path.0.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&path.0).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let before = fs::read(&path.0).unwrap();
+    fs::set_permissions(&path.0, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(HistoryStore::open(&path.0).is_err());
+    assert_eq!(fs::read(&path.0).unwrap(), before);
+    assert_eq!(
+        fs::metadata(&path.0).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    fs::set_permissions(&path.0, fs::Permissions::from_mode(0o600)).unwrap();
+    drop(HistoryStore::open(&path.0).unwrap());
+
+    let parent = path.0.parent().unwrap();
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o751)).unwrap();
+    drop(HistoryStore::open(&parent.join("second.db")).unwrap());
+    assert_eq!(
+        fs::metadata(parent).unwrap().permissions().mode() & 0o777,
+        0o751
+    );
+
+    let target = parent.join("target.db");
+    let link = parent.join("link.db");
+    fs::write(&target, b"unchanged").unwrap();
+    symlink(&target, &link).unwrap();
+    assert!(HistoryStore::open(&link).is_err());
+    assert_eq!(fs::read(target).unwrap(), b"unchanged");
+}
+
+#[test]
+fn oversized_records_and_shared_writable_directories_are_rejected() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    assert!(store.start(&snapshot(&"x".repeat(262_144))).is_err());
+    assert!(store.recent().unwrap().is_empty());
+    drop(store);
+    let parent = path.0.parent().unwrap();
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(HistoryStore::open(&path.0).is_err());
+    assert_eq!(
+        fs::metadata(parent).unwrap().permissions().mode() & 0o777,
+        0o777
+    );
 }

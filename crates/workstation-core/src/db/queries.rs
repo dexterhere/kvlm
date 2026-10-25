@@ -5,7 +5,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     fs::{self, OpenOptions},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::Path,
 };
 
@@ -29,11 +29,10 @@ impl HistoryStore {
             .map_err(
                 |_| "Cannot create private history directory. Check data directory permissions.",
             )?;
-        if !fs::symlink_metadata(parent)
-            .map_err(|_| "Cannot inspect history directory.")?
-            .is_dir()
-        {
-            return Err("History directory must be a real directory, not a symlink.".into());
+        let directory =
+            fs::symlink_metadata(parent).map_err(|_| "Cannot inspect history directory.")?;
+        if !directory.is_dir() || directory.mode() & 0o022 != 0 {
+            return Err("History directory must be a real directory, not a symlink, and not writable by other users.".into());
         }
         match OpenOptions::new()
             .write(true)
@@ -54,6 +53,18 @@ impl HistoryStore {
             .is_file()
         {
             return Err("History database must be a regular file, not a symlink.".into());
+        }
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut name = path.as_os_str().to_os_string();
+            name.push(suffix);
+            match fs::symlink_metadata(Path::new(&name)) {
+                Ok(metadata) if !metadata.is_file() || metadata.mode() & 0o077 != 0 => {
+                    return Err("History files must be regular files accessible only to their owner. Restrict restored database and companion file permissions to 0600 before retrying.".into());
+                }
+                Ok(_) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(_) => return Err("Cannot inspect history file permissions.".into()),
+            }
         }
         let mut connection = Connection::open_with_flags(
             path,
