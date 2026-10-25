@@ -42,7 +42,7 @@ Request generations discard replies after file, scenario, or hardware changes.
 The application creates one multi-thread Tokio runtime. GTK widgets remain on the
 GLib main thread. UI commands use Tokio mpsc, and worker events return through
 `async_channel` and `glib::MainContext::spawn_local`. No GTK objects cross into workers.
-Blocking SQLite, NVML, and sysfs calls must use `spawn_blocking` when implemented.
+Blocking SQLite, NVML, and sysfs calls use `spawn_blocking`.
 Closing the application cancels asynchronous HTTP work and releases channels.
 Already-running blocking probes cannot be forcibly cancelled; shutdown uses a bounded
 runtime wait.
@@ -62,7 +62,11 @@ Out-of-band watch cancellation drops the HTTP future; no external process is sig
 `workstation-runtimes` owns execution-time local-only checks, bounded NDJSON parsing,
 and client arrival timestamps; `workstation-bench` owns the fixed workload, outcome,
 overall deadline, and server-derived decode rate. See
-[decision 0009](../05-decisions/0009-quick-benchmark.md). No output text or result is persisted.
+[decision 0009](../05-decisions/0009-quick-benchmark.md).
+`workstation-core::db` owns versioned SQLite history; `workstation-bench::history`
+saves a requested snapshot before inference and finalizes the outcome afterwards.
+The bridge loads history off-thread and sends correlated UI events. No prompt or
+output text is persisted. See [decision 0010](../05-decisions/0010-benchmark-history.md).
 The core calculator is pure: callers supply supported model/runtime metadata and
 available-memory readings; it performs no probing, network, database, or GTK work.
 
@@ -86,7 +90,7 @@ Attached processes permit only supported, authorized API operations. Stop/restar
 and process signals are reserved for managed processes whose ownership is known.
 All operations are rootless and managed endpoints default to `127.0.0.1`.
 
-Future application data belongs under `$XDG_DATA_HOME/local-ai-workstation/`
+Application history belongs under `$XDG_DATA_HOME/local-ai-workstation/`
 (default `~/.local/share/local-ai-workstation/`), not in the checkout. SQLite uses
 WAL and foreign keys; schema changes need versioned migrations. Credentials belong
 in Secret Service. Native distribution is the first target. A Flatpak host bridge

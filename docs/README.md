@@ -14,6 +14,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Hardware validation](03-development/hardware-validation.md) | Hardware feature checks and live reference evidence |
 | 03 | [Ollama discovery validation](03-development/ollama-validation.md) | Read-only attached-runtime discovery and validation limits |
 | 03 | [Ollama model inspection](03-development/ollama-inspection.md) | Selection, declarations, fresh loaded readings, and validation limits |
+| 03 | [Benchmark history](03-development/benchmark-history.md) | SQLite snapshots, outcomes, restart recovery, and storage limits |
 | 03 | [Quick Benchmark](03-development/quick-benchmark.md) | Local-only guard, one explicit streaming request, timings, cancellation, and limits |
 | 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
 | 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection example, supported subset, and limits |
@@ -30,6 +31,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 05 | [GGUF fit integration decision](05-decisions/0006-gguf-fit-integration.md) | Metadata gates and scenario-only estimates |
 | 05 | [Desktop CPU fit decision](05-decisions/0007-desktop-cpu-fit.md) | GTK workflow, fresh readings, and stale-reply handling |
 | 05 | [Ollama inspection decision](05-decisions/0008-ollama-model-inspection.md) | Read-only inspection, identity association, and unknown runtime settings |
+| 05 | [Benchmark history decision](05-decisions/0010-benchmark-history.md) | Versioned local SQLite storage and immutable run records |
 | 05 | [Quick Benchmark decision](05-decisions/0009-quick-benchmark.md) | Digest-pinned local execution and honest single-request measurements |
 | 05 | [Open questions](05-decisions/open-questions.md) | Specification gaps to resolve before affected implementation |
 

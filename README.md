@@ -15,8 +15,9 @@ inspection and fresh loaded-allocation readings. Declared defaults stay separate
 from loaded settings, and routing remains unverified when evidence is missing.
 Benchmark Lab now runs one explicitly requested Ollama text benchmark after
 execution-time local-only checks, with cancellation and separate client/server
-measurements. Verified runtime fit, downloads, SQLite storage, resource sampling,
-and restart verification remain unimplemented on this branch.
+measurements. SQLite history now preserves run snapshots and outcomes across
+restarts. Verified runtime fit, downloads, resource sampling, and empirical badge
+verification remain unimplemented on this branch.
 This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 
@@ -66,6 +67,8 @@ local file and configure a scenario directly in Overview. Use the
 installed model in Runtimes. Those inspection workflows do not run inference.
 The [Quick Benchmark workflow](docs/03-development/quick-benchmark.md) sends one
 fixed inference request only after Check and Run in Benchmark Lab.
+The [benchmark history guide](docs/03-development/benchmark-history.md) explains
+durable snapshots, storage errors, and unfinished runs.
 
 ```sh
 cargo fmt --all --check

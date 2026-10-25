@@ -13,6 +13,7 @@ routine implementation details in code or the relevant development document.
 - [0007: Desktop CPU fit](0007-desktop-cpu-fit.md) — asynchronous Overview workflow.
 - [0008: Ollama model inspection](0008-ollama-model-inspection.md) — declarations and loaded observations.
 - [0009: Quick Benchmark](0009-quick-benchmark.md) — local-only execution, streaming, and outcomes.
+- [0010: Benchmark history](0010-benchmark-history.md) — immutable SQLite snapshots and restart recovery.
 - [Open questions](open-questions.md) — unresolved specification details, not decisions.
 
 When a decision changes the master specification, explicitly update the relevant
