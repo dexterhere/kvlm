@@ -21,6 +21,7 @@ enum Reply {
     Error(u16),
     Stream(Vec<Vec<u8>>),
     Slow,
+    SlowBody,
 }
 
 #[derive(Clone, Debug)]
@@ -83,7 +84,7 @@ impl Server {
                 });
                 let reply = match line.as_str() {
                     "GET /api/status HTTP/1.1" => status.clone(),
-                    "GET /api/version HTTP/1.1" => Reply::Json(r#"{"version":"0.12.0"}"#),
+                    "GET /api/version HTTP/1.1" => Reply::Json(r#"{"version":"fixture-only"}"#),
                     "GET /api/tags HTTP/1.1" => tags.clone(),
                     "POST /api/show HTTP/1.1" => show.clone(),
                     "POST /api/generate HTTP/1.1" => generate.clone(),
@@ -155,6 +156,12 @@ impl Reply {
                 }
                 Ok(())
             }
+            Self::SlowBody => {
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n")?;
+                stream.flush()?;
+                thread::sleep(Duration::from_millis(100));
+                Ok(())
+            }
             Self::Slow => {
                 thread::sleep(Duration::from_millis(100));
                 Ok(())
@@ -223,7 +230,7 @@ async fn generates_only_after_local_guards_and_pins_wire_identity() {
         .await
         .unwrap();
     assert_eq!(summary.model_digest, DIGEST);
-    assert_eq!(summary.runtime_version, "0.12.0");
+    assert_eq!(summary.runtime_version, "fixture-only");
     assert_eq!(summary.response_chunks, 2);
     assert_eq!(summary.eval_count, Some(2));
     assert_eq!(summary.done_reason, "stop");
@@ -494,5 +501,66 @@ fn parser_rejects_unsafe_records_and_enforces_bounds() {
             .feed(b"xx", Duration::ZERO, &progress)
             .unwrap_err()
             .contains("64 KiB")
+    );
+}
+
+#[tokio::test]
+async fn wrong_content_type_and_idle_body_do_not_complete_a_benchmark() {
+    for (reply, expected) in [
+        (Reply::Json("{}"), "expected an NDJSON"),
+        (Reply::SlowBody, "idle timeout"),
+    ] {
+        let server = Server::new(
+            Reply::Json(r#"{"cloud":{"disabled":true}}"#),
+            tags(),
+            Reply::Json(r#"{"capabilities":["completion"]}"#),
+            reply,
+        );
+        let (progress, _) = watch::channel(GenerationProgress::default());
+        let error = server
+            .adapter()
+            .generate_local_with_timeouts(
+                &selected(),
+                request(),
+                progress,
+                Duration::from_secs(1),
+                Duration::from_millis(30),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn thinking_and_invalid_metric_types_do_not_become_response_timings() {
+    let reference = format!("{DIGEST}:local");
+    let (progress, readings) = watch::channel(GenerationProgress::default());
+    let mut parser = StreamParser::new(&reference);
+    let thinking = serde_json::json!({"model":reference,"done":false,"thinking":"hidden reasoning"})
+        .to_string() + "\n";
+    parser
+        .feed(thinking.as_bytes(), Duration::from_millis(1), &progress)
+        .unwrap();
+    assert!(readings.borrow().first_output_after.is_none());
+    let text =
+        serde_json::json!({"model":reference,"done":true,"response":"answer","done_reason":"stop"})
+            .to_string()
+            + "\n";
+    parser
+        .feed(text.as_bytes(), Duration::from_millis(2), &progress)
+        .unwrap();
+    assert_eq!(
+        readings.borrow().first_output_after,
+        Some(Duration::from_millis(2))
+    );
+    assert_eq!(readings.borrow().response_chunks, 1);
+    let mut parser = StreamParser::new(&reference);
+    let invalid = serde_json::json!({"model":reference,"done":true,"response":"answer","done_reason":"stop","eval_duration":"1000"}).to_string() + "\n";
+    assert!(
+        parser
+            .feed(invalid.as_bytes(), Duration::ZERO, &progress)
+            .unwrap_err()
+            .contains("invalid stream record")
     );
 }
