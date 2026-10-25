@@ -10,7 +10,8 @@ use crate::views;
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
     let (commands, events) = bridge::start(runtime);
     let overview = views::overview::Overview::new(commands.clone());
-    let runtimes = views::runtimes::Runtimes::new(commands);
+    let runtimes = views::runtimes::Runtimes::new(commands.clone());
+    let benchmarks = views::bench_lab::Benchmarks::new(commands);
     let stack = adw::ViewStack::new();
     stack.set_vexpand(true);
     stack.add_titled_with_icon(
@@ -32,7 +33,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         "network-server-symbolic",
     );
     stack.add_titled_with_icon(
-        &views::bench_lab::build(),
+        &benchmarks.widget,
         Some("benchmarks"),
         "Benchmarks",
         "applications-science-symbolic",
@@ -143,6 +144,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
             };
             overview.receive(&event);
             runtimes.receive(&event);
+            benchmarks.receive(&event);
             match event {
                 UiEvent::HardwareDetected(_) => hardware_status = "Hardware snapshot ready",
                 UiEvent::HardwareFailed(_) => hardware_status = "Hardware detection failed",
@@ -156,7 +158,9 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
                 UiEvent::OllamaFailed(_) => {
                     runtime_status = "Ollama unavailable · See Runtimes to retry"
                 }
-                UiEvent::FitFinished { .. } | UiEvent::OllamaInspected { .. } => continue,
+                UiEvent::FitFinished { .. }
+                | UiEvent::OllamaInspected { .. }
+                | UiEvent::BenchmarkFinished { .. } => continue,
             }
             status.set_label(&format!("{hardware_status} · {runtime_status}"));
         }

@@ -4,19 +4,34 @@
 use crate::fit_workflow::{FitReport, FitRequest, estimate};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use workstation_bench::runner::{self, BenchmarkOutcome};
 use workstation_core::hardware::HardwareProfile;
-use workstation_runtimes::ollama::{Discovery, ModelInspection, OllamaAdapter};
+use workstation_runtimes::ollama::{
+    Discovery, GenerationProgress, InstalledModel, ModelInspection, OllamaAdapter,
+};
 
 #[derive(Debug)]
 pub enum CoreCommand {
     DetectHardware,
     DiscoverOllama,
-    InspectOllama { id: u64, model: String },
+    InspectOllama {
+        id: u64,
+        model: String,
+    },
     EstimateFit(FitRequest),
+    RunQuickBenchmark {
+        id: u64,
+        model: InstalledModel,
+        cancel: tokio::sync::watch::Receiver<bool>,
+    },
 }
 
 #[derive(Debug)]
 pub enum UiEvent {
+    BenchmarkFinished {
+        id: u64,
+        outcome: BenchmarkOutcome,
+    },
     OllamaDiscovered(Box<Discovery>),
     OllamaFailed(String),
     OllamaInspected {
@@ -70,19 +85,54 @@ where
     D: std::future::Future<Output = Result<Discovery, String>> + Send,
     I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
 {
+    start_with_all_workers(runtime, probe, fit, discover, inspect, runner::run)
+}
+
+fn start_with_all_workers<D, I, B>(
+    runtime: &tokio::runtime::Handle,
+    probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
+    fit: impl Fn(FitRequest) -> Result<FitReport, String> + Send + Sync + 'static,
+    discover: impl Fn() -> D + Send + 'static,
+    inspect: impl Fn(String) -> I + Send + 'static,
+    run_benchmark: impl Fn(InstalledModel, tokio::sync::watch::Receiver<bool>) -> B + Send + 'static,
+) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>)
+where
+    D: std::future::Future<Output = Result<Discovery, String>> + Send,
+    I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
+    B: std::future::Future<Output = BenchmarkOutcome> + Send + 'static,
+{
     let (commands, mut command_rx) = mpsc::channel(1);
     let (events, event_rx) = async_channel::bounded(1);
     let probe = Arc::new(probe);
     let fit = Arc::new(fit);
     runtime.spawn(async move {
         let mut pending = None;
+        let mut benchmark_jobs = tokio::task::JoinSet::new();
+        let mut benchmark_id = 0;
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
                 _ = events.closed() => break,
+                result = benchmark_jobs.join_next(), if !benchmark_jobs.is_empty() => {
+                    let outcome = match result {
+                        Some(Ok(outcome)) => outcome,
+                        _ => BenchmarkOutcome::Failed { message: "Benchmark worker failed. Try again.".into(), partial: GenerationProgress::default() },
+                    };
+                    if events.send(UiEvent::BenchmarkFinished { id: benchmark_id, outcome }).await.is_err() { break; }
+                    continue;
+                }
                 command = command_rx.recv() => match command { Some(command) => command, None => break },
             }};
             match command {
+                CoreCommand::RunQuickBenchmark { id, model, cancel } => {
+                    if benchmark_jobs.is_empty() {
+                        benchmark_id = id;
+                        benchmark_jobs.spawn(run_benchmark(model, cancel));
+                    } else {
+                        let outcome = BenchmarkOutcome::Failed { message: "Another quick benchmark is still active. Retry after it finishes.".into(), partial: GenerationProgress::default() };
+                        if events.send(UiEvent::BenchmarkFinished { id, outcome }).await.is_err() { break; }
+                    }
+                }
                 CoreCommand::DetectHardware => {
                     let probe = Arc::clone(&probe);
                     let result = tokio::select! {
@@ -482,5 +532,138 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+    fn benchmark_model() -> InstalledModel {
+        InstalledModel {
+            name: "fixture".into(),
+            digest: None,
+            size: None,
+            details: None,
+            remote_model: None,
+            remote_host: None,
+        }
+    }
+
+    fn with_benchmark<B>(
+        run: impl Fn(InstalledModel, tokio::sync::watch::Receiver<bool>) -> B + Send + 'static,
+    ) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>)
+    where
+        B: std::future::Future<Output = BenchmarkOutcome> + Send + 'static,
+    {
+        start_with_all_workers(
+            &tokio::runtime::Handle::current(),
+            snapshot,
+            |_| Err("unused fit".into()),
+            || async { Err("fixture discovery failure".into()) },
+            |_| async { Err("unused inspection".into()) },
+            run,
+        )
+    }
+
+    #[tokio::test]
+    async fn benchmark_does_not_block_other_commands_and_duplicate_runs_are_rejected() {
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (commands, events) = with_benchmark(move |_, mut cancel| {
+            started.send(()).unwrap();
+            async move {
+                cancel.changed().await.unwrap();
+                BenchmarkOutcome::Cancelled(GenerationProgress::default())
+            }
+        });
+        let (cancel, cancellation) = tokio::sync::watch::channel(false);
+        commands
+            .try_send(CoreCommand::RunQuickBenchmark {
+                id: 71,
+                model: benchmark_model(),
+                cancel: cancellation,
+            })
+            .unwrap();
+        started_rx.recv().await.unwrap();
+        commands.try_send(CoreCommand::DiscoverOllama).unwrap();
+        assert!(matches!(receive(&events).await, UiEvent::OllamaFailed(_)));
+        let (_other, cancellation) = tokio::sync::watch::channel(false);
+        commands
+            .try_send(CoreCommand::RunQuickBenchmark {
+                id: 72,
+                model: benchmark_model(),
+                cancel: cancellation,
+            })
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::BenchmarkFinished {
+                id: 72,
+                outcome: BenchmarkOutcome::Failed { .. }
+            }
+        ));
+        cancel.send(true).unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::BenchmarkFinished {
+                id: 71,
+                outcome: BenchmarkOutcome::Cancelled(_)
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn benchmark_worker_panics_become_retryable_failures() {
+        let (commands, events) = with_benchmark(|_, _| async { panic!("fixture benchmark panic") });
+        for id in [81, 82] {
+            let (_cancel, cancellation) = tokio::sync::watch::channel(false);
+            commands
+                .try_send(CoreCommand::RunQuickBenchmark {
+                    id,
+                    model: benchmark_model(),
+                    cancel: cancellation,
+                })
+                .unwrap();
+            assert!(
+                matches!(receive(&events).await, UiEvent::BenchmarkFinished { id: reply_id, outcome: BenchmarkOutcome::Failed { .. } } if reply_id == id)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn closing_window_drops_active_benchmark_future() {
+        struct Dropped(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (dropped, mut dropped_rx) = mpsc::unbounded_channel();
+        let (commands, events) = with_benchmark(move |_, _| {
+            let started = started.clone();
+            let dropped = dropped.clone();
+            async move {
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                dropped.send(receiver).unwrap();
+                let _guard = Dropped(Some(sender));
+                started.send(()).unwrap();
+                std::future::pending().await
+            }
+        });
+        let (_cancel, cancellation) = tokio::sync::watch::channel(false);
+        commands
+            .try_send(CoreCommand::RunQuickBenchmark {
+                id: 91,
+                model: benchmark_model(),
+                cancel: cancellation,
+            })
+            .unwrap();
+        started_rx.recv().await.unwrap();
+        let dropped = dropped_rx.recv().await.unwrap();
+        events.close();
+        tokio::time::timeout(Duration::from_secs(2), dropped)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), commands.closed())
+            .await
+            .unwrap();
     }
 }
