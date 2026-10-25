@@ -401,7 +401,9 @@ are read-only. `POST /api/show` supplies model declarations, while fresh `/api/p
 supplies reported loaded context/allocation. Defaults never become loaded settings,
 missing routing data never proves local execution, and runtime digests do not verify
 an Overview file. See [decision 0008](../05-decisions/0008-ollama-model-inspection.md).
-Inference, model mutations, verified fit, and benchmark persistence remain pending.
+Quick Benchmark now permits one explicit request only after the guard in
+[decision 0009](../05-decisions/0009-quick-benchmark.md). General inference controls,
+model mutations, verified fit, and benchmark persistence remain pending.
 
 - **Ollama Adapter (`ollama.rs`):**
   - Default Endpoint: `http://127.0.0.1:11434`
@@ -462,6 +464,14 @@ Before downloading any artifact or importing a GGUF into Ollama:
 ## 7. Benchmark Lab & Diagnostic Engine (`workstation-bench`)
 
 ### 7.1 Standardized Benchmark Protocol
+**Initial implementation (2026-10-25):** Quick Benchmark is one explicitly requested,
+local-only digest-pinned text request with cancellation and typed partial outcomes.
+Client first-response-text latency includes model loading and is not token-level
+TTFT/ITL; server decode rate uses independent server counters. There is no warm-up,
+forced cold load, resource sampling, repeated pass, persistence, or verified badge.
+See [decision 0009](../05-decisions/0009-quick-benchmark.md). The target protocol below
+remains pending full integration and real-hardware acceptance.
+
 Every benchmark run executes a deterministic pipeline to prevent noisy or misleading numbers:
 1. **Pre-Flight Check:** Record baseline free VRAM, free RAM, GPU temperature, and CPU load.
 2. **Cold Load Phase (Optional toggle):** If the model is unloaded, trigger `load_model` and record `cold_load_duration_ms` until the runtime reports `Ready`.

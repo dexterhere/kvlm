@@ -41,3 +41,10 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 The ignored Ollama inspection widget-flow test drives real Refresh/Inspect controls
 with typed fixtures; see the [inspection guide](../docs/03-development/ollama-inspection.md#optional-gtk-checks).
 It checks selected-model rendering, stale-result handling, retries, and narrow layout.
+
+Quick Benchmark HTTP/parser tests live in
+`crates/workstation-runtimes/src/ollama/generation/tests.rs`. Runner tests cover
+independent metrics, partial failures, cancellation, sender loss, and deadlines;
+bridge tests cover concurrent commands, duplicate rejection, panics, and shutdown.
+The ignored GTK benchmark test uses typed fixtures and actual controls, not an
+inference service. See the [Quick Benchmark guide](../docs/03-development/quick-benchmark.md).
