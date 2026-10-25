@@ -125,6 +125,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     window.add_action(&refresh);
     app.set_accels_for_action("win.refresh", &["<Primary>r"]);
     overview.request();
+    benchmarks.request_history();
     let closing_events = events.clone();
     window.connect_close_request(move |_| {
         closing_events.close();
@@ -160,7 +161,9 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
                 }
                 UiEvent::FitFinished { .. }
                 | UiEvent::OllamaInspected { .. }
-                | UiEvent::BenchmarkFinished { .. } => continue,
+                | UiEvent::BenchmarkFinished { .. }
+                | UiEvent::BenchmarkHistorySaved { .. }
+                | UiEvent::BenchmarkHistoryLoaded { .. } => continue,
             }
             status.set_label(&format!("{hardware_status} · {runtime_status}"));
         }

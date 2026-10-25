@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::bridge::{CoreCommand, UiEvent};
+use crate::views::benchmark_history::BenchmarkHistory;
 use adw::prelude::*;
 use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 use tokio::sync::{mpsc, watch};
@@ -32,6 +33,7 @@ pub struct Benchmarks {
     cancel: gtk::Button,
     status: gtk::Label,
     results: gtk::Box,
+    history: BenchmarkHistory,
     state: Rc<RefCell<RunState>>,
     commands: mpsc::Sender<CoreCommand>,
 }
@@ -74,6 +76,7 @@ impl Benchmarks {
             .xalign(0.0)
             .wrap(true)
             .build();
+        let history = BenchmarkHistory::new(commands.clone());
         let content = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(18)
@@ -91,6 +94,7 @@ impl Benchmarks {
         content.append(&controls);
         content.append(&status);
         content.append(&results);
+        content.append(&history.widget);
         let clamp = adw::Clamp::builder()
             .maximum_size(900)
             .child(&content)
@@ -107,6 +111,7 @@ impl Benchmarks {
             cancel,
             status,
             results,
+            history,
             state: Rc::new(RefCell::new(RunState::default())),
             commands,
         };
@@ -154,6 +159,7 @@ impl Benchmarks {
     }
 
     pub fn receive(&self, event: &UiEvent) {
+        self.history.receive(event);
         match event {
             UiEvent::OllamaDiscovered(discovery) => match &discovery.installed {
                 Ok(models) => {
@@ -186,6 +192,10 @@ impl Benchmarks {
             }
             _ => {}
         }
+    }
+
+    pub fn request_history(&self) {
+        self.history.request();
     }
 
     fn inventory_failed(&self, message: &str) {
