@@ -67,6 +67,12 @@ overall deadline, and server-derived decode rate. See
 saves a requested snapshot before inference and finalizes the outcome afterwards.
 The bridge loads history off-thread and sends correlated UI events. No prompt or
 output text is persisted. See [decision 0010](../05-decisions/0010-benchmark-history.md).
+`hardware::resources` reads memory only for stable snapshot devices. The bench
+sampler schedules bounded single-flight blocking probes around runtime checks and
+generation; it retains maxima/counts and returns promptly on the runner outcome.
+Native probe cleanup also stays in blocking workers. Optional terminal JSON fields
+preserve legacy history without a structural migration. See
+[decision 0011](../05-decisions/0011-benchmark-memory-sampling.md).
 The core calculator is pure: callers supply supported model/runtime metadata and
 available-memory readings; it performs no probing, network, database, or GTK work.
 

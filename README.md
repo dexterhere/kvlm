@@ -16,8 +16,9 @@ from loaded settings, and routing remains unverified when evidence is missing.
 Benchmark Lab now runs one explicitly requested Ollama text benchmark after
 execution-time local-only checks, with cancellation and separate client/server
 measurements. SQLite history now preserves run snapshots and outcomes across
-restarts. Verified runtime fit, downloads, resource sampling, and empirical badge
-verification remain unimplemented on this branch.
+restarts. Background sampling now records observed system RAM and per-device
+VRAM/GTT peaks with explicit coverage limits. Verified runtime fit, downloads,
+process memory attribution, and empirical badge verification remain unimplemented.
 This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 
@@ -69,6 +70,8 @@ The [Quick Benchmark workflow](docs/03-development/quick-benchmark.md) sends one
 fixed inference request only after Check and Run in Benchmark Lab.
 The [benchmark history guide](docs/03-development/benchmark-history.md) explains
 durable snapshots, storage errors, and unfinished runs.
+The [memory sampling guide](docs/03-development/benchmark-memory-sampling.md) explains
+observed peaks, unknown channels, and system/device attribution limits.
 
 ```sh
 cargo fmt --all --check

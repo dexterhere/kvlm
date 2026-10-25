@@ -18,7 +18,8 @@ owns the detailed acceptance criteria. This page tracks actual status.
 - [x] Pure supplied-metadata calculator, placement policy, offline example, and tests.
 - [x] One explicit streaming Quick Benchmark with local-only checks, client/server timing, and cancellation.
 - [x] Immutable SQLite run snapshots, terminal outcomes, and bounded restart history.
-- [ ] Quick benchmark resource sampling.
+- [x] Bounded system/device RAM, VRAM, and GTT observations with persisted peaks and coverage.
+- [ ] Process attribution, GPU utilization, and real-hardware sampling calibration.
 - [ ] Persisted empirical badge after restart.
 - [ ] Full M0 unit, mocked HTTP, and real-hardware acceptance evidence.
 
@@ -27,8 +28,8 @@ M0 checklist complete until the behavior is implemented and verified.
 
 ## Next feature
 
-This dependent branch carries [PR #8](https://github.com/dexterhere/kvlm/pull/8),
-including prerequisites #1 through #7. All remain unmerged.
+This dependent branch carries [PR #9](https://github.com/dexterhere/kvlm/pull/9),
+including prerequisites #1 through #8. All remain unmerged.
 The [desktop CPU workflow](../03-development/desktop-cpu-fit.md) and
 [Ollama model inspection](../03-development/ollama-inspection.md) now coexist.
 Inspection keeps declared defaults separate from fresh loaded context and allocation;
@@ -39,9 +40,12 @@ It records client first-response latency and independent server decode metrics, 
 partial failure/cancellation outcomes and no empirical verification badge.
 The [history workflow](../03-development/benchmark-history.md) now persists immutable
 requested model/hardware/workload snapshots and all outcomes across storage reopen.
-Next: add bounded resource sampling during runs, preserving unknown readings and
-separating process/system RAM from device VRAM and shared memory. Real-model restart
-acceptance and artifact/hardware matching for empirical verification remain open. Actual K/V types,
+The [memory sampling workflow](../03-development/benchmark-memory-sampling.md) now
+records bounded system/device observations with coverage counts. It does not
+attribute memory to an inference process or certify true allocation peaks.
+Next: real-model restart/hardware acceptance and a defensible artifact/hardware
+matching contract for empirical verification; process attribution and calibration
+remain open. Actual K/V types,
 concurrency, micro-batch settings, layout evidence, and allocation calibration remain
 open. M0 is incomplete.
 

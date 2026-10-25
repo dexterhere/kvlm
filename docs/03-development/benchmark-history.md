@@ -35,8 +35,10 @@ Do not delete or replace an unreadable database to make an error disappear; keep
 it for recovery. Unknown/newer schemas are rejected without downgrade.
 
 These snapshots do not verify local GGUF identity or effective runtime settings.
-There is no Benchmark Verified badge, resource sampling, peak RAM/VRAM, retention,
-export, deletion, or repeated-run aggregation in this slice. M0 remains incomplete.
+The subsequent [memory sampling slice](benchmark-memory-sampling.md) adds optional
+observed RAM/VRAM/GTT peaks and coverage to new terminal records. Older records
+remain unchanged. There is no Benchmark Verified badge, process attribution,
+retention, export, deletion, or repeated-run aggregation. M0 remains incomplete.
 See [decision 0010](../05-decisions/0010-benchmark-history.md) for storage details.
 
 ## Validation

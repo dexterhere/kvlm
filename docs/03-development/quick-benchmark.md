@@ -44,7 +44,8 @@ now retains durable snapshots and outcomes across restarts.
 - Runtime manifest digests identify this request; they do not verify a local GGUF
   file or hardware identity. No Benchmark Verified badge or positive fit follows.
 - SQLite history stores these observations without granting empirical verification.
-  Resource sampling, peak RAM/VRAM, and real-model restart acceptance remain open.
+  [Memory sampling](benchmark-memory-sampling.md) adds observed system/device peaks.
+  Process attribution, true peak calibration, and real-model restart acceptance remain open.
 
 The execution-time guard trusts the attached loopback server's implementation and
 reported cloud-disable state. It is not a network sandbox. Every run uses a fresh

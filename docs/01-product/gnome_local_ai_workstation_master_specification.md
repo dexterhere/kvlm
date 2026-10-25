@@ -472,6 +472,14 @@ forced cold load, resource sampling, repeated pass, persistence, or verified bad
 See [decision 0009](../05-decisions/0009-quick-benchmark.md). The target protocol below
 remains pending full integration and real-hardware acceptance.
 
+**Follow-up implementation (2026-10-26):** SQLite history preserves requested snapshots
+and terminal outcomes ([0010](../05-decisions/0010-benchmark-history.md)). Bounded
+100ms-target sampling now stores observed system RAM and per-device VRAM/GTT maxima
+with coverage counts ([0011](../05-decisions/0011-benchmark-memory-sampling.md)).
+These observations are system/device-wide, not process RSS or certified true peaks.
+GPU utilization, repeated cold/warm protocols, empirical badges, and real-hardware
+acceptance remain pending. Existing records are not rewritten.
+
 Every benchmark run executes a deterministic pipeline to prevent noisy or misleading numbers:
 1. **Pre-Flight Check:** Record baseline free VRAM, free RAM, GPU temperature, and CPU load.
 2. **Cold Load Phase (Optional toggle):** If the model is unloaded, trigger `load_model` and record `cold_load_duration_ms` until the runtime reports `Ready`.
