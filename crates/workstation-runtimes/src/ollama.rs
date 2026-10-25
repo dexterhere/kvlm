@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use reqwest::{Client, redirect::Policy};
+use reqwest::{Client, RequestBuilder, redirect::Policy};
 use serde::{Deserialize, de::DeserializeOwned};
 
 pub const ENDPOINT: &str = "http://127.0.0.1:11434";
@@ -46,6 +46,7 @@ pub struct ModelDetails {
 #[derive(Clone, Debug, Deserialize)]
 pub struct RunningModel {
     pub name: String,
+    pub digest: Option<String>,
     pub size: Option<u64>,
     pub size_vram: Option<u64>,
     pub context_length: Option<u64>,
@@ -56,6 +57,49 @@ impl RunningModel {
     pub fn cpu_bytes(&self) -> Option<u64> {
         self.size?.checked_sub(self.size_vram?)
     }
+}
+
+/// Declarations returned by `/api/show`, never proof of loaded runtime settings.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ModelMetadata {
+    pub details: Option<ModelDetails>,
+    pub capabilities: Option<Vec<String>>,
+    pub parameters: Option<String>,
+    pub model_info: Option<serde_json::Map<String, serde_json::Value>>,
+    pub remote_model: Option<String>,
+    pub remote_host: Option<String>,
+}
+
+impl ModelMetadata {
+    pub fn architecture(&self) -> Option<&str> {
+        self.model_info
+            .as_ref()?
+            .get("general.architecture")?
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    /// The model's declared training context, not the context allocated by Ollama.
+    pub fn declared_context_length(&self) -> Option<u64> {
+        self.model_info
+            .as_ref()?
+            .get(&format!("{}.context_length", self.architecture()?))?
+            .as_u64()
+            .filter(|value| *value > 0)
+    }
+
+    pub fn cloud_routed(&self) -> bool {
+        [&self.remote_model, &self.remote_host]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.trim().is_empty())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ModelInspection {
+    pub metadata: Result<ModelMetadata, String>,
+    pub running: Result<Vec<RunningModel>, String>,
 }
 
 #[derive(Deserialize)]
@@ -117,9 +161,48 @@ impl OllamaAdapter {
         })
     }
 
+    /// Inspect declarations and take a fresh loaded-model snapshot without loading a model.
+    pub async fn inspect_model(&self, model: &str) -> Result<ModelInspection, String> {
+        if model.trim().is_empty() || model.len() > 1024 || model.chars().any(char::is_control) {
+            return Err("/api/show: invalid model name".into());
+        }
+        let body = serde_json::to_vec(&serde_json::json!({"model": model, "verbose": false}))
+            .map_err(|_| "/api/show: could not encode model name".to_string())?;
+        let request = self
+            .client
+            .post(self.url("/api/show"))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body);
+        let (metadata, running) = tokio::join!(
+            self.request::<ModelMetadata>("/api/show", request),
+            self.get::<Models<RunningModel>>("/api/ps"),
+        );
+        Ok(ModelInspection {
+            metadata,
+            running: running.and_then(|list| {
+                if list.models.iter().any(|model| model.name.trim().is_empty()) {
+                    Err("/api/ps: empty model name".into())
+                } else {
+                    Ok(list.models)
+                }
+            }),
+        })
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("http://127.0.0.1:{}{path}", self.port)
+    }
+
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, String> {
-        let url = format!("http://127.0.0.1:{}{path}", self.port);
-        let mut response = self.client.get(url).send().await.map_err(|error| {
+        self.request(path, self.client.get(self.url(path))).await
+    }
+
+    async fn request<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        request: RequestBuilder,
+    ) -> Result<T, String> {
+        let mut response = request.send().await.map_err(|error| {
             if error.is_timeout() {
                 format!("{path}: request timed out")
             } else if error.is_connect() {

@@ -29,13 +29,28 @@ enum Reply {
 
 struct Server {
     port: u16,
-    requests: Arc<Mutex<Vec<String>>>,
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone, Debug)]
+struct RecordedRequest {
+    line: String,
+    headers: String,
+    body: Vec<u8>,
+}
+
 impl Server {
     fn new(version: Reply, tags: Reply, ps: Reply) -> Self {
+        Self::with_show(version, tags, Reply::Error(404, "unexpected request"), ps)
+    }
+
+    fn inspection(show: Reply, ps: Reply) -> Self {
+        Self::with_show(VERSION, EMPTY, show, ps)
+    }
+
+    fn with_show(version: Reply, tags: Reply, show: Reply, ps: Reply) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         listener.set_nonblocking(true).unwrap();
@@ -72,13 +87,26 @@ impl Server {
                         _ => break,
                     }
                 }
-                let request = String::from_utf8(request).unwrap();
-                let line = request.lines().next().unwrap_or("").to_string();
-                recorded.lock().unwrap().push(line.clone());
+                let headers = String::from_utf8(request).unwrap();
+                let line = headers.lines().next().unwrap_or("").to_string();
+                let content_length = headers
+                    .lines()
+                    .filter_map(|header| header.split_once(':'))
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .find_map(|(_, value)| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut body = vec![0; content_length];
+                let _ = stream.read_exact(&mut body);
+                recorded.lock().unwrap().push(RecordedRequest {
+                    line: line.clone(),
+                    headers,
+                    body,
+                });
                 let reply = match line.as_str() {
                     "GET /api/version HTTP/1.1" => version,
                     "GET /api/tags HTTP/1.1" => tags,
                     "GET /api/ps HTTP/1.1" => ps,
+                    "POST /api/show HTTP/1.1" => show,
                     _ => Reply::Error(404, "unexpected request"),
                 };
                 // Clients intentionally close early in limit and timeout tests.
@@ -102,10 +130,44 @@ impl Server {
             .iter()
             .map(|path| format!("GET {path} HTTP/1.1"))
             .collect();
-        let mut actual = self.requests.lock().unwrap().clone();
+        let mut actual: Vec<_> = self
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| request.line.clone())
+            .collect();
         expected.sort();
         actual.sort();
         assert_eq!(actual, expected);
+    }
+
+    fn assert_inspection_requests(&self) {
+        let mut actual: Vec<_> = self
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| request.line.clone())
+            .collect();
+        actual.sort();
+        assert_eq!(
+            actual,
+            [
+                "GET /api/ps HTTP/1.1".to_string(),
+                "POST /api/show HTTP/1.1".to_string(),
+            ]
+        );
+    }
+
+    fn show_request(&self) -> RecordedRequest {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|request| request.line == "POST /api/show HTTP/1.1")
+            .cloned()
+            .expect("expected /api/show request")
     }
 }
 
@@ -317,6 +379,7 @@ fn allocation_remainder_is_checked_and_missing_metadata_stays_unknown() {
     ] {
         let model = RunningModel {
             name: "example".into(),
+            digest: None,
             size: total,
             size_vram: gpu,
             context_length: None,
@@ -338,5 +401,210 @@ fn allocation_remainder_is_checked_and_missing_metadata_stays_unknown() {
             remote_host: remote_host.map(str::to_owned),
         };
         assert_eq!(model.cloud_routed(), expected);
+    }
+}
+
+#[tokio::test]
+async fn inspection_posts_model_declarations_and_loaded_snapshot() {
+    let server = Server::inspection(
+        Reply::Json(
+            r#"{
+                "details":{"family":"llama","parameter_size":"8B","quantization_level":"Q4"},
+                "capabilities":["completion","tools"],
+                "parameters":"num_ctx 8192",
+                "model_info":{"general.architecture":"llama","llama.context_length":8192},
+                "remote_model":"cloud-copy",
+                "remote_host":"https://example.invalid"
+            }"#,
+        ),
+        Reply::Json(
+            r#"{"models":[{"name":"example:latest","digest":"loaded","context_length":4096}]}"#,
+        ),
+    );
+
+    let inspection = server
+        .adapter()
+        .inspect_model("example:latest")
+        .await
+        .unwrap();
+    let metadata = inspection.metadata.unwrap();
+    assert_eq!(
+        metadata.details.as_ref().unwrap().family.as_deref(),
+        Some("llama")
+    );
+    assert_eq!(
+        metadata.capabilities.as_ref().unwrap(),
+        &vec!["completion".to_owned(), "tools".to_owned()]
+    );
+    assert_eq!(metadata.parameters.as_deref(), Some("num_ctx 8192"));
+    assert_eq!(metadata.architecture(), Some("llama"));
+    assert_eq!(metadata.declared_context_length(), Some(8192));
+    assert!(metadata.cloud_routed());
+    let running = inspection.running.unwrap();
+    assert_eq!(running[0].digest.as_deref(), Some("loaded"));
+    assert_eq!(running[0].context_length, Some(4096));
+
+    server.assert_inspection_requests();
+    let request = server.show_request();
+    assert!(
+        request
+            .headers
+            .to_ascii_lowercase()
+            .contains("content-type: application/json")
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&request.body).unwrap(),
+        serde_json::json!({"model":"example:latest","verbose":false})
+    );
+}
+
+#[tokio::test]
+async fn inspection_preserves_valid_model_name_json_escapes() {
+    let server = Server::inspection(Reply::Json("{}"), EMPTY);
+    let model = "family/\"quoted\"\\path:β";
+    let inspection = server.adapter().inspect_model(model).await.unwrap();
+    assert!(inspection.metadata.is_ok());
+    assert!(inspection.running.unwrap().is_empty());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&server.show_request().body).unwrap(),
+        serde_json::json!({"model":model,"verbose":false})
+    );
+}
+
+#[tokio::test]
+async fn inspection_rejects_invalid_model_names_without_requests() {
+    for model in ["", " \t ", "line\nbreak", "nul\0byte"] {
+        let server = Server::inspection(Reply::Json("{}"), EMPTY);
+        assert_eq!(
+            server.adapter().inspect_model(model).await.unwrap_err(),
+            "/api/show: invalid model name"
+        );
+        server.assert_requests(&[]);
+    }
+    let server = Server::inspection(Reply::Json("{}"), EMPTY);
+    let too_long = "a".repeat(1025);
+    assert!(server.adapter().inspect_model(&too_long).await.is_err());
+    server.assert_requests(&[]);
+}
+
+#[tokio::test]
+async fn inspection_keeps_unknown_fields_unknown_and_empty_objects_valid() {
+    let server = Server::inspection(Reply::Json("{}"), EMPTY);
+    let inspection = server.adapter().inspect_model("example").await.unwrap();
+    let metadata = inspection.metadata.unwrap();
+    assert!(metadata.details.is_none());
+    assert!(metadata.capabilities.is_none());
+    assert!(metadata.parameters.is_none());
+    assert!(metadata.model_info.is_none());
+    assert_eq!(metadata.architecture(), None);
+    assert_eq!(metadata.declared_context_length(), None);
+    assert!(!metadata.cloud_routed());
+    assert!(inspection.running.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn inspection_rejects_malformed_metadata_without_losing_running_snapshot() {
+    for show in [
+        Reply::Json(r#"{"capabilities":"completion"}"#),
+        Reply::Json(r#"{"model_info":[]}"#),
+        Reply::Json(r#"{"details":{"family":42}}"#),
+    ] {
+        let server = Server::inspection(show, Reply::Json(r#"{"models":[{"name":"loaded"}]}"#));
+        let inspection = server.adapter().inspect_model("example").await.unwrap();
+        assert!(inspection.metadata.unwrap_err().contains("invalid JSON"));
+        assert_eq!(inspection.running.unwrap()[0].name, "loaded");
+        server.assert_inspection_requests();
+    }
+}
+
+#[tokio::test]
+async fn inspection_keeps_metadata_when_running_snapshot_fails_or_model_disappears() {
+    for show in [Reply::Json("{}"), Reply::Error(404, "private model name")] {
+        let server = Server::inspection(show, Reply::Error(503, "private server details"));
+        let inspection = server.adapter().inspect_model("example").await.unwrap();
+        assert!(inspection.running.unwrap_err().contains("HTTP 503"));
+        if matches!(show, Reply::Error(_, _)) {
+            assert_eq!(inspection.metadata.unwrap_err(), "/api/show: HTTP 404");
+        } else {
+            assert!(inspection.metadata.is_ok());
+        }
+        server.assert_inspection_requests();
+    }
+}
+
+#[tokio::test]
+async fn inspection_context_declaration_requires_exact_positive_integer_key() {
+    for (show, expected) in [
+        (
+            Reply::Json(
+                r#"{"model_info":{"general.architecture":"llama","llama.context_length":4096}}"#,
+            ),
+            Some(4096),
+        ),
+        (
+            Reply::Json(
+                r#"{"model_info":{"general.architecture":"llama","llama.context_length":0}}"#,
+            ),
+            None,
+        ),
+        (
+            Reply::Json(
+                r#"{"model_info":{"general.architecture":"llama","llama.context_length":1.5}}"#,
+            ),
+            None,
+        ),
+        (
+            Reply::Json(
+                r#"{"model_info":{"general.architecture":"llama","llama.context_length":-1}}"#,
+            ),
+            None,
+        ),
+        (
+            Reply::Json(
+                r#"{"model_info":{"general.architecture":"llama","llama.context_length":"4096"}}"#,
+            ),
+            None,
+        ),
+        (
+            Reply::Json(
+                r#"{"model_info":{"general.architecture":"llama","other.context_length":4096}}"#,
+            ),
+            None,
+        ),
+    ] {
+        let server = Server::inspection(show, EMPTY);
+        let inspection = server.adapter().inspect_model("example").await.unwrap();
+        assert_eq!(
+            inspection.metadata.unwrap().declared_context_length(),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn inspection_show_response_limits_timeouts_and_redirects_are_isolated() {
+    for show in [Reply::Redirect, Reply::DeclaredOversize, Reply::SlowHeaders] {
+        let server = Server::inspection(show, EMPTY);
+        let adapter = OllamaAdapter::with_port(server.port, Duration::from_millis(50)).unwrap();
+        let inspection = adapter.inspect_model("example").await.unwrap();
+        let error = inspection.metadata.unwrap_err();
+        assert!(
+            error.contains("HTTP 302")
+                || error.contains("exceeds 2 MiB")
+                || error.contains("timed out"),
+            "{error}"
+        );
+        if matches!(show, Reply::SlowHeaders) {
+            assert!(
+                inspection.running.is_ok() || inspection.running.unwrap_err().contains("timed out")
+            );
+        } else {
+            assert!(inspection.running.unwrap().is_empty());
+        }
+        if matches!(show, Reply::SlowHeaders) {
+            let _ = server.show_request();
+        } else {
+            server.assert_inspection_requests();
+        }
     }
 }
