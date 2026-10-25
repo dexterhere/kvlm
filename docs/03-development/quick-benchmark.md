@@ -29,7 +29,8 @@ Selection changes and inventory refresh results cancel active runs and clear old
 results. Failures, cancellation, and deadlines show partial observations as partial;
 only a fully validated stream produces a completed result. An already-completed
 request can win a race with cancellation. The app retains no generated output text.
-Results are session-only and disappear on restart.
+The current result area is session-only. [Benchmark history](benchmark-history.md)
+now retains durable snapshots and outcomes across restarts.
 
 ## Interpret the measurements
 
@@ -42,7 +43,8 @@ Results are session-only and disappear on restart.
   this run is neither a cold/warm comparison nor a repeated calibrated benchmark.
 - Runtime manifest digests identify this request; they do not verify a local GGUF
   file or hardware identity. No Benchmark Verified badge or positive fit follows.
-- There is no SQLite storage, resource sampling, peak RAM/VRAM, or restart verification.
+- SQLite history stores these observations without granting empirical verification.
+  Resource sampling, peak RAM/VRAM, and real-model restart acceptance remain open.
 
 The execution-time guard trusts the attached loopback server's implementation and
 reported cloud-disable state. It is not a network sandbox. Every run uses a fresh
@@ -83,5 +85,6 @@ Runner tests separate server metrics from client latency and cover partial failu
 cancellation, sender loss, and deadlines. Bridge tests cover concurrent commands,
 duplicate rejection, panic recovery, and shutdown dropping active requests.
 
-No real inference was run during implementation. SQLite persistence, real runtime
-acceptance, native GNOME validation, and the full M0 definition of done remain open.
+No real inference was run during implementation. SQLite persistence is implemented
+in the subsequent [history slice](benchmark-history.md). Real runtime acceptance,
+native GNOME validation, and the full M0 definition of done remain open.
