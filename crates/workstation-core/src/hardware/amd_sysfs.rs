@@ -114,7 +114,7 @@ pub(super) fn probe(root: &Path) -> (Vec<GpuDeviceProfile>, Vec<ProbeIssue>) {
     (devices, issues)
 }
 
-fn read_pool(
+pub(super) fn read_pool(
     path: &Path,
     kind: &str,
     name: &str,

@@ -58,6 +58,7 @@ fn snapshot(name: &str) -> RunSnapshot {
 fn completed() -> RunCompletion {
     RunCompletion {
         finished_at_unix_ms: 2,
+        resources: None,
         runtime_version: Some("test".into()),
         model_digest: Some("digest".into()),
         outcome: RunOutcome::Completed(RunMetrics {
@@ -110,6 +111,7 @@ fn restart_preserves_completed_cancelled_timed_out_failed_and_unfinished_records
                 id,
                 &RunCompletion {
                     finished_at_unix_ms: 2,
+                    resources: None,
                     runtime_version: None,
                     model_digest: None,
                     outcome,
@@ -338,5 +340,82 @@ fn oversized_records_and_shared_writable_directories_are_rejected() {
     assert_eq!(
         fs::metadata(parent).unwrap().permissions().mode() & 0o777,
         0o777
+    );
+}
+
+#[test]
+fn legacy_completion_bytes_stay_unchanged_and_new_resources_survive_restart() {
+    use workstation_core::hardware::resources::{GpuMemoryPeak, ResourceSummary};
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    let legacy_id = store.start(&snapshot("legacy")).unwrap();
+    let measured_id = store.start(&snapshot("measured")).unwrap();
+    drop(store);
+    let legacy = r#"{"finished_at_unix_ms":2,"runtime_version":"old","model_digest":null,"outcome":{"Cancelled":{"first_response_ns":null,"response_chunks":0}}}"#;
+    let connection = Connection::open(&path.0).unwrap();
+    connection
+        .execute(
+            "UPDATE benchmark_runs SET completion_json=?1 WHERE id=?2",
+            rusqlite::params![legacy, legacy_id],
+        )
+        .unwrap();
+    drop(connection);
+    let store = HistoryStore::open(&path.0).unwrap();
+    let entries = store.recent().unwrap();
+    assert!(
+        entries
+            .iter()
+            .find(|r| r.id == legacy_id)
+            .unwrap()
+            .completion
+            .as_ref()
+            .unwrap()
+            .resources
+            .is_none()
+    );
+    let summary = ResourceSummary {
+        interval_ms: 100,
+        window_ms: 1000,
+        samples: 9,
+        system_ram_samples: 7,
+        peak_system_ram_nonavailable_bytes: Some(u64::MAX),
+        gpus: vec![GpuMemoryPeak {
+            id: "pci:0000:03:00.0".into(),
+            name: "fixture".into(),
+            vram_samples: 3,
+            peak_vram_used_bytes: Some(0),
+            gtt_samples: 0,
+            peak_gtt_used_bytes: None,
+        }],
+        probe_failed: false,
+        probe_in_flight: true,
+        limit_reached: false,
+    };
+    let mut outcome = completed();
+    outcome.resources = Some(summary.clone());
+    store.finish(measured_id, &outcome).unwrap();
+    drop(store);
+    let store = HistoryStore::open(&path.0).unwrap();
+    let entries = store.recent().unwrap();
+    assert_eq!(
+        entries[0].completion.as_ref().unwrap().resources,
+        Some(summary)
+    );
+    drop(store);
+    let connection = Connection::open(&path.0).unwrap();
+    let preserved: String = connection
+        .query_row(
+            "SELECT completion_json FROM benchmark_runs WHERE id=?1",
+            [legacy_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(preserved, legacy);
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        version, 1,
+        "additive JSON metadata needs no structural database migration"
     );
 }

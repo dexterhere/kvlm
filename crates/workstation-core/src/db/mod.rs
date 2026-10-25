@@ -45,6 +45,8 @@ pub struct RunCompletion {
     pub runtime_version: Option<String>,
     pub model_digest: Option<String>,
     pub outcome: RunOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<crate::hardware::resources::ResourceSummary>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RunOutcome {
