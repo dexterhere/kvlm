@@ -3,7 +3,9 @@
 use crate::bridge::{CoreCommand, UiEvent};
 use adw::prelude::*;
 use std::{cell::RefCell, rc::Rc};
-use workstation_runtimes::ollama::{Discovery, ENDPOINT, InstalledModel, ModelInspection, RunningModel};
+use workstation_runtimes::ollama::{
+    Discovery, ENDPOINT, InstalledModel, ModelInspection, RunningModel,
+};
 
 const MAX_VISIBLE_MODELS: usize = 100;
 const MAX_TEXT_CHARACTERS: usize = 1024;
@@ -18,9 +20,11 @@ struct LoadState {
 #[derive(Default)]
 struct InspectionState {
     id: u64,
-    busy: bool,
+    in_flight: Option<u64>,
+    tags_stale: bool,
     installed: Vec<InstalledModel>,
-    selected: Option<(InstalledModel, Option<Result<Box<ModelInspection>, String>>)>,
+    selected: Option<(InstalledModel, Option<String>)>,
+    buttons: Vec<gtk::Button>,
 }
 
 impl LoadState {
@@ -45,6 +49,7 @@ pub struct Runtimes {
     spinner: gtk::Spinner,
     status: gtk::Label,
     readings: gtk::Box,
+    inspection_details: gtk::Box,
     state: Rc<RefCell<LoadState>>,
     inspection: Rc<RefCell<InspectionState>>,
     commands: tokio::sync::mpsc::Sender<CoreCommand>,
@@ -97,6 +102,7 @@ impl Runtimes {
             spinner,
             status,
             readings,
+            inspection_details: gtk::Box::new(gtk::Orientation::Vertical, 12),
             state: Rc::new(RefCell::new(LoadState::default())),
             inspection: Rc::new(RefCell::new(InspectionState::default())),
             commands,
@@ -105,21 +111,14 @@ impl Runtimes {
         let spinner = runtimes.spinner.clone();
         let status = runtimes.status.clone();
         let commands = runtimes.commands.clone();
+        let inspection = Rc::clone(&runtimes.inspection);
+        let details = runtimes.inspection_details.clone();
+        runtimes.refresh.connect_clicked(move |button| {
+            invalidate_inspection(&inspection);
+            render_pending_inspection(&details, &inspection);
+            request(&state, button, &spinner, &status, &commands);
+        });
         runtimes
-            .refresh
-            .connect_clicked(move |button| request(&state, button, &spinner, &status, &commands));
-        runtimes
-    }
-
-    pub fn request(&self) {
-        invalidate_inspection(&self.inspection);
-        request(
-            &self.state,
-            &self.refresh,
-            &self.spinner,
-            &self.status,
-            &self.commands,
-        );
     }
 
     pub fn receive(&self, event: &UiEvent) {
@@ -152,15 +151,11 @@ impl Runtimes {
             }
             UiEvent::OllamaInspected { id, result } => {
                 let mut inspection = self.inspection.borrow_mut();
-                if inspection.id != *id || !inspection.busy {
+                if !complete_inspection(&mut inspection, *id) {
                     return;
                 }
-                inspection.busy = false;
-                if let Some((_, selected)) = &mut inspection.selected {
-                    *selected = Some(result.clone());
-                }
                 drop(inspection);
-                self.render_inspection();
+                self.render_inspection_result(result);
                 return;
             }
             _ => return,
@@ -170,6 +165,13 @@ impl Runtimes {
     }
 
     fn render(&self, discovery: &Discovery) {
+        {
+            let mut inspection = self.inspection.borrow_mut();
+            update_installed_snapshot(
+                &mut inspection,
+                discovery.installed.as_ref().cloned().unwrap_or_default(),
+            );
+        }
         let service = group("Attached Ollama");
         service.add(&row("Endpoint", ENDPOINT));
         service.add(&row("Version", &discovery.version));
@@ -190,19 +192,24 @@ impl Runtimes {
                 ));
             }
             Ok(models) => {
-                self.inspection.borrow_mut().installed = models.clone();
                 for model in visible_models(models) {
                     let model_row = row(&model.name, &installed_text(model));
                     let inspect = gtk::Button::with_label("Inspect");
                     inspect.set_valign(gtk::Align::Center);
                     let state = Rc::clone(&self.inspection);
                     let commands = self.commands.clone();
-                    let name = model.name.clone();
-                    let digest = model.digest.clone();
                     let model = model.clone();
-                    inspect.set_sensitive(!state.borrow().busy);
+                    let inspection = state.borrow();
+                    inspect.set_sensitive(inspection.in_flight.is_none() && !inspection.tags_stale);
+                    drop(inspection);
+                    state.borrow_mut().buttons.push(inspect.clone());
+                    let state = Rc::downgrade(&state);
+                    let details = self.inspection_details.clone();
                     inspect.connect_clicked(move |button| {
-                        inspect_model(&state, button, &commands, model.clone());
+                        if let Some(state) = state.upgrade() {
+                            inspect_model(&state, button, &commands, model.clone());
+                            render_pending_inspection(&details, &state);
+                        }
                     });
                     model_row.add_suffix(&inspect);
                     installed.add(&model_row);
@@ -214,8 +221,7 @@ impl Runtimes {
             Err(message) => installed.add(&row("Installed model list unavailable", message)),
         }
         self.readings.append(&installed);
-
-        self.render_inspection();
+        self.readings.append(&self.inspection_details);
 
         let running = group("Loaded models");
         running.set_description(Some(
@@ -241,46 +247,133 @@ impl Runtimes {
         self.readings.append(&running);
     }
 
-    fn render_inspection(&self) {
-        let Some(installed) = self.readings.first_child().and_then(|_| {
-            let mut child = self.readings.first_child();
-            while let Some(current) = child {
-                if current.widget_name() == "ollama-inspection" {
-                    return Some(current);
-                }
-                child = current.next_sibling();
-            }
-            None
-        }) else {
-            return;
-        };
-        self.readings.remove(&installed);
-        let state = self.inspection.borrow();
-        let Some((model, result)) = &state.selected else {
-            return;
-        };
-        let details = group("Selected model inspection");
-        details.set_widget_name("ollama-inspection");
-        details.add(&row("Model", &model.name));
-        match result {
-            None => details.add(&row("Inspection", "Loading model metadata and loaded-model readings…")),
-            Some(Err(message)) => details.add(&row("Inspection unavailable", message)),
-            Some(Ok(inspection)) => render_model_inspection(&details, model, &state.installed, inspection),
+    fn render_inspection_result(&self, result: &Result<Box<ModelInspection>, String>) {
+        while let Some(child) = self.inspection_details.first_child() {
+            self.inspection_details.remove(&child);
         }
-        // Keep inspection immediately after the installed-model list.
-        let position = self.readings.first_child().and_then(|service| service.next_sibling());
-        if let Some(position) = position {
-            self.readings.insert_child_after(&details, Some(&position));
-        } else {
-            self.readings.append(&details);
+        let state = self.inspection.borrow();
+        if let Some((model, _)) = &state.selected {
+            let details = selected_details_group(model);
+            match result {
+                Err(message) => details.add(&row("Inspection unavailable", message)),
+                Ok(inspection) => {
+                    render_model_inspection(&details, model, &state.installed, inspection)
+                }
+            }
+            self.inspection_details.append(&details);
         }
     }
+}
+
+fn render_pending_inspection(details: &gtk::Box, state: &RefCell<InspectionState>) {
+    while let Some(child) = details.first_child() {
+        details.remove(&child);
+    }
+    if let Some((model, result)) = &state.borrow().selected {
+        let group = selected_details_group(model);
+        match result {
+            None => group.add(&row(
+                "Inspection",
+                "Loading model metadata and loaded-model readings…",
+            )),
+            Some(message) => group.add(&row("Inspection unavailable", message)),
+        }
+        details.append(&group);
+    }
+}
+
+fn selected_details_group(model: &InstalledModel) -> adw::PreferencesGroup {
+    let group = group("Selected model inspection");
+    group.set_description(Some(
+        "Actual K/V cache types, micro-batch size, concurrency, and compatibility are unknown. These declarations do not identify the file selected in Overview.",
+    ));
+    group.add(&row("Model", &model.name));
+    group
 }
 
 fn invalidate_inspection(state: &RefCell<InspectionState>) {
     let mut state = state.borrow_mut();
     state.id = state.id.wrapping_add(1);
     state.selected = None;
+    state.tags_stale = true;
+    for button in &state.buttons {
+        button.set_sensitive(false);
+    }
+}
+
+fn update_installed_snapshot(state: &mut InspectionState, installed: Vec<InstalledModel>) {
+    state.buttons.clear();
+    state.installed = installed;
+    state.tags_stale = false;
+}
+
+fn begin_inspection(state: &mut InspectionState, model: InstalledModel) -> Option<u64> {
+    if state.in_flight.is_some() || state.tags_stale {
+        return None;
+    }
+    state.id = state.id.wrapping_add(1);
+    state.in_flight = Some(state.id);
+    state.selected = Some((model, None));
+    for button in &state.buttons {
+        button.set_sensitive(false);
+    }
+    Some(state.id)
+}
+
+fn complete_inspection(state: &mut InspectionState, id: u64) -> bool {
+    if state.in_flight != Some(id) {
+        return false;
+    }
+    state.in_flight = None;
+    if !state.tags_stale {
+        for button in &state.buttons {
+            button.set_sensitive(true);
+        }
+    }
+    state.id == id && !state.tags_stale
+}
+
+fn reject_inspection(state: &mut InspectionState, id: u64, message: &str) {
+    if state.in_flight != Some(id) {
+        return;
+    }
+    state.in_flight = None;
+    if !state.tags_stale {
+        for button in &state.buttons {
+            button.set_sensitive(true);
+        }
+    }
+    if let Some((_, selected)) = &mut state.selected {
+        *selected = Some(message.into());
+    }
+}
+
+fn queue_inspection(
+    state: &RefCell<InspectionState>,
+    commands: &tokio::sync::mpsc::Sender<CoreCommand>,
+    model: InstalledModel,
+) -> Result<Option<u64>, &'static str> {
+    let model_name = model.name.clone();
+    let id = match begin_inspection(&mut state.borrow_mut(), model) {
+        Some(id) => id,
+        None => return Ok(None),
+    };
+    match commands.try_send(CoreCommand::InspectOllama {
+        id,
+        model: model_name,
+    }) {
+        Ok(()) => Ok(Some(id)),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            const MESSAGE: &str = "Worker busy. Select Inspect to retry.";
+            reject_inspection(&mut state.borrow_mut(), id, MESSAGE);
+            Err(MESSAGE)
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            const MESSAGE: &str = "Worker unavailable. Close and reopen the application to retry.";
+            reject_inspection(&mut state.borrow_mut(), id, MESSAGE);
+            Err(MESSAGE)
+        }
+    }
 }
 
 fn inspect_model(
@@ -289,32 +382,125 @@ fn inspect_model(
     commands: &tokio::sync::mpsc::Sender<CoreCommand>,
     model: InstalledModel,
 ) {
-    let id = {
-        let mut state = state.borrow_mut();
-        if state.busy {
-            return;
-        }
-        state.id = state.id.wrapping_add(1);
-        state.busy = true;
-        state.selected = Some((model.clone(), None));
-        state.id
-    };
-    button.set_sensitive(false);
-    match commands.try_send(CoreCommand::InspectOllama { id, model: model.name }) {
-        Ok(()) => {}
-        Err(error) => {
-            let message = match error {
-                tokio::sync::mpsc::error::TrySendError::Full(_) => "Worker busy. Select Inspect to retry.",
-                tokio::sync::mpsc::error::TrySendError::Closed(_) => "Worker unavailable. Close and reopen the application to retry.",
-            };
-            let mut state = state.borrow_mut();
-            state.busy = false;
-            if let Some((_, selected)) = &mut state.selected {
-                *selected = Some(Err(message.into()));
+    match queue_inspection(state, commands, model) {
+        Ok(Some(_)) => button.set_sensitive(false),
+        Ok(None) => {}
+        Err(message) => button.set_tooltip_text(Some(message)),
+    }
+}
+
+fn render_model_inspection(
+    parent: &adw::PreferencesGroup,
+    selected: &InstalledModel,
+    installed: &[InstalledModel],
+    inspection: &ModelInspection,
+) {
+    let metadata_group = group("Model metadata");
+    metadata_group.set_description(Some(
+        "Declared parameters describe the model metadata and do not confirm Ollama's loaded settings.",
+    ));
+    match &inspection.metadata {
+        Err(message) => metadata_group.add(&row("Metadata unavailable", message)),
+        Ok(metadata) => {
+            metadata_group.add(&row(
+                "Routing",
+                if metadata.cloud_routed() || selected.cloud_routed() {
+                    "Cloud routed"
+                } else {
+                    "Routing unverified"
+                },
+            ));
+            let details = metadata.details.as_ref();
+            metadata_group.add(&row(
+                "Architecture",
+                metadata.architecture().unwrap_or("Unknown"),
+            ));
+            metadata_group.add(&row(
+                "Family",
+                details
+                    .and_then(|details| details.family.as_deref())
+                    .unwrap_or("Unknown"),
+            ));
+            let context = metadata
+                .declared_context_length()
+                .filter(|length| *length > 0)
+                .map(|length| format!("{length} tokens"))
+                .unwrap_or_else(|| "Unknown".into());
+            metadata_group.add(&row("Declared training context", &context));
+            metadata_group.add(&row(
+                "Parameter size",
+                details
+                    .and_then(|d| d.parameter_size.as_deref())
+                    .unwrap_or("Unknown"),
+            ));
+            metadata_group.add(&row(
+                "Quantization",
+                details
+                    .and_then(|d| d.quantization_level.as_deref())
+                    .unwrap_or("Unknown"),
+            ));
+            if let Some(capabilities) = &metadata.capabilities {
+                metadata_group.add(&row(
+                    "Capabilities",
+                    &capabilities
+                        .iter()
+                        .map(|v| display_text(v))
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                ));
+            } else {
+                metadata_group.add(&row("Capabilities", "Unknown"));
             }
-            button.set_sensitive(true);
+            metadata_group.add(&row(
+                "Declared parameters",
+                metadata
+                    .parameters
+                    .as_deref()
+                    .map(display_text)
+                    .as_deref()
+                    .unwrap_or("Unknown"),
+            ));
         }
     }
+    parent.add(&metadata_group);
+
+    let loaded_group = group("Loaded allocation from this inspection");
+    match &inspection.running {
+        Err(message) => loaded_group.add(&row("Loaded readings unavailable", message)),
+        Ok(running) => {
+            if let Some(model) = matching_running(selected, installed, running) {
+                loaded_group.add(&row("Loaded model", &running_text(model)));
+            } else {
+                loaded_group.add(&row(
+                    "Loaded model",
+                    "Unverified: exact name and digest could not be uniquely matched.",
+                ));
+            }
+        }
+    }
+    parent.add(&loaded_group);
+}
+
+fn matching_running<'a>(
+    selected: &InstalledModel,
+    installed: &[InstalledModel],
+    running: &'a [RunningModel],
+) -> Option<&'a RunningModel> {
+    let digest = selected.digest.as_ref()?;
+    if selected.name.trim().is_empty() || digest.trim().is_empty() {
+        return None;
+    }
+    let mut installed_matches = installed.iter().filter(|model| model.name == selected.name);
+    let installed_model = installed_matches.next()?;
+    if installed_matches.next().is_some() || installed_model.digest.as_ref() != Some(digest) {
+        return None;
+    }
+    let mut running_matches = running.iter().filter(|model| model.name == selected.name);
+    let running_model = running_matches.next()?;
+    if running_matches.next().is_some() || running_model.digest.as_ref() != Some(digest) {
+        return None;
+    }
+    Some(running_model)
 }
 
 fn request(
@@ -434,6 +620,7 @@ fn running_text(model: &RunningModel) -> String {
         bytes_text(model.size),
         model
             .context_length
+            .filter(|length| *length > 0)
             .map(|size| format!("{size} tokens"))
             .unwrap_or_else(|| "Unknown".into())
     )
@@ -493,6 +680,7 @@ mod tests {
         assert_eq!(bytes_text(Some(0)), "0 bytes (0.00 GiB)");
         let mut model = RunningModel {
             name: "example".into(),
+            digest: None,
             size: Some(1073741825),
             size_vram: Some(1073741824),
             context_length: None,
@@ -502,6 +690,8 @@ mod tests {
         assert!(text.contains("CPU: 1 bytes (0.00 GiB)"));
         assert!(text.contains("GPU: 1073741824 bytes (1.00 GiB)"));
         assert!(text.contains("Context: Unknown"));
+        model.context_length = Some(0);
+        assert!(running_text(&model).contains("Context: Unknown"));
         model.size_vram = Some(u64::MAX);
         assert!(running_text(&model).contains("CPU / GPU split: Unknown"));
         model.size_vram = None;
@@ -522,4 +712,132 @@ mod tests {
         model.remote_model = Some("example-cloud".into());
         assert!(installed_text(&model).starts_with("Cloud Routed"));
     }
+
+    #[test]
+    fn associates_loaded_allocation_only_with_unique_exact_name_and_digest() {
+        let installed = InstalledModel {
+            name: "example:latest".into(),
+            digest: Some("sha256:abc".into()),
+            size: None,
+            details: None,
+            remote_model: None,
+            remote_host: None,
+        };
+        let running = RunningModel {
+            name: installed.name.clone(),
+            digest: installed.digest.clone(),
+            size: Some(10),
+            size_vram: Some(8),
+            context_length: Some(4096),
+        };
+        assert!(
+            matching_running(
+                &installed,
+                std::slice::from_ref(&installed),
+                std::slice::from_ref(&running)
+            )
+            .is_some()
+        );
+        assert!(matching_running(&installed, &[], std::slice::from_ref(&running)).is_none());
+        let mut no_digest = running.clone();
+        no_digest.digest = None;
+        assert!(
+            matching_running(&installed, std::slice::from_ref(&installed), &[no_digest]).is_none()
+        );
+        let mut mismatch = running.clone();
+        mismatch.digest = Some("sha256:other".into());
+        assert!(
+            matching_running(&installed, std::slice::from_ref(&installed), &[mismatch]).is_none()
+        );
+        assert!(
+            matching_running(
+                &installed,
+                &[installed.clone(), installed.clone()],
+                std::slice::from_ref(&running)
+            )
+            .is_none()
+        );
+        assert!(
+            matching_running(
+                &installed,
+                std::slice::from_ref(&installed),
+                &[running.clone(), running.clone()]
+            )
+            .is_none()
+        );
+        let same_name_other_digest = InstalledModel {
+            digest: Some("sha256:other".into()),
+            ..installed.clone()
+        };
+        assert!(
+            matching_running(
+                &installed,
+                &[installed.clone(), same_name_other_digest],
+                std::slice::from_ref(&running)
+            )
+            .is_none()
+        );
+    }
+
+    fn installed_model(name: &str) -> InstalledModel {
+        InstalledModel {
+            name: name.into(),
+            digest: Some(format!("digest:{name}")),
+            size: None,
+            details: None,
+            remote_model: None,
+            remote_host: None,
+        }
+    }
+
+    #[test]
+    fn invalidation_discards_old_result_and_allows_new_selection_after_completion() {
+        let state = RefCell::new(InspectionState::default());
+        let first_id = begin_inspection(&mut state.borrow_mut(), installed_model("first")).unwrap();
+        assert!(begin_inspection(&mut state.borrow_mut(), installed_model("second")).is_none());
+        assert!(!complete_inspection(
+            &mut state.borrow_mut(),
+            first_id.wrapping_add(1)
+        ));
+        assert_eq!(state.borrow().in_flight, Some(first_id));
+        invalidate_inspection(&state);
+        assert!(!complete_inspection(&mut state.borrow_mut(), first_id));
+        assert!(state.borrow().selected.is_none());
+        update_installed_snapshot(&mut state.borrow_mut(), vec![installed_model("second")]);
+        let second_id =
+            begin_inspection(&mut state.borrow_mut(), installed_model("second")).unwrap();
+        assert_ne!(first_id, second_id);
+        assert_eq!(state.borrow().selected.as_ref().unwrap().0.name, "second");
+    }
+
+    #[test]
+    fn full_and_closed_command_channels_report_actionable_retry_states() {
+        let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
+        commands.try_send(CoreCommand::DiscoverOllama).unwrap();
+        let state = RefCell::new(InspectionState::default());
+        assert_eq!(
+            queue_inspection(&state, &commands, installed_model("retry")),
+            Err("Worker busy. Select Inspect to retry.")
+        );
+        assert!(state.borrow().in_flight.is_none());
+        assert_eq!(
+            state.borrow().selected.as_ref().unwrap().1.as_deref(),
+            Some("Worker busy. Select Inspect to retry.")
+        );
+        receiver.try_recv().unwrap();
+        assert!(queue_inspection(&state, &commands, installed_model("retry")).is_ok());
+
+        let (closed_commands, closed_receiver) = tokio::sync::mpsc::channel(1);
+        drop(closed_receiver);
+        let closed_state = RefCell::new(InspectionState::default());
+        assert_eq!(
+            queue_inspection(&closed_state, &closed_commands, installed_model("retry")),
+            Err("Worker unavailable. Close and reopen the application to retry.")
+        );
+        assert!(closed_state.borrow().in_flight.is_none());
+    }
 }
+
+#[cfg(test)]
+#[path = "runtimes_smoke.rs"]
+mod runtimes_smoke;

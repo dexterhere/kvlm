@@ -156,7 +156,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
                 UiEvent::OllamaFailed(_) => {
                     runtime_status = "Ollama unavailable · See Runtimes to retry"
                 }
-                UiEvent::FitFinished { .. } => continue,
+                UiEvent::FitFinished { .. } | UiEvent::OllamaInspected { .. } => continue,
             }
             status.set_label(&format!("{hardware_status} · {runtime_status}"));
         }
