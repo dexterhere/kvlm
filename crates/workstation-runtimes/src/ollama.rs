@@ -7,6 +7,9 @@ use reqwest::{Client, RequestBuilder, redirect::Policy};
 use serde::{Deserialize, de::DeserializeOwned};
 
 pub const ENDPOINT: &str = "http://127.0.0.1:11434";
+mod generation;
+pub use generation::{GenerationProgress, GenerationRequest, GenerationSummary};
+
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
