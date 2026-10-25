@@ -6,6 +6,10 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 ### Added
 
+- Explicit single-model Quick Benchmark with affirmative local-only checks, immutable
+  manifest digest requests, bounded streaming, independent client/server metrics,
+  cancellation, and partial failure outcomes. Results remain session-only.
+
 - Installed Ollama model selection, read-only metadata inspection, and fresh loaded
   context/allocation with explicit unknowns and stale-reply protection.
 - Attached Ollama discovery, carried from its unmerged prerequisite PR.
@@ -31,4 +35,4 @@ Changes worth knowing about are recorded here. There is no published release yet
 - Moved the original master specification into `docs/01-product/` without altering its contents.
 
 Verified runtime-fit integration, model catalog/downloads, SQLite persistence,
-configuration exports, managed runtime control, and benchmark execution remain planned.
+configuration exports, managed runtime control, resource sampling, and restart verification remain planned.
