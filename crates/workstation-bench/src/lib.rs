@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Benchmarking boundaries. No inference requests or telemetry sampling exist yet.
+//! Single-request quick benchmarking. Persistence and resource sampling remain pending.
 
 pub mod runner;
 pub mod sampler;
