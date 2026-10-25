@@ -43,11 +43,19 @@ The application creates one multi-thread Tokio runtime. GTK widgets remain on th
 GLib main thread. UI commands use Tokio mpsc, and worker events return through
 `async_channel` and `glib::MainContext::spawn_local`. No GTK objects cross into workers.
 Blocking SQLite, NVML, and sysfs calls must use `spawn_blocking` when implemented.
-Closing the application must cancel worker work and release owned resources.
+Closing the application cancels asynchronous HTTP work and releases channels.
+Already-running blocking probes cannot be forcibly cancelled; shutdown uses a bounded
+runtime wait.
 
 On this dependent feature branch, hardware discovery runs in `spawn_blocking` and
-returns typed snapshots to Overview. Attached-Ollama discovery is carried from its unmerged PR and runs asynchronously
-on Tokio; it never changes runtime state. Hardware, fit, and GGUF prerequisite PRs have not been merged either.
+returns typed snapshots to Overview. Attached-Ollama discovery is carried from its
+unmerged PR and runs asynchronously on Tokio; it never changes runtime state.
+Hardware, fit, and GGUF prerequisite PRs have not been merged either.
+Model selection sends `InspectOllama { id, model }` and receives correlated inspection
+events; UI generations reject stale replies. `/api/show` and fresh `/api/ps` requests
+run concurrently on Tokio. Their partial failures remain separate. Declared metadata
+is not converted into loaded settings or a fit classification; see
+[decision 0008](../05-decisions/0008-ollama-model-inspection.md).
 The core calculator is pure: callers supply supported model/runtime metadata and
 available-memory readings; it performs no probing, network, database, or GTK work.
 
