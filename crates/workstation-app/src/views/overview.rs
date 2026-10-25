@@ -119,6 +119,12 @@ impl Overview {
             self.fit.receive(*id, result);
             return;
         }
+        if !matches!(
+            event,
+            UiEvent::HardwareDetected(_) | UiEvent::HardwareFailed(_)
+        ) {
+            return;
+        }
         self.spinner.stop();
         self.refresh.set_sensitive(true);
         match event {
@@ -157,7 +163,7 @@ impl Overview {
                 };
                 self.status.set_text(&format!("{prefix}\n{message}"));
             }
-            UiEvent::FitFinished { .. } => unreachable!("fit events are handled above"),
+            _ => unreachable!("unrelated events are handled above"),
         }
     }
 

@@ -5,12 +5,13 @@ use crate::fit_workflow::{FitReport, FitRequest, estimate};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use workstation_core::hardware::HardwareProfile;
-use workstation_runtimes::ollama::{Discovery, OllamaAdapter};
+use workstation_runtimes::ollama::{Discovery, ModelInspection, OllamaAdapter};
 
 #[derive(Debug)]
 pub enum CoreCommand {
     DetectHardware,
     DiscoverOllama,
+    InspectOllama { id: u64, model: String },
     EstimateFit(FitRequest),
 }
 
@@ -18,6 +19,10 @@ pub enum CoreCommand {
 pub enum UiEvent {
     OllamaDiscovered(Box<Discovery>),
     OllamaFailed(String),
+    OllamaInspected {
+        id: u64,
+        result: Result<Box<ModelInspection>, String>,
+    },
     HardwareDetected(Box<HardwareProfile>),
     HardwareFailed(String),
     FitFinished {
@@ -45,6 +50,26 @@ fn start_with_workers(
     probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
     fit: impl Fn(FitRequest) -> Result<FitReport, String> + Send + Sync + 'static,
 ) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
+    start_with_runtime_workers(
+        runtime,
+        probe,
+        fit,
+        || async { OllamaAdapter::new()?.discover().await },
+        |model| async move { OllamaAdapter::new()?.inspect_model(&model).await },
+    )
+}
+
+fn start_with_runtime_workers<D, I>(
+    runtime: &tokio::runtime::Handle,
+    probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
+    fit: impl Fn(FitRequest) -> Result<FitReport, String> + Send + Sync + 'static,
+    discover: impl Fn() -> D + Send + 'static,
+    inspect: impl Fn(String) -> I + Send + 'static,
+) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>)
+where
+    D: std::future::Future<Output = Result<Discovery, String>> + Send,
+    I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
+{
     let (commands, mut command_rx) = mpsc::channel(1);
     let (events, event_rx) = async_channel::bounded(1);
     let probe = Arc::new(probe);
@@ -82,13 +107,20 @@ fn start_with_workers(
                 CoreCommand::DiscoverOllama => {
                     let result = tokio::select! {
                         _ = events.closed() => break,
-                        result = async { OllamaAdapter::new()?.discover().await } => result,
+                        result = discover() => result,
                     };
                     let event = match result {
                         Ok(discovery) => UiEvent::OllamaDiscovered(Box::new(discovery)),
                         Err(message) => UiEvent::OllamaFailed(message),
                     };
                     if events.send(event).await.is_err() { break; }
+                }
+                CoreCommand::InspectOllama { id, model } => {
+                    let result = tokio::select! {
+                        _ = events.closed() => break,
+                        result = inspect(model) => result.map(Box::new),
+                    };
+                    if events.send(UiEvent::OllamaInspected { id, result }).await.is_err() { break; }
                 }
                 CoreCommand::EstimateFit(request) => {
                     let id = request.id;
@@ -359,5 +391,96 @@ mod tests {
         commands.try_send(fit_request(10)).unwrap();
         assert!(matches!(receive(&events).await,
             UiEvent::FitFinished { id: 10, result: Err(message) } if message.contains("Model inspection worker failed")));
+    }
+    #[tokio::test]
+    async fn preserves_partial_runtime_results_and_inspection_request_identity() {
+        let (commands, events) = start_with_runtime_workers(
+            &tokio::runtime::Handle::current(),
+            snapshot,
+            |_| Err("unused fit".into()),
+            || async {
+                Ok(Discovery {
+                    version: "fixture".into(),
+                    installed: Ok(vec![]),
+                    running: Err("fixture inventory failure".into()),
+                })
+            },
+            |model| async move {
+                if model == "missing" {
+                    return Err("fixture model removed".into());
+                }
+                assert_eq!(model, "chosen:latest");
+                Ok(ModelInspection {
+                    metadata: Err("fixture metadata failure".into()),
+                    running: Ok(vec![]),
+                })
+            },
+        );
+        commands.try_send(CoreCommand::DiscoverOllama).unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::OllamaDiscovered(snapshot) if snapshot.installed.is_ok() && snapshot.running.is_err()));
+        commands
+            .try_send(CoreCommand::InspectOllama {
+                id: 17,
+                model: "chosen:latest".into(),
+            })
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::OllamaInspected { id: 17, result: Ok(report) }
+                if report.metadata.is_err() && report.running.is_ok()));
+        commands
+            .try_send(CoreCommand::InspectOllama {
+                id: 18,
+                model: "missing".into(),
+            })
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::OllamaInspected { id: 18, result: Err(message) } if message == "fixture model removed"));
+        drop(commands);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), events.recv())
+                .await
+                .unwrap()
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_window_cancels_pending_discovery_and_model_inspection() {
+        for inspection in [false, true] {
+            let (started, mut started_rx) = mpsc::unbounded_channel();
+            let inspection_started = started.clone();
+            let (commands, events) = start_with_runtime_workers(
+                &tokio::runtime::Handle::current(),
+                snapshot,
+                |_| Err("unused fit".into()),
+                move || {
+                    started.send(()).unwrap();
+                    std::future::pending()
+                },
+                move |_| {
+                    inspection_started.send(()).unwrap();
+                    std::future::pending()
+                },
+            );
+            commands
+                .try_send(if inspection {
+                    CoreCommand::InspectOllama {
+                        id: 1,
+                        model: "fixture".into(),
+                    }
+                } else {
+                    CoreCommand::DiscoverOllama
+                })
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            events.close();
+            tokio::time::timeout(Duration::from_secs(2), commands.closed())
+                .await
+                .unwrap();
+        }
     }
 }
