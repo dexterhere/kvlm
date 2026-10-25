@@ -1583,6 +1583,7 @@ dependencies = [
 name = "workstation-bench"
 version = "0.1.0"
 dependencies = [
+ "tokio",
  "workstation-core",
  "workstation-runtimes",
 ]
