@@ -12,8 +12,9 @@ No integration branch is changed and no PR is merged by this work.
    digest reference support are blocked rather than retried with weaker requests.
 2. Refresh Runtimes to obtain installed models. No runtime request is automatic at
    app startup. This feature does not install Ollama or download models.
-3. Open Benchmarks and explicitly choose an installed model. Known cloud-routed and
-   duplicate-name entries are excluded; only the first 100 candidate choices appear.
+3. Open Benchmarks and explicitly choose an installed model. Entries with reported remote routing and
+   duplicate names are excluded; only the first 100 candidate choices appear.
+   Cloud-suffixed names without routing metadata are rejected by runtime preflight.
    A missing digest disables Run; malformed identity or missing local-only evidence
    is rejected by preflight before generation.
 4. Select Check and Run. This may load a model and allocate memory. One built-in
