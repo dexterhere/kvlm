@@ -6,10 +6,15 @@ your hardware can run, managing inference runtimes safely, and measuring perform
 **Status: development foundation.** The workspace and four-view application shell
 are in place, plus a supplied-metadata static memory-fit calculator and bounded
 local GGUF metadata inspection in core. This dependent branch also includes hardware
-discovery in Overview. Read-only attached-Ollama discovery is also carried from its unmerged PR.
+discovery in Overview. Read-only attached-Ollama discovery is also carried from its
+unmerged PR.
 Overview now includes local GGUF inspection and CPU scenario estimates with explicit
-assumptions and fresh RAM readings. Runtime compatibility, inference, downloads,
-database storage, and benchmarks remain unimplemented on this branch.
+assumptions and fresh RAM readings. Runtimes now supports selecting an installed
+Ollama model for read-only metadata
+inspection and fresh loaded-allocation readings. Declared defaults stay separate
+from loaded settings, and routing remains unverified when evidence is missing.
+Runtime compatibility, inference, downloads, database storage, and benchmarks remain
+unimplemented on this branch.
 This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 
@@ -54,7 +59,9 @@ The [GGUF fit scenario guide](docs/03-development/gguf-fit.md) connects those
 declarations to explicit settings and a supplied budget. It requires an explicit
 layout assumption for a breakdown and cannot return a positive fit classification.
 Use the [desktop CPU workflow](docs/03-development/desktop-cpu-fit.md) to select a
-local file and configure a scenario directly in Overview. No inference runs.
+local file and configure a scenario directly in Overview. Use the
+[Ollama inspection workflow](docs/03-development/ollama-inspection.md) to inspect an
+installed model in Runtimes. No inference runs.
 
 ```sh
 cargo fmt --all --check
