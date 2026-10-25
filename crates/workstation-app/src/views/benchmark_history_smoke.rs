@@ -36,6 +36,7 @@ fn history_load_retry_stale_save_and_outcome_flow() {
     let first_id = load_id(wait_command(&mut command_rx));
     let mut completed = entry(1, Some(RunOutcome::Completed(metrics())));
     completed.snapshot.model_name = "<b>literal-model</b>".repeat(80);
+    completed.completion.as_mut().unwrap().resources = Some(resource_fixture());
     history.receive(&UiEvent::BenchmarkHistoryLoaded {
         id: first_id,
         result: Ok(vec![
@@ -61,6 +62,11 @@ fn history_load_retry_stale_save_and_outcome_flow() {
         "Unfinished (running or interrupted)",
         "Server evaluation tokens",
         "Unknown",
+        "System RAM nonavailable (system-wide peak): 4096 bytes",
+        "GPU 1 (Fixture GPU) driver-reported VRAM peak: 2048 bytes · 4 samples",
+        "GTT peak (overlaps system RAM): 1024 bytes · 3 samples",
+        "lower-bound peaks",
+        "Memory sampling: Not sampled",
     ] {
         assert!(rendered.contains(expected), "missing {expected:?}");
     }
@@ -229,7 +235,30 @@ fn entry(id: i64, outcome: Option<RunOutcome>) -> HistoryEntry {
             runtime_version: Some("fixture-runtime".into()),
             model_digest: Some(format!("sha256:{id}")),
             outcome,
+            resources: None,
         }),
+    }
+}
+
+fn resource_fixture() -> workstation_core::hardware::resources::ResourceSummary {
+    use workstation_core::hardware::resources::{GpuMemoryPeak, ResourceSummary};
+    ResourceSummary {
+        interval_ms: 100,
+        window_ms: 1200,
+        samples: 12,
+        system_ram_samples: 10,
+        peak_system_ram_nonavailable_bytes: Some(4096),
+        gpus: vec![GpuMemoryPeak {
+            id: "gpu0".into(),
+            name: "Fixture GPU".into(),
+            vram_samples: 4,
+            peak_vram_used_bytes: Some(2048),
+            gtt_samples: 3,
+            peak_gtt_used_bytes: Some(1024),
+        }],
+        probe_failed: false,
+        probe_in_flight: false,
+        limit_reached: false,
     }
 }
 

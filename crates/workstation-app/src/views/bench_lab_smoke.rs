@@ -59,6 +59,7 @@ fn quick_benchmark_selection_cancel_and_completion_flow() {
             first_output_after: Some(Duration::from_millis(20)),
             response_chunks: 2,
         }),
+        resources: None,
     });
     assert!(label_text(panel.widget.upcast_ref()).contains("Partial response chunks"));
 
@@ -82,6 +83,7 @@ fn quick_benchmark_selection_cancel_and_completion_flow() {
             },
             generation_tokens_per_second: Some(64.0),
         }),
+        resources: Some(Box::new(resource_fixture())),
     });
     let labels = label_text(panel.widget.upcast_ref());
     assert!(labels.contains("Client first response text (includes model load)"));
@@ -89,6 +91,17 @@ fn quick_benchmark_selection_cancel_and_completion_flow() {
     assert!(labels.contains("64.00 tokens/s"));
     assert!(labels.contains("Server evaluation token count"));
     assert!(labels.contains("64"));
+    assert!(labels.contains("System RAM nonavailable (system-wide peak): 4096 bytes"));
+    assert!(
+        labels.contains("GPU 1 (Fixture GPU) driver-reported VRAM peak: 2048 bytes · 4 samples")
+    );
+    assert!(labels.contains("GTT peak (overlaps system RAM): 1024 bytes · 3 samples"));
+    assert!(labels.contains("lower-bound peaks"));
+    drain_layout();
+    assert!(
+        window.width() <= 360,
+        "memory results must fit narrow windows"
+    );
 
     panel.run.emit_clicked();
     let (stale_id, stale_cancel) = receive_run(&mut command_rx);
@@ -98,6 +111,7 @@ fn quick_benchmark_selection_cancel_and_completion_flow() {
     panel.receive(&UiEvent::BenchmarkFinished {
         id: stale_id,
         outcome: BenchmarkOutcome::Completed(report_fixture()),
+        resources: Some(Box::new(resource_fixture())),
     });
     assert!(!label_text(panel.widget.upcast_ref()).contains("Completed quick benchmark"));
     assert!(!panel.run.is_sensitive());
@@ -113,6 +127,7 @@ fn quick_benchmark_selection_cancel_and_completion_flow() {
     panel.receive(&UiEvent::BenchmarkFinished {
         id: inventory_id,
         outcome: BenchmarkOutcome::Completed(report_fixture()),
+        resources: None,
     });
     assert!(!label_text(panel.widget.upcast_ref()).contains("Completed quick benchmark"));
     panel.receive(&discovery());
@@ -164,6 +179,28 @@ fn report_fixture() -> QuickBenchmarkReport {
             done_reason: "stop".into(),
         },
         generation_tokens_per_second: None,
+    }
+}
+
+fn resource_fixture() -> workstation_core::hardware::resources::ResourceSummary {
+    use workstation_core::hardware::resources::{GpuMemoryPeak, ResourceSummary};
+    ResourceSummary {
+        interval_ms: 100,
+        window_ms: 1200,
+        samples: 12,
+        system_ram_samples: 10,
+        peak_system_ram_nonavailable_bytes: Some(4096),
+        gpus: vec![GpuMemoryPeak {
+            id: "gpu0".into(),
+            name: "Fixture GPU".into(),
+            vram_samples: 4,
+            peak_vram_used_bytes: Some(2048),
+            gtt_samples: 3,
+            peak_gtt_used_bytes: Some(1024),
+        }],
+        probe_failed: true,
+        probe_in_flight: false,
+        limit_reached: false,
     }
 }
 

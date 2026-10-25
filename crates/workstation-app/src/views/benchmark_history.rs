@@ -243,8 +243,12 @@ fn entry_row(entry: &HistoryEntry) -> adw::ExpanderRow {
     add_workload_details(&mut details, &snapshot.workload);
     if let Some(completion) = &entry.completion {
         add_completion_details(&mut details, completion);
+        details.extend(super::resource_summary::fields(
+            completion.resources.as_ref(),
+        ));
     } else {
         details.push(field("Completion", "Unfinished (running or interrupted)"));
+        details.extend(super::resource_summary::fields(None));
     }
     row.add_row(&detail("Snapshot and outcome", &details.join("\n")));
     row

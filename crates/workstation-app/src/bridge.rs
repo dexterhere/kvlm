@@ -9,7 +9,7 @@ use workstation_bench::{
     runner::BenchmarkOutcome,
 };
 use workstation_core::db::HistoryEntry;
-use workstation_core::hardware::HardwareProfile;
+use workstation_core::hardware::{HardwareProfile, resources::ResourceSummary};
 use workstation_runtimes::ollama::{
     Discovery, GenerationProgress, InstalledModel, ModelInspection, OllamaAdapter,
 };
@@ -46,6 +46,7 @@ pub enum UiEvent {
     BenchmarkFinished {
         id: u64,
         outcome: BenchmarkOutcome,
+        resources: Option<Box<ResourceSummary>>,
     },
     OllamaDiscovered(Box<Discovery>),
     OllamaFailed(String),
@@ -139,11 +140,11 @@ where
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
                 _ = events.closed() => break,
                 result = benchmark_jobs.join_next(), if !benchmark_jobs.is_empty() => {
-                    let PersistedRun { outcome, saved } = match result {
+                    let PersistedRun { outcome, saved, resources } = match result {
                         Some(Ok(result)) => result,
-                        _ => PersistedRun { outcome: BenchmarkOutcome::Failed { message: "Benchmark worker failed. Try again.".into(), partial: GenerationProgress::default() }, saved: Err("Benchmark worker stopped; reload history to inspect unfinished runs.".into()) },
+                        _ => PersistedRun { outcome: BenchmarkOutcome::Failed { message: "Benchmark worker failed. Try again.".into(), partial: GenerationProgress::default() }, saved: Err("Benchmark worker stopped; reload history to inspect unfinished runs.".into()), resources: None },
                     };
-                    if events.send(UiEvent::BenchmarkFinished { id: benchmark_id, outcome }).await.is_err() { break; }
+                    if events.send(UiEvent::BenchmarkFinished { id: benchmark_id, outcome, resources: resources.map(Box::new) }).await.is_err() { break; }
                     if events.send(UiEvent::BenchmarkHistorySaved { benchmark_id, result: saved }).await.is_err() { break; }
                     continue;
                 }
@@ -164,7 +165,7 @@ where
                         benchmark_jobs.spawn(run_benchmark(model, cancel));
                     } else {
                         let outcome = BenchmarkOutcome::Failed { message: "Another quick benchmark is still active. Retry after it finishes.".into(), partial: GenerationProgress::default() };
-                        if events.send(UiEvent::BenchmarkFinished { id, outcome }).await.is_err() { break; }
+                        if events.send(UiEvent::BenchmarkFinished { id, outcome, resources: None }).await.is_err() { break; }
                     }
                 }
                 CoreCommand::DetectHardware => {
@@ -596,6 +597,10 @@ mod tests {
                     PersistedRun {
                         outcome: future.await,
                         saved: Ok(1),
+                        resources: Some(ResourceSummary {
+                            samples: 2,
+                            ..ResourceSummary::default()
+                        }),
                     }
                 }
             },
@@ -636,7 +641,8 @@ mod tests {
             receive(&events).await,
             UiEvent::BenchmarkFinished {
                 id: 72,
-                outcome: BenchmarkOutcome::Failed { .. }
+                outcome: BenchmarkOutcome::Failed { .. },
+                ..
             }
         ));
         cancel.send(true).unwrap();
@@ -644,7 +650,8 @@ mod tests {
             receive(&events).await,
             UiEvent::BenchmarkFinished {
                 id: 71,
-                outcome: BenchmarkOutcome::Cancelled(_)
+                outcome: BenchmarkOutcome::Cancelled(_),
+                ..
             }
         ));
     }
@@ -672,7 +679,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             receive(&events).await,
-            UiEvent::BenchmarkFinished { id: 11, .. }
+            UiEvent::BenchmarkFinished { id: 11, resources: Some(readings), .. } if readings.samples == 2
         ));
         assert!(matches!(
             receive(&events).await,
@@ -696,7 +703,7 @@ mod tests {
                 })
                 .unwrap();
             assert!(
-                matches!(receive(&events).await, UiEvent::BenchmarkFinished { id: reply_id, outcome: BenchmarkOutcome::Failed { .. } } if reply_id == id)
+                matches!(receive(&events).await, UiEvent::BenchmarkFinished { id: reply_id, outcome: BenchmarkOutcome::Failed { .. }, .. } if reply_id == id)
             );
             assert!(
                 matches!(receive(&events).await, UiEvent::BenchmarkHistorySaved { benchmark_id, result: Err(_) } if benchmark_id == id)

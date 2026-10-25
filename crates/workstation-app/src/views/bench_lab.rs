@@ -179,11 +179,15 @@ impl Benchmarks {
             UiEvent::OllamaFailed(message) => {
                 self.inventory_failed(&format!("Ollama discovery failed: {message}"));
             }
-            UiEvent::BenchmarkFinished { id, outcome } => {
+            UiEvent::BenchmarkFinished {
+                id,
+                outcome,
+                resources,
+            } => {
                 finish_run(
                     &self.state,
                     *id,
-                    outcome,
+                    (outcome, resources.as_deref()),
                     &self.status,
                     &self.results,
                     &self.run,
@@ -415,7 +419,10 @@ fn cancel_run(state: &RefCell<RunState>, status: &gtk::Label, cancel: &gtk::Butt
 fn finish_run(
     state: &RefCell<RunState>,
     id: u64,
-    outcome: &BenchmarkOutcome,
+    outcome: (
+        &BenchmarkOutcome,
+        Option<&workstation_core::hardware::resources::ResourceSummary>,
+    ),
     status: &gtk::Label,
     results: &gtk::Box,
     run: &gtk::Button,
@@ -430,7 +437,7 @@ fn finish_run(
         (current, state.inventory_ready, state.selected.is_some())
     };
     if current {
-        render_outcome(results, status, outcome);
+        render_outcome(results, status, outcome.0, outcome.1);
     } else if inventory_ready && has_selection {
         status.set_text("Previous run finished. Select Check and Run to start again.");
     } else if inventory_ready {
@@ -451,7 +458,12 @@ fn take_matching_run(state: &mut RunState, id: u64) -> Option<bool> {
     Some(state.generation == id && state.selected.is_some())
 }
 
-fn render_outcome(results: &gtk::Box, status: &gtk::Label, outcome: &BenchmarkOutcome) {
+fn render_outcome(
+    results: &gtk::Box,
+    status: &gtk::Label,
+    outcome: &BenchmarkOutcome,
+    resources: Option<&workstation_core::hardware::resources::ResourceSummary>,
+) {
     clear_results(results);
     match outcome {
         BenchmarkOutcome::Completed(report) => {
@@ -474,12 +486,22 @@ fn render_outcome(results: &gtk::Box, status: &gtk::Label, outcome: &BenchmarkOu
             results.append(&group);
         }
     }
+    let group = adw::PreferencesGroup::builder()
+        .title("Observed memory peaks")
+        .description(
+            "System/device-wide readings; they do not identify an inference process footprint.",
+        )
+        .build();
+    for field in super::resource_summary::fields(resources) {
+        group.add(&row("Memory", &field));
+    }
+    results.append(&group);
 }
 
 fn completed_group(report: &QuickBenchmarkReport) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
         .title("Completed quick benchmark")
-        .description("One request; no warm-up, resource sampling, or repeated-run verification.")
+        .description("One request; no warm-up or repeated-run verification.")
         .build();
     let generation = &report.generation;
     group.add(&row("Workload", report.workload_id));
@@ -574,13 +596,13 @@ fn clear_results(results: &gtk::Box) {
 }
 
 fn row(title: &str, subtitle: &str) -> adw::ActionRow {
-    adw::ActionRow::builder()
-        .title(display_text(title))
-        .subtitle(display_text(subtitle))
-        .use_markup(false)
-        .title_lines(0)
-        .subtitle_lines(0)
-        .build()
+    let row = adw::ActionRow::new();
+    row.set_use_markup(false);
+    row.set_title(&display_text(title));
+    row.set_subtitle(&display_text(subtitle));
+    row.set_title_lines(0);
+    row.set_subtitle_lines(0);
+    row
 }
 
 fn display_text(text: &str) -> String {
