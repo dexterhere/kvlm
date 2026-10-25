@@ -1,6 +1,10 @@
 # Attached Ollama discovery validation
 
-Date: 2026-10-24. Scope: M0 Step 3, read-only discovery on `codex/ollama-discovery`.
+Date: 2026-10-24. Historical validation for M0 Step 3 on `codex/ollama-discovery`.
+For the current combined branch, follow [the inspection guide](ollama-inspection.md).
+It carries hardware and fit prerequisites and uses manual Refresh instead of startup
+HTTP discovery. The counts and branch-integration notes below describe the original
+PR #2 evidence, not the current combined branch.
 
 ## Implemented behavior
 
