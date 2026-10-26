@@ -622,6 +622,16 @@ ON benchmark_runs(artifact_id, hardware_profile_hash);
 4. [ ] **Step 4 — Static Memory Fit Calculator:** Implement the 4-part memory formula ($M_{\text{weights}} + M_{\text{KV}} + M_{\text{buffers}} + M_{\text{overhead}}$) and `llmfit` evaluation in `workstation-core::fit`. Display `Comfortable` / `Constrained` / `Not Recommended` badges with memory breakdown tooltips.
 5. [ ] **Step 5 — Vertical Slice Benchmark & SQLite Persistence:** Implement a single-button "Run Quick Benchmark" on any installed Ollama model, stream tokens, compute TTFT and Decode $t/s$, sample VRAM via NVML/sysfs, save to `~/.local/share/local-ai-workstation/workstation.db`, and display the `Benchmark Verified` badge on restart.
 
+**Implementation evidence (2026-10-26):** The five feature areas now have code and
+reference checks, including Qwen2/CUDA conditional memory classes and an exact
+manifest/hardware `Benchmark Verified` indicator restored in a separate process.
+See [M0 acceptance](../03-development/m0-acceptance.md),
+[decision 0012](../05-decisions/0012-qwen2-gpu-fit.md), and
+[decision 0013](../05-decisions/0013-benchmark-verification.md). The measured Qwen
+result is Constrained at 8K and Not recommended at 32K under current full-residence
+budgets. The native session was Hyprland. The original definition below remains a
+sign-off target; these observations do not silently replace it.
+
 **M0 Definition of Done:**
 - `cargo test --workspace` passes all unit tests for memory fit calculations and mock Ollama HTTP responses.
 - Launching `local-ai-workstation` on the reference machine (e.g., Linux + RTX 4050 6GB VRAM + 16GB RAM) accurately reports total/free VRAM, detects a running Ollama instance, explains why a 7B Q4_K_M model fits comfortably at 8K context but becomes constrained at 32K context, runs a live inference benchmark, and persists the result across app restarts.

@@ -3,57 +3,41 @@
 The [master specification](../01-product/gnome_local_ai_workstation_master_specification.md#10-versioned-delivery-roadmap--milestone-acceptance-criteria)
 owns the detailed acceptance criteria. This page tracks actual status.
 
-## Current status: foundation, M0 incomplete
+## Current status: M0 implementation present, acceptance open
 
-- [x] Bounded local GGUF v3 metadata and tensor-directory inspection in core.
-- [x] GGUF-to-calculator scenario adapter with explicit settings and unverified compatibility.
-- [x] Overview CPU scenario form with local-file inspection, fresh RAM, and stale-reply protection.
-- [x] Four-crate Cargo workspace and documented module ownership.
-- [x] Minimal GNOME shell, four navigation views, Tokio/GLib bridge.
-- [x] Native build foundation, desktop metadata, community docs, and validation checks.
-- [x] Hardware detection for CPU/RAM, NVIDIA NVML, AMD VRAM/GTT (carried from PR #1).
-- [x] Attached Ollama discovery, model listing, and loaded-memory inspection (carried from PR #2).
-- [x] Installed-model selection with read-only declarations and fresh loaded readings.
-- [ ] Validated memory-fit calculations and architecture metadata integration.
-- [x] Pure supplied-metadata calculator, placement policy, offline example, and tests.
-- [x] One explicit streaming Quick Benchmark with local-only checks, client/server timing, and cancellation.
-- [x] Immutable SQLite run snapshots, terminal outcomes, and bounded restart history.
-- [x] Bounded system/device RAM, VRAM, and GTT observations with persisted peaks and coverage.
-- [ ] Process attribution, GPU utilization, and real-hardware sampling calibration.
-- [ ] Persisted empirical badge after restart.
-- [ ] Full M0 unit, mocked HTTP, and real-hardware acceptance evidence.
+- [x] Four-crate workspace, native application shell, and Tokio/GLib bridge.
+- [x] CPU/RAM, NVIDIA NVML, and AMD sysfs hardware discovery.
+- [x] Attached Ollama discovery, installed-model inspection, and loaded allocations.
+- [x] Four-part memory calculator, scoped LLaMA/Qwen2 GGUF metadata, and conditional
+  CPU/CUDA scenario classes with fresh memory budgets and breakdown tooltips.
+- [x] One explicit local-only streaming Quick Benchmark with cancellation and memory observations.
+- [x] Immutable SQLite history and exact manifest/hardware verification after restart.
+- [x] Normal unit/mock HTTP checks and real NVIDIA Qwen GTK workflow evidence.
+- [ ] Native GNOME-session acceptance and review of the reference fit criterion.
 
-The shell does not fulfill the M0 vertical slice. Do not mark the specification's
-M0 checklist complete until the behavior is implemented and verified.
+The [acceptance record](../03-development/m0-acceptance.md) owns measured results.
+The reference Qwen model produced Constrained at 8K and Not recommended at 32K for
+additional full CUDA residence, rather than the original illustrative classifications.
+The implementation must preserve those measured inputs and conservative policy;
+it must not hardcode the specification's example labels. The actual desktop session
+was Hyprland, with no GNOME session available. Strict M0 sign-off remains open.
 
-## Next feature
+## Integration and next gate
 
-This dependent branch carries [PR #9](https://github.com/dexterhere/kvlm/pull/9),
-including prerequisites #1 through #8. All remain unmerged.
-The [desktop CPU workflow](../03-development/desktop-cpu-fit.md) and
-[Ollama model inspection](../03-development/ollama-inspection.md) now coexist.
-Inspection keeps declared defaults separate from fresh loaded context and allocation;
-it does not prove local execution, artifact identity, or runtime compatibility.
-The [Quick Benchmark](../03-development/quick-benchmark.md) now requires affirmative
-cloud-disable status and immutable local digest references before one explicit request.
-It records client first-response latency and independent server decode metrics, with
-partial failure/cancellation outcomes and no empirical verification badge.
-The [history workflow](../03-development/benchmark-history.md) now persists immutable
-requested model/hardware/workload snapshots and all outcomes across storage reopen.
-The [memory sampling workflow](../03-development/benchmark-memory-sampling.md) now
-records bounded system/device observations with coverage counts. It does not
-attribute memory to an inference process or certify true allocation peaks.
-Next: real-model restart/hardware acceptance and a defensible artifact/hardware
-matching contract for empirical verification; process attribution and calibration
-remain open. Actual K/V types,
-concurrency, micro-batch settings, layout evidence, and allocation calibration remain
-open. M0 is incomplete.
+`feat/m0-fit-verification` starts from `develop` and carries the still-open GGUF fix
+from [PR #14](https://github.com/dexterhere/kvlm/pull/14). No prerequisite or new PR is
+merged automatically. Continue feature PR review through `develop → staging → main`.
+
+Complete GNOME-session acceptance and resolve the reference criterion before declaring
+M0 done. Process attribution, GPU utilization, controlled cold/warm comparisons, and
+additional hardware matrices remain later milestone work. Do not equate static memory
+policy, a saved successful request, and verified runtime settings.
 
 ## Delivery order
 
 | Milestone | Outcome | Status |
 | --- | --- | --- |
-| M0 | Hardware → attached Ollama → static fit → quick benchmark → persisted verification | Core estimate and open feature PRs; integration pending |
+| M0 | Hardware → attached Ollama → static fit → quick benchmark → persisted verification | Feature implementation and reference CUDA checks present; final acceptance open |
 | M1 | Live model catalog, normalized artifacts, resumable downloads, deduplication, Secret Service | Planned |
 | M2 | Managed portable llama.cpp, lifecycle/logs, ownership guards, developer exports | Planned |
 | M3 | Controlled A/B benchmarks, cold/warm separation, sampling, diagnostics | Planned |

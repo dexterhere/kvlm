@@ -3,22 +3,19 @@
 A community-built GNOME desktop application for understanding what local AI models
 your hardware can run, managing inference runtimes safely, and measuring performance.
 
-**Status: development foundation.** The workspace and four-view application shell
-are in place, plus a supplied-metadata static memory-fit calculator and bounded
-local GGUF metadata inspection in core. This dependent branch also includes hardware
-discovery in Overview. Read-only attached-Ollama discovery is also carried from its
-unmerged PR.
-Overview now includes local GGUF inspection and CPU scenario estimates with explicit
-assumptions and fresh RAM readings. Runtimes now supports selecting an installed
-Ollama model for read-only metadata
-inspection and fresh loaded-allocation readings. Declared defaults stay separate
-from loaded settings, and routing remains unverified when evidence is missing.
-Benchmark Lab now runs one explicitly requested Ollama text benchmark after
-execution-time local-only checks, with cancellation and separate client/server
-measurements. SQLite history now preserves run snapshots and outcomes across
-restarts. Background sampling now records observed system RAM and per-device
-VRAM/GTT peaks with explicit coverage limits. Verified runtime fit, downloads,
-process memory attribution, and empirical badge verification remain unimplemented.
+**Status: M0 features implemented; final acceptance open.** The four-crate GNOME
+application provides hardware discovery, attached-Ollama discovery and inspection,
+conditional CPU/CUDA memory estimates for local LLaMA/Qwen2 GGUFs, a local-only
+Quick Benchmark, SQLite history, and a saved `Benchmark Verified` indicator for an
+exact Ollama manifest and hardware configuration. Real Qwen CUDA inference and
+verification after a separate-process restart passed. See the
+[M0 acceptance record](docs/03-development/m0-acceptance.md) for measurements and limits.
+
+Fit estimates remain conditional on the supplied scenario and attention-layout
+assumption. A saved benchmark proves a prior request, not every future context or
+placement. Downloads, managed runtimes, process attribution, and controlled benchmark
+comparisons remain later milestones. Native GTK checks ran on Hyprland; the stricter
+GNOME-session acceptance and reference-fit criterion remain open.
 This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 

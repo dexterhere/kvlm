@@ -32,7 +32,8 @@ file-level quantization labels do not determine every tensor's type.
   Do not coerce even spec-valid `u64` declarations into `u32`.
   Missing fields remain `None`; do not derive values from tensor shapes or names,
   apply implicit defaults, or infer metadata from filenames.
-- Populate the LLaMA-specific record only for exact `general.architecture=llama`.
+- Populate architecture-scoped attention declarations only for exact supported
+  identifiers (`llama` and, under [0012](0012-qwen2-gpu-fit.md), `qwen2`).
   Keep other architecture identifiers as raw optional strings.
 - Treat layout warnings as indicators for follow-up only. Presence can block a
   future narrow fit path; absence does not prove dense full attention, causal

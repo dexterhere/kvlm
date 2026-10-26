@@ -15,6 +15,8 @@ routine implementation details in code or the relevant development document.
 - [0009: Quick Benchmark](0009-quick-benchmark.md) — local-only execution, streaming, and outcomes.
 - [0010: Benchmark history](0010-benchmark-history.md) — immutable SQLite snapshots and restart recovery.
 - [0011: Memory sampling](0011-benchmark-memory-sampling.md) — bounded system/device observations and legacy history compatibility.
+- [0012: Qwen2 and GPU fit](0012-qwen2-gpu-fit.md) — scoped metadata and conditional memory classes.
+- [0013: Benchmark verification](0013-benchmark-verification.md) — exact saved-run and hardware identity.
 - [Open questions](open-questions.md) — unresolved specification details, not decisions.
 
 When a decision changes the master specification, explicitly update the relevant
