@@ -15,7 +15,7 @@ pub mod record;
 use crate::llamacpp::install::prepare_root;
 use log::LogBuffer;
 use reqwest::Client;
-use rustix::process::{Pid, Signal, kill_process_group};
+use rustix::process::{Pid, Signal, WaitIdOptions, kill_process_group, waitid};
 use std::{
     fs::{self, File},
     net::TcpListener,
@@ -159,6 +159,8 @@ pub enum SupervisorError {
     Refused(FailureKind),
     /// The supervisor task has ended.
     Gone,
+    /// Another application instance already supervises the runtime.
+    Busy,
 }
 
 impl std::fmt::Display for SupervisorError {
@@ -167,6 +169,7 @@ impl std::fmt::Display for SupervisorError {
             Self::AlreadyRunning => f.write_str("A llama-server is already running."),
             Self::Refused(kind) => f.write_str(kind.describe()),
             Self::Gone => f.write_str("The runtime supervisor is not running."),
+            Self::Busy => f.write_str("Another instance of the application manages the runtime."),
         }
     }
 }
@@ -184,21 +187,46 @@ pub struct Supervisor {
     status: watch::Receiver<Status>,
     logs: LogBuffer,
     task: Option<JoinHandle<()>>,
+    lock: std::sync::Arc<record::ProcessLock>,
+    record_path: PathBuf,
 }
 
 impl Supervisor {
-    /// `record_path` is the private file kept while a child runs (see `record`).
-    pub fn spawn(record_path: PathBuf) -> Self {
+    /// `record_path` is the private file kept while a child runs (see `record`). Fails with
+    /// `Busy` when another instance holds it. Call `reclaim_orphan` before the first start.
+    pub fn spawn(record_path: PathBuf) -> Result<Self, SupervisorError> {
+        let lock = record::ProcessLock::acquire(&record_path).ok_or(SupervisorError::Busy)?;
+        let lock = std::sync::Arc::new(lock);
         let (tx, rx) = mpsc::channel(8);
         let (status_tx, status) = watch::channel(Status::stopped());
         let logs = LogBuffer::default();
-        let task = tokio::spawn(actor(rx, status_tx, logs.clone(), record_path));
-        Self {
+        let task = tokio::spawn(actor(
+            rx,
+            status_tx,
+            logs.clone(),
+            record_path.clone(),
+            std::sync::Arc::clone(&lock),
+        ));
+        Ok(Self {
             tx,
             status,
             logs,
             task: Some(task),
-        }
+            lock,
+            record_path,
+        })
+    }
+
+    /// Terminate a recorded orphan left by a crashed run of the application, when provably
+    /// ours (see `record::reclaim`). Call once, before the first start.
+    pub async fn reclaim_orphan(&self, install_root: &Path) -> record::Reclaim {
+        record::reclaim(
+            &self.lock,
+            &self.record_path,
+            install_root,
+            DEFAULT_STOP_GRACE,
+        )
+        .await
     }
 
     pub fn status(&self) -> Status {
@@ -264,6 +292,20 @@ struct Run {
     probe: Option<JoinHandle<()>>,
     pumps: Vec<JoinHandle<()>>,
     next_probe: Instant,
+    /// A stop could not reap the child. It stays owned (and recorded) until it exits.
+    stuck: bool,
+}
+
+/// Exited but not yet reaped: the leader stays a zombie, which keeps its pid and process
+/// group number from being reused while the group is cleaned up.
+fn exited(pid: Pid) -> bool {
+    matches!(
+        waitid(
+            rustix::process::WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT
+        ),
+        Ok(Some(_))
+    )
 }
 
 enum Health {
@@ -273,6 +315,7 @@ enum Health {
 }
 
 struct State {
+    _lock: std::sync::Arc<record::ProcessLock>,
     status_tx: watch::Sender<Status>,
     logs: LogBuffer,
     record_path: PathBuf,
@@ -326,6 +369,7 @@ async fn actor(
     status_tx: watch::Sender<Status>,
     logs: LogBuffer,
     record_path: PathBuf,
+    lock: std::sync::Arc<record::ProcessLock>,
 ) {
     let client = Client::builder()
         .no_proxy()
@@ -334,6 +378,7 @@ async fn actor(
         .build()
         .expect("static client configuration");
     let mut state = State {
+        _lock: lock,
         status_tx,
         logs,
         record_path,
@@ -345,10 +390,9 @@ async fn actor(
     };
     let (probe_tx, mut probe_rx) = mpsc::channel::<(String, Health)>(1);
     loop {
-        let next_probe = state.run.as_ref().map(|r| r.next_probe);
-        let deadline = state
-            .run
-            .as_ref()
+        let live = state.run.as_ref().filter(|r| !r.stuck);
+        let next_probe = live.map(|r| r.next_probe);
+        let deadline = live
             .filter(|r| !r.ready)
             .map(|r| r.started + r.spec.start_timeout);
         tokio::select! {
@@ -358,9 +402,7 @@ async fn actor(
                     break;
                 }
                 Some(Cmd::Start(spec, reply)) => {
-                    state.restarts.clear();
-                    state.status_tx.send_modify(|s| s.restarts = 0);
-                    let _ = reply.send(start(&mut state, *spec).await);
+                    let _ = reply.send(start(&mut state, *spec, true).await);
                 }
                 Some(Cmd::Stop(reply)) => {
                     state.restart_at = None;
@@ -372,28 +414,27 @@ async fn actor(
                     let spec = state.last_spec.clone();
                     stop_run(&mut state).await;
                     let result = match spec {
-                        Some(spec) => start(&mut state, spec).await,
+                        Some(spec) => start(&mut state, spec, true).await,
                         None => Err(SupervisorError::Refused(FailureKind::InvalidProfile)),
                     };
                     let _ = reply.send(result);
                 }
             },
-            status = wait_child(&mut state.run) => {
-                let code = status.ok().and_then(|s| s.code());
-                on_exit(&mut state, code).await;
-            }
+            () = wait_child(&state.run) => on_exit(&mut state).await,
             Some((alias, health)) = probe_rx.recv() => on_probe(&mut state, alias, health).await,
             () = sleep_until_opt(next_probe), if next_probe.is_some() => {
                 schedule_probe(&mut state, &probe_tx);
             }
             () = sleep_until_opt(deadline), if deadline.is_some() => {
                 stop_run(&mut state).await;
-                state.fail(FailureKind::StartTimeout, None);
+                if state.run.is_none() {
+                    state.fail(FailureKind::StartTimeout, None);
+                }
             }
             () = sleep_until_opt(state.restart_at), if state.restart_at.is_some() => {
                 state.restart_at = None;
                 if let Some(spec) = state.last_spec.clone() {
-                    let _ = start(&mut state, spec).await;
+                    let _ = start(&mut state, spec, false).await;
                 }
             }
         }
@@ -407,17 +448,49 @@ async fn sleep_until_opt(at: Option<Instant>) {
     }
 }
 
-async fn wait_child(run: &mut Option<Run>) -> std::io::Result<std::process::ExitStatus> {
-    match run {
-        Some(run) => run.child.wait().await,
-        None => std::future::pending().await,
+/// Resolves when the current child has exited (not yet reaped). Polled, because reaping
+/// before the group is cleaned up would free its pid for reuse.
+async fn wait_child(run: &Option<Run>) {
+    let Some(run) = run else {
+        return std::future::pending().await;
+    };
+    while !exited(run.pid) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-/// Validate, pre-flight and spawn. On success the state is `Starting`.
-async fn start(state: &mut State, spec: StartSpec) -> Result<(), SupervisorError> {
+/// Everything that touches the filesystem before a spawn; runs on a blocking thread.
+fn preflight(
+    spec: &StartSpec,
+    alias: &str,
+) -> Result<(PathBuf, PathBuf, Vec<String>, u16), FailureKind> {
+    let mut profile = spec.profile.clone();
+    // The model must be a readable regular file; the child gets its resolved path.
+    match fs::canonicalize(&profile.model_path) {
+        Ok(path) if path.is_file() && File::open(&path).is_ok() => {
+            profile.model_path = path.to_string_lossy().into_owned();
+        }
+        _ => return Err(FailureKind::ModelUnreadable),
+    }
+    let args = profile
+        .arguments(alias)
+        .map_err(|_| FailureKind::InvalidProfile)?;
+    let (program, dir) =
+        resolve_program(&spec.install_root, &spec.dir_name).ok_or(FailureKind::BinaryMissing)?;
+    // A conflict is reported, never resolved by signalling whatever holds the port.
+    TcpListener::bind((profile::LOOPBACK, profile.port)).map_err(|_| FailureKind::PortInUse)?;
+    Ok((program, dir, args, profile.port))
+}
+
+/// Validate, pre-flight and spawn. On success the state is `Starting`. An explicit start
+/// (from the user) also resets the automatic-restart budget; a rejected one changes nothing.
+async fn start(state: &mut State, spec: StartSpec, explicit: bool) -> Result<(), SupervisorError> {
     if state.run.is_some() {
         return Err(SupervisorError::AlreadyRunning);
+    }
+    if explicit {
+        state.restarts.clear();
+        state.status_tx.send_modify(|s| s.restarts = 0);
     }
     state.last_spec = Some(spec.clone());
     state.restart_at = None;
@@ -426,29 +499,18 @@ async fn start(state: &mut State, spec: StartSpec) -> Result<(), SupervisorError
         state.fail(kind, None);
         Err(SupervisorError::Refused(kind))
     };
-    let alias = match random_hex(8) {
-        Ok(alias) => alias,
+    let Ok(alias) = random_hex(8) else {
+        return refuse(state, FailureKind::SpawnFailed);
+    };
+    let checked = {
+        let (spec, alias) = (spec.clone(), alias.clone());
+        tokio::task::spawn_blocking(move || preflight(&spec, &alias)).await
+    };
+    let (program, dir, args, port) = match checked {
+        Ok(Ok(ok)) => ok,
+        Ok(Err(kind)) => return refuse(state, kind),
         Err(_) => return refuse(state, FailureKind::SpawnFailed),
     };
-    let mut profile = spec.profile.clone();
-    // The model must be a readable regular file; the child gets its resolved path.
-    match fs::canonicalize(&profile.model_path) {
-        Ok(path) if path.is_file() && File::open(&path).is_ok() => {
-            profile.model_path = path.to_string_lossy().into_owned();
-        }
-        _ => return refuse(state, FailureKind::ModelUnreadable),
-    }
-    let args = match profile.arguments(&alias) {
-        Ok(args) => args,
-        Err(_) => return refuse(state, FailureKind::InvalidProfile),
-    };
-    let Some((program, dir)) = resolve_program(&spec.install_root, &spec.dir_name) else {
-        return refuse(state, FailureKind::BinaryMissing);
-    };
-    // A conflict is reported, never resolved by signalling whatever holds the port.
-    if TcpListener::bind((profile::LOOPBACK, profile.port)).is_err() {
-        return refuse(state, FailureKind::PortInUse);
-    }
     let mut command = Command::new(&program);
     command
         .args(&args)
@@ -465,9 +527,8 @@ async fn start(state: &mut State, spec: StartSpec) -> Result<(), SupervisorError
             command.env(name, value);
         }
     }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(_) => return refuse(state, FailureKind::SpawnFailed),
+    let Ok(mut child) = command.spawn() else {
+        return refuse(state, FailureKind::SpawnFailed);
     };
     let Some(raw) = child.id() else {
         return refuse(state, FailureKind::SpawnFailed);
@@ -483,22 +544,11 @@ async fn start(state: &mut State, spec: StartSpec) -> Result<(), SupervisorError
     if let Some(err) = child.stderr.take() {
         pumps.push(tokio::spawn(log::pump(err, state.logs.clone(), true)));
     }
-    if let Some(ticks) = record::start_ticks(raw) {
-        let _ = record::write(
-            &state.record_path,
-            &record::Record {
-                pid: raw,
-                start_ticks: ticks,
-                exe: program.clone(),
-                generation: alias.clone(),
-            },
-        );
-    }
-    state.run = Some(Run {
+    let mut run = Run {
         child,
         pid,
-        alias,
-        port: profile.port,
+        alias: alias.clone(),
+        port,
         spec,
         started: Instant::now(),
         ready: false,
@@ -506,9 +556,47 @@ async fn start(state: &mut State, spec: StartSpec) -> Result<(), SupervisorError
         probe: None,
         pumps,
         next_probe: Instant::now() + STARTING_POLL,
-    });
+        stuck: false,
+    };
+    // Recovery depends on this record: without it the child is torn down rather than left
+    // running where a crash of the application could orphan it. A child that is already gone
+    // has no start time to record and needs none.
+    if let Some(ticks) = record::start_ticks(raw) {
+        let (path, record) = (
+            state.record_path.clone(),
+            record::Record {
+                pid: raw,
+                start_ticks: ticks,
+                exe: program,
+                generation: alias,
+            },
+        );
+        let saved = tokio::task::spawn_blocking(move || record::write(&path, &record)).await;
+        if !matches!(saved, Ok(Ok(()))) {
+            teardown(&mut run).await;
+            finish(&mut run, &state.record_path).await;
+            return refuse(state, FailureKind::SpawnFailed);
+        }
+    }
+    state.run = Some(run);
     state.publish(RuntimeLifecycleState::Starting, None);
     Ok(())
+}
+
+/// TERM the group, wait out the grace period, then KILL it whatever the leader did, and
+/// reap. The leader is only reaped at the end, so its pid and group stay ours throughout.
+/// Returns false when the child could not be reaped.
+async fn teardown(run: &mut Run) -> bool {
+    let _ = kill_process_group(run.pid, Signal::TERM);
+    let deadline = Instant::now() + run.spec.stop_grace;
+    while !exited(run.pid) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    // Descendants that ignored TERM die here even if the leader already left.
+    let _ = kill_process_group(run.pid, Signal::KILL);
+    tokio::time::timeout(REAP_TIMEOUT, run.child.wait())
+        .await
+        .is_ok()
 }
 
 /// `llama-server` inside a build directory this application published: real directory,
@@ -591,6 +679,9 @@ async fn on_probe(state: &mut State, alias: String, health: Health) {
     }
     match health {
         Health::Ready => {
+            if exited(run.pid) {
+                return; // on_exit follows; a dead child is never Ready
+            }
             run.failed_probes = 0;
             if !run.ready {
                 run.ready = true;
@@ -602,18 +693,29 @@ async fn on_probe(state: &mut State, alias: String, health: Health) {
             run.failed_probes += 1;
             if run.ready && run.failed_probes >= UNRESPONSIVE_AFTER {
                 stop_run(state).await;
-                state.fail(FailureKind::Unresponsive, None);
+                if state.run.is_none() {
+                    state.fail(FailureKind::Unresponsive, None);
+                }
             }
         }
     }
 }
 
-async fn on_exit(state: &mut State, code: Option<i32>) {
+async fn on_exit(state: &mut State) {
     let Some(mut run) = state.run.take() else {
         return;
     };
-    let was_ready = run.ready;
+    // Clean up anything the leader left behind, then reap; the leader's pid is still ours.
+    let _ = kill_process_group(run.pid, Signal::KILL);
+    let status = tokio::time::timeout(REAP_TIMEOUT, run.child.wait()).await;
+    let code = status.ok().and_then(|s| s.ok()).and_then(|s| s.code());
+    let (was_ready, was_stuck) = (run.ready, run.stuck);
     finish(&mut run, &state.record_path).await;
+    if was_stuck {
+        // The user asked for this stop; it has now completed.
+        state.publish(RuntimeLifecycleState::Stopped, None);
+        return;
+    }
     let kind = if was_ready {
         FailureKind::Crashed
     } else {
@@ -636,8 +738,8 @@ async fn on_exit(state: &mut State, code: Option<i32>) {
     }
 }
 
-/// Stop the current child, if any: SIGTERM to its group, SIGKILL after the grace period,
-/// always reaped. Ends in `Stopped`, or `Failed` when the child cannot be reaped.
+/// Stop the current child, if any. Ends in `Stopped`, or in `Failed(StuckOnStop)` with the
+/// child still owned and recorded when it cannot be reaped; a later stop retries.
 async fn stop_run(state: &mut State) {
     if state.run.is_none() {
         if state.status_tx.borrow().state != RuntimeLifecycleState::Failed {
@@ -647,23 +749,18 @@ async fn stop_run(state: &mut State) {
     }
     state.publish(RuntimeLifecycleState::Stopping, None);
     let mut run = state.run.take().expect("checked above");
-    // The child has not been reaped, so its pid (and group) cannot have been reused.
-    let _ = kill_process_group(run.pid, Signal::TERM);
-    let exited = tokio::time::timeout(run.spec.stop_grace, run.child.wait())
-        .await
-        .is_ok();
-    let mut stuck = false;
-    if !exited {
-        let _ = kill_process_group(run.pid, Signal::KILL);
-        stuck = tokio::time::timeout(REAP_TIMEOUT, run.child.wait())
-            .await
-            .is_err();
+    if run.probe.is_some() {
+        if let Some(probe) = run.probe.take() {
+            probe.abort();
+        }
     }
-    finish(&mut run, &state.record_path).await;
-    if stuck {
-        state.fail(FailureKind::StuckOnStop, None);
-    } else {
+    if teardown(&mut run).await {
+        finish(&mut run, &state.record_path).await;
         state.publish(RuntimeLifecycleState::Stopped, None);
+    } else {
+        run.stuck = true;
+        state.run = Some(run);
+        state.fail(FailureKind::StuckOnStop, None);
     }
 }
 

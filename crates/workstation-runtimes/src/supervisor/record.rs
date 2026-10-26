@@ -6,10 +6,10 @@
 //! start time is the recorded one, its executable is the recorded path inside the install
 //! root, and it leads its own process group. Anything less is left alone.
 
-use rustix::process::{Pid, Signal, getpgid, kill_process_group, test_kill_process};
+use rustix::process::{Pid, PidfdFlags, Signal, getpgid, pidfd_open, pidfd_send_signal};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
@@ -28,18 +28,56 @@ pub struct Record {
     pub generation: String,
 }
 
-/// Start time of `pid`, or `None` when it does not exist.
-pub fn start_ticks(pid: u32) -> Option<u64> {
+/// State letter and start time of `pid` from `/proc/<pid>/stat`, or `None` when it does not exist.
+fn proc_stat(pid: u32) -> Option<(char, u64)> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // The command name is in parentheses and may contain spaces; fields follow the last ')'.
-    let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(19)?.parse().ok()
+    let mut fields = stat[stat.rfind(')')? + 1..].split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    Some((state, fields.nth(18)?.parse().ok()?))
+}
+
+/// Start time of `pid` (clock ticks since boot), or `None` when it does not exist.
+pub fn start_ticks(pid: u32) -> Option<u64> {
+    proc_stat(pid).map(|(_, ticks)| ticks)
+}
+
+/// Exclusive hold on the record for the life of one supervisor, so two application
+/// instances can neither overwrite each other's record nor reclaim each other's runtime.
+pub struct ProcessLock {
+    _file: File,
+}
+
+impl ProcessLock {
+    pub fn acquire(record_path: &Path) -> Option<Self> {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .open(record_path.with_extension("lock"))
+            .ok()?;
+        // A concurrent fork in this process shares the open file description until its exec
+        // closes it, so a few short retries ride that out; a real holder still reads as busy.
+        for attempt in 0..5 {
+            if rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+                .is_ok()
+            {
+                return Some(Self { _file: file });
+            }
+            if attempt < 4 {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        None
+    }
 }
 
 pub fn write(path: &Path, record: &Record) -> std::io::Result<()> {
     let json = serde_json::to_vec(record).map_err(std::io::Error::other)?;
     let tmp = path.with_extension("tmp");
-    let _ = fs::remove_file(&tmp);
+    let _ = fs::remove_file(&tmp); // a leftover from a crash; the process lock makes us the only writer
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -51,11 +89,15 @@ pub fn write(path: &Path, record: &Record) -> std::io::Result<()> {
 }
 
 pub fn read(path: &Path) -> Option<Record> {
+    // NONBLOCK so a FIFO planted at this name cannot hang the open; only a regular file is read.
     let file = OpenOptions::new()
         .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32)
         .open(path)
         .ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
     let mut text = String::new();
     file.take(MAX_RECORD).read_to_string(&mut text).ok()?;
     serde_json::from_str(&text).ok()
@@ -83,7 +125,17 @@ fn pid_of(raw: u32) -> Option<Pid> {
 }
 
 /// Terminate a recorded orphan from an earlier run of the application, if provably ours.
-pub async fn reclaim(path: &Path, install_root: &Path, grace: Duration) -> Reclaim {
+/// Needs the process lock, so it cannot race another instance's supervisor.
+///
+/// The process is held by a pidfd from before the identity checks to the last signal, so a
+/// pid reused in between can never be signalled. Only the recorded leader is signalled; the
+/// runtime is a single process.
+pub async fn reclaim(
+    _lock: &ProcessLock,
+    path: &Path,
+    install_root: &Path,
+    grace: Duration,
+) -> Reclaim {
     let Some(record) = read(path) else {
         remove(path);
         return Reclaim::Nothing;
@@ -92,14 +144,19 @@ pub async fn reclaim(path: &Path, install_root: &Path, grace: Duration) -> Recla
         remove(path);
         return Reclaim::Nothing;
     };
-    if test_kill_process(pid).is_err() && start_ticks(record.pid).is_none() {
-        remove(path);
+    let Ok(pidfd) = pidfd_open(pid, PidfdFlags::empty()) else {
+        remove(path); // no such process
         return Reclaim::Nothing;
-    }
-    let Some(ticks) = start_ticks(record.pid) else {
+    };
+    // Checked after the pidfd exists: whatever these read is the process the pidfd names.
+    let Some((state, ticks)) = proc_stat(record.pid) else {
         remove(path);
         return Reclaim::Nothing;
     };
+    if state == 'Z' {
+        remove(path);
+        return Reclaim::Nothing;
+    }
     if ticks != record.start_ticks {
         remove(path);
         return Reclaim::Skipped("the process id was reused");
@@ -111,21 +168,25 @@ pub async fn reclaim(path: &Path, install_root: &Path, grace: Duration) -> Recla
     if getpgid(Some(pid)).ok() != Some(pid) {
         return Reclaim::Skipped("the process does not lead its own group");
     }
-    let alive = || start_ticks(record.pid) == Some(ticks);
-    let _ = kill_process_group(pid, Signal::TERM);
+    let gone = || proc_stat(record.pid).is_none_or(|(s, t)| s == 'Z' || t != ticks);
+    let _ = pidfd_send_signal(&pidfd, Signal::TERM);
     let deadline = tokio::time::Instant::now() + grace;
-    while alive() && tokio::time::Instant::now() < deadline {
+    while !gone() && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    if alive() {
-        let _ = kill_process_group(pid, Signal::KILL);
+    if !gone() {
+        let _ = pidfd_send_signal(&pidfd, Signal::KILL);
         for _ in 0..40 {
-            if !alive() {
+            if gone() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
-    remove(path);
-    Reclaim::Reclaimed
+    if gone() {
+        remove(path);
+        Reclaim::Reclaimed
+    } else {
+        Reclaim::Skipped("the process did not exit")
+    }
 }

@@ -133,7 +133,7 @@ async fn gone(pid: u32) {
 #[tokio::test]
 async fn a_ready_server_is_identified_logged_recorded_and_stopped() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     sup.start(env.spec("serve")).await.unwrap();
     let ready = until(&mut rx, |s| s.state == S::Ready).await;
@@ -158,7 +158,7 @@ async fn a_ready_server_is_identified_logged_recorded_and_stopped() {
 #[tokio::test]
 async fn states_move_in_order_through_start_and_stop() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     let initial = rx.borrow().state;
     let seen = tokio::spawn(async move {
@@ -187,7 +187,7 @@ async fn states_move_in_order_through_start_and_stop() {
 #[tokio::test]
 async fn startup_failures_carry_the_exit_code_and_last_lines() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     sup.start(env.spec("exit_early")).await.unwrap();
     let failed = until(&mut rx, |s| s.state == S::Failed).await;
@@ -201,7 +201,7 @@ async fn startup_failures_carry_the_exit_code_and_last_lines() {
 #[tokio::test]
 async fn refusals_spawn_nothing_and_name_the_reason() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
 
     let holder = TcpListener::bind("127.0.0.1:0").unwrap();
     let mut spec = env.spec("serve");
@@ -250,7 +250,7 @@ async fn refusals_spawn_nothing_and_name_the_reason() {
 #[tokio::test]
 async fn a_symlinked_build_directory_or_binary_is_not_run() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     std::os::unix::fs::symlink(env.root.join("b1-cpu"), env.root.join("linked")).unwrap();
     let mut spec = env.spec("serve");
     spec.dir_name = "linked".into();
@@ -275,7 +275,7 @@ async fn a_symlinked_build_directory_or_binary_is_not_run() {
 #[tokio::test]
 async fn a_second_start_is_refused_and_changes_nothing() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     sup.start(env.spec("serve")).await.unwrap();
     let ready = until(&mut rx, |s| s.state == S::Ready).await;
@@ -290,7 +290,7 @@ async fn a_second_start_is_refused_and_changes_nothing() {
 #[tokio::test]
 async fn a_server_that_never_loads_times_out_and_is_killed() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     let mut spec = env.spec("loading");
     spec.start_timeout = Duration::from_millis(1500);
@@ -305,7 +305,7 @@ async fn a_server_that_never_loads_times_out_and_is_killed() {
 #[tokio::test]
 async fn another_listener_answering_health_is_not_ready() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     let mut spec = env.spec("wrong_alias");
     spec.start_timeout = Duration::from_millis(2500);
@@ -322,7 +322,7 @@ async fn another_listener_answering_health_is_not_ready() {
 #[tokio::test]
 async fn a_crash_after_ready_is_reported_with_its_exit_code() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     sup.start(env.spec("crash_after 2500")).await.unwrap();
     until(&mut rx, |s| s.state == S::Ready).await;
@@ -338,7 +338,7 @@ async fn a_crash_after_ready_is_reported_with_its_exit_code() {
 #[tokio::test]
 async fn auto_restart_brings_a_crashed_server_back_with_a_new_identity() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     let mut spec = env.spec("crash_after 2500");
     spec.auto_restart = true;
@@ -353,7 +353,7 @@ async fn auto_restart_brings_a_crashed_server_back_with_a_new_identity() {
 #[tokio::test]
 async fn restart_replaces_the_process() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     sup.start(env.spec("serve")).await.unwrap();
     let first = until(&mut rx, |s| s.state == S::Ready).await;
@@ -384,7 +384,7 @@ async fn a_child_that_ignores_sigterm_is_killed_with_its_whole_group() {
     )
     .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await; // let concurrent forks release the file
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     let mut spec = env.spec("serve");
     spec.stop_grace = Duration::from_millis(300);
@@ -411,7 +411,7 @@ async fn a_child_that_ignores_sigterm_is_killed_with_its_whole_group() {
 #[tokio::test]
 async fn hostile_output_is_bounded_and_sanitized() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     sup.start(env.spec("noise")).await.unwrap();
     until(&mut rx, |s| s.state == S::Ready).await;
@@ -428,7 +428,7 @@ async fn hostile_output_is_bounded_and_sanitized() {
 #[tokio::test]
 async fn a_flooding_child_cannot_grow_memory_or_block_stop() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     sup.start(env.spec("flood")).await.unwrap();
     let ready = until(&mut rx, |s| s.state == S::Ready).await;
@@ -444,7 +444,7 @@ async fn a_flooding_child_cannot_grow_memory_or_block_stop() {
 #[tokio::test]
 async fn the_child_environment_is_cleared_to_an_allow_list() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     sup.start(env.spec("echo_env")).await.unwrap();
     until(&mut rx, |s| s.state == S::Ready).await;
@@ -474,7 +474,7 @@ async fn the_child_environment_is_cleared_to_an_allow_list() {
 #[tokio::test]
 async fn dropping_the_handle_stops_the_child() {
     let env = Env::new();
-    let sup = Supervisor::spawn(env.record());
+    let sup = Supervisor::spawn(env.record()).unwrap();
     let mut rx = sup.subscribe();
     sup.start(env.spec("serve")).await.unwrap();
     let pid = until(&mut rx, |s| s.state == S::Ready).await.pid.unwrap();
@@ -509,9 +509,10 @@ fn spawn_orphan(env: &Env, mode: &str) -> (std::process::Child, u32, Record) {
 async fn an_orphan_from_a_crashed_run_is_reclaimed_only_when_provably_ours() {
     let env = Env::new();
     let grace = Duration::from_secs(2);
+    let lock = record::ProcessLock::acquire(&env.record()).unwrap();
 
     assert_eq!(
-        record::reclaim(&env.record(), &env.root, grace).await,
+        record::reclaim(&lock, &env.record(), &env.root, grace).await,
         Reclaim::Nothing
     );
 
@@ -521,7 +522,7 @@ async fn an_orphan_from_a_crashed_run_is_reclaimed_only_when_provably_ours() {
     stale.start_ticks += 1;
     record::write(&env.record(), &stale).unwrap();
     assert!(matches!(
-        record::reclaim(&env.record(), &env.root, grace).await,
+        record::reclaim(&lock, &env.record(), &env.root, grace).await,
         Reclaim::Skipped(_)
     ));
     assert!(alive(pid));
@@ -529,7 +530,7 @@ async fn an_orphan_from_a_crashed_run_is_reclaimed_only_when_provably_ours() {
     let outside = Env::new();
     record::write(&env.record(), &good).unwrap();
     assert!(matches!(
-        record::reclaim(&env.record(), &outside.root, grace).await,
+        record::reclaim(&lock, &env.record(), &outside.root, grace).await,
         Reclaim::Skipped(_)
     ));
     assert!(alive(pid));
@@ -538,17 +539,100 @@ async fn an_orphan_from_a_crashed_run_is_reclaimed_only_when_provably_ours() {
     wrong.exe = PathBuf::from("/bin/sh");
     record::write(&env.record(), &wrong).unwrap();
     assert!(matches!(
-        record::reclaim(&env.record(), Path::new("/bin"), grace).await,
+        record::reclaim(&lock, &env.record(), Path::new("/bin"), grace).await,
         Reclaim::Skipped(_)
     ));
     assert!(alive(pid));
 
     record::write(&env.record(), &good).unwrap();
     assert_eq!(
-        record::reclaim(&env.record(), &env.root, grace).await,
+        record::reclaim(&lock, &env.record(), &env.root, grace).await,
         Reclaim::Reclaimed
     );
     let _ = child.wait();
     gone(pid).await;
     assert!(record::read(&env.record()).is_none());
+}
+
+#[tokio::test]
+async fn a_second_supervisor_cannot_share_the_record() {
+    let env = Env::new();
+    let first = Supervisor::spawn(env.record()).unwrap();
+    assert!(matches!(
+        Supervisor::spawn(env.record()),
+        Err(SupervisorError::Busy)
+    ));
+    first.shutdown().await;
+    Supervisor::spawn(env.record()).unwrap().shutdown().await;
+}
+
+#[tokio::test]
+async fn descendants_are_killed_even_when_the_leader_exits_on_sigterm() {
+    let env = Env::new();
+    let build = env.root.join("b1-cpu");
+    fs::remove_file(build.join("llama-server")).unwrap();
+    fs::write(
+        build.join("llama-server"),
+        "#!/bin/sh\ntrap 'exit 0' TERM\n(trap '' TERM; while :; do sleep 1; done) &\nwhile :; do sleep 1; done\n",
+    )
+    .unwrap();
+    fs::set_permissions(
+        build.join("llama-server"),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let sup = Supervisor::spawn(env.record()).unwrap();
+    let mut rx = sup.subscribe();
+    sup.start(env.spec("serve")).await.unwrap();
+    let pid = until(&mut rx, |s| s.state == S::Starting)
+        .await
+        .pid
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    sup.stop().await.unwrap();
+    let group = Pid::from_raw(pid as i32).unwrap();
+    for _ in 0..100 {
+        if test_kill_process_group(group).is_err() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("a descendant that ignored SIGTERM survived the stop");
+}
+
+#[tokio::test]
+async fn a_child_that_cannot_be_recorded_is_not_left_running() {
+    let env = Env::new();
+    // A directory where the temporary record must be created makes the write fail.
+    fs::create_dir(env.dir.join("managed.tmp")).unwrap();
+    let sup = Supervisor::spawn(env.record()).unwrap();
+    let result = sup.start(env.spec("serve")).await;
+    assert_eq!(
+        result,
+        Err(SupervisorError::Refused(FailureKind::SpawnFailed))
+    );
+    assert!(sup.status().pid.is_none());
+    // Nothing is left running from that spawn.
+    let out = std::process::Command::new("pgrep")
+        .args([
+            "-f",
+            &format!("{}/llamacpp/b1-cpu/llama-server", env.dir.display()),
+        ])
+        .output();
+    if let Ok(out) = out {
+        assert!(out.stdout.is_empty(), "a child outlived a failed start");
+    }
+}
+
+#[test]
+fn a_fifo_in_place_of_the_record_does_not_hang_the_reader() {
+    let env = Env::new();
+    let path = env.record();
+    let c = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    drop(c);
+    if made.is_ok_and(|s| s.success()) {
+        assert!(record::read(&path).is_none());
+    }
 }

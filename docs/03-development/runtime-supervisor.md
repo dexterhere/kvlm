@@ -20,8 +20,14 @@ runtimes (for example Ollama) have no path into it: the supervisor only ever sig
   that alias, and the child alive. A different listener on the port can never look Ready. Polling is 500 ms while
   starting and 5 s once ready, one probe in flight, 2 s per probe. Six consecutive failures while Ready stop the
   process (`Unresponsive`). The start timeout (default 180 s) kills the group (`StartTimeout`).
-- **Stop.** SIGTERM to the child's process group, 5 s grace, SIGKILL, reap. The group is signalled only while the
-  child is un-reaped, so a recycled pid is never signalled. `Stopping` always ends in `Stopped`, or `Failed(StuckOnStop)`.
+- **Stop.** SIGTERM to the child's process group, 5 s grace, then SIGKILL to the group whatever the leader did (so a
+  descendant that ignored SIGTERM dies too), then reap. Exit is detected with `waitid(WNOWAIT)` and the leader is reaped
+  last, so its pid and group number stay ours while the group is cleaned up. A child that cannot be reaped (for example
+  stuck in an uninterruptible GPU call) stays owned and recorded as `Failed(StuckOnStop)`: a new start is refused and a
+  later stop retries.
+- **One supervisor per record.** An exclusive lock beside `managed.json` is held for the supervisor's life; a second
+  instance gets `Busy` instead of overwriting the record or reclaiming the first instance's runtime.
+- **The record is required.** If it cannot be written the child is torn down and the start fails.
 - **Recovery.** An unexpected exit is `Failed(Crashed)`; with `auto_restart` it is retried at most three times in ten
   minutes with 1 s, 2 s, 4 s backoff. Default is off.
 - **Dropping the handle** stops the child; `shutdown()` waits for it.
@@ -34,12 +40,11 @@ runtimes (for example Ollama) have no path into it: the supervisor only ever sig
 
 ## Crash containment
 
-`runtimes/managed.json` (0600) records pid, `/proc/<pid>/stat` start time, executable and launch alias while a child
+`runtimes/managed.json` (0600, read without following links or blocking on a FIFO) records pid, `/proc/<pid>/stat` start time, executable and launch alias while a child
 runs. `record::reclaim` at the next application start terminates a recorded process **only** if the pid is alive, its
 start time matches, `/proc/<pid>/exe` is the recorded path inside the install root, and it leads its own process
-group. Anything else is left alone and reported. The small window between that check and the signal is the same one
-every pid-file scheme has; the start-time and executable checks make a wrong hit require a pid reuse by the same
-binary at the same tick.
+group. The process is pinned with a pidfd before those checks and signalled through it, so a pid reused in between is
+never hit. Anything unprovable is left alone and reported; `Reclaimed` is returned only once the process is gone.
 
 ## Tests
 
