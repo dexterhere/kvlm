@@ -415,7 +415,7 @@ fn legacy_completion_bytes_stay_unchanged_and_new_resources_survive_restart() {
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
     assert_eq!(
-        version, 1,
+        version, VERSION,
         "additive JSON metadata needs no structural database migration"
     );
 }
