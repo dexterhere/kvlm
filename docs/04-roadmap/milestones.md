@@ -3,37 +3,57 @@
 The [master specification](../01-product/gnome_local_ai_workstation_master_specification.md#10-versioned-delivery-roadmap--milestone-acceptance-criteria)
 owns the detailed acceptance criteria. This page tracks actual status.
 
-## Current status: hardware discovery implemented, M0 incomplete
+## Current status: foundation, M0 incomplete
 
+- [x] Bounded local GGUF v3 metadata and tensor-directory inspection in core.
+- [x] GGUF-to-calculator scenario adapter with explicit settings and unverified compatibility.
+- [x] Overview CPU scenario form with local-file inspection, fresh RAM, and stale-reply protection.
 - [x] Four-crate Cargo workspace and documented module ownership.
 - [x] Minimal GNOME shell, four navigation views, Tokio/GLib bridge.
 - [x] Native build foundation, desktop metadata, community docs, and validation checks.
-- [x] Hardware detection implementation for CPU/RAM, NVIDIA NVML, AMD VRAM/GTT, and Overview Refresh.
-- [ ] Complete live AMD and separate CPU-only machine validation; NVIDIA reference checks and fixtures pass.
-- [ ] Attached Ollama discovery, model listing, and loaded-memory inspection.
+- [x] Hardware detection for CPU/RAM, NVIDIA NVML, AMD VRAM/GTT (carried from PR #1).
+- [x] Attached Ollama discovery, model listing, and loaded-memory inspection (carried from PR #2).
+- [x] Installed-model selection with read-only declarations and fresh loaded readings.
 - [ ] Validated memory-fit calculations and architecture metadata integration.
-- [ ] Quick streaming benchmark with resource sampling and SQLite persistence.
+- [x] Pure supplied-metadata calculator, placement policy, offline example, and tests.
+- [x] One explicit streaming Quick Benchmark with local-only checks, client/server timing, and cancellation.
+- [x] Immutable SQLite run snapshots, terminal outcomes, and bounded restart history.
+- [x] Bounded system/device RAM, VRAM, and GTT observations with persisted peaks and coverage.
+- [ ] Process attribution, GPU utilization, and real-hardware sampling calibration.
 - [ ] Persisted empirical badge after restart.
 - [ ] Full M0 unit, mocked HTTP, and real-hardware acceptance evidence.
 
 The shell does not fulfill the M0 vertical slice. Do not mark the specification's
 M0 checklist complete until the behavior is implemented and verified.
 
-## Current feature and next step
+## Next feature
 
-[Hardware discovery in Overview](next-feature-hardware-discovery.md) is implemented
-on `feature/hardware-discovery` for review into `develop`. See the
-[validation record](../03-development/hardware-validation.md) for coverage and limits.
-
-After reviewing this slice, the next implementation is attached Ollama discovery:
-health/version, installed models, and running-model memory through its official
-API. It must preserve external-process ownership and handle an absent service.
+This dependent branch carries [PR #9](https://github.com/dexterhere/kvlm/pull/9),
+including prerequisites #1 through #8. All remain unmerged.
+The [desktop CPU workflow](../03-development/desktop-cpu-fit.md) and
+[Ollama model inspection](../03-development/ollama-inspection.md) now coexist.
+Inspection keeps declared defaults separate from fresh loaded context and allocation;
+it does not prove local execution, artifact identity, or runtime compatibility.
+The [Quick Benchmark](../03-development/quick-benchmark.md) now requires affirmative
+cloud-disable status and immutable local digest references before one explicit request.
+It records client first-response latency and independent server decode metrics, with
+partial failure/cancellation outcomes and no empirical verification badge.
+The [history workflow](../03-development/benchmark-history.md) now persists immutable
+requested model/hardware/workload snapshots and all outcomes across storage reopen.
+The [memory sampling workflow](../03-development/benchmark-memory-sampling.md) now
+records bounded system/device observations with coverage counts. It does not
+attribute memory to an inference process or certify true allocation peaks.
+Next: real-model restart/hardware acceptance and a defensible artifact/hardware
+matching contract for empirical verification; process attribution and calibration
+remain open. Actual K/V types,
+concurrency, micro-batch settings, layout evidence, and allocation calibration remain
+open. M0 is incomplete.
 
 ## Delivery order
 
 | Milestone | Outcome | Status |
 | --- | --- | --- |
-| M0 | Hardware → attached Ollama → static fit → quick benchmark → persisted verification | Hardware discovery implemented; later steps pending |
+| M0 | Hardware → attached Ollama → static fit → quick benchmark → persisted verification | Core estimate and open feature PRs; integration pending |
 | M1 | Live model catalog, normalized artifacts, resumable downloads, deduplication, Secret Service | Planned |
 | M2 | Managed portable llama.cpp, lifecycle/logs, ownership guards, developer exports | Planned |
 | M3 | Controlled A/B benchmarks, cold/warm separation, sampling, diagnostics | Planned |

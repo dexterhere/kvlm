@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Planned fit module boundaries; implementations arrive with their milestones.
+//! Static supplied-metadata memory estimates; runtime/UI integration is separate.
 
 pub mod advisor;
+pub mod gguf_fit;
 pub mod llmfit_bridge;
 pub mod memory_math;

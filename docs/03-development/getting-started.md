@@ -44,8 +44,14 @@ cargo run --locked -p workstation-app
 
 Run from a graphical session. A headless build can run unit tests without showing
 a window. Overview shows real hardware snapshots with Refresh and `Ctrl+R`. The
-other three navigation pages still describe planned features; no synthetic
-inference results are displayed. Source-tree execution
+local [CPU scenario panel](desktop-cpu-fit.md) inspects user-selected GGUF metadata
+and estimates explicitly configured inputs on a background worker. The
+Runtimes page provides manual Refresh for attached Ollama discovery and Inspect
+for per-model declarations and fresh loaded readings. See the
+[inspection guide](ollama-inspection.md). The Models page remains a placeholder.
+Benchmark Lab offers the explicitly triggered
+[Quick Benchmark](quick-benchmark.md), with local-only preflight and one fixed request;
+no results are fabricated or persisted. Source-tree execution
 does not require installed desktop metadata or a compiled settings schema.
 
 ## Check changes

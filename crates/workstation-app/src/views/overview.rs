@@ -37,6 +37,7 @@ pub struct Overview {
     readings: gtk::Box,
     state: Rc<RefCell<LoadState>>,
     commands: tokio::sync::mpsc::Sender<CoreCommand>,
+    fit: super::model_fit::ModelFit,
 }
 
 impl Overview {
@@ -60,6 +61,7 @@ impl Overview {
         controls.append(&status);
         controls.append(&refresh);
         let readings = gtk::Box::new(gtk::Orientation::Vertical, 24);
+        let fit = super::model_fit::ModelFit::new(commands.clone());
         let layout = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(24)
@@ -70,6 +72,7 @@ impl Overview {
             .build();
         layout.append(&heading);
         layout.append(&controls);
+        layout.append(&fit.widget);
         layout.append(&readings);
         let clamp = adw::Clamp::builder()
             .maximum_size(900)
@@ -89,6 +92,7 @@ impl Overview {
             readings,
             state,
             commands,
+            fit,
         };
         let state = Rc::clone(&overview.state);
         let spinner = overview.spinner.clone();
@@ -111,10 +115,24 @@ impl Overview {
     }
 
     pub fn receive(&self, event: &UiEvent) {
+        if let UiEvent::FitFinished { id, result } = event {
+            self.fit.receive(*id, result);
+            return;
+        }
+        if !matches!(
+            event,
+            UiEvent::HardwareDetected(_) | UiEvent::HardwareFailed(_)
+        ) {
+            return;
+        }
         self.spinner.stop();
         self.refresh.set_sensitive(true);
         match event {
             UiEvent::HardwareDetected(profile) => {
+                self.fit.hardware_reading(
+                    profile.system_ram.and_then(|pool| pool.available_bytes),
+                    profile.captured_at_unix_ms,
+                );
                 self.state.borrow_mut().finish(true);
                 while let Some(child) = self.readings.first_child() {
                     self.readings.remove(&child);
@@ -136,6 +154,7 @@ impl Overview {
                 ));
             }
             UiEvent::HardwareFailed(message) => {
+                self.fit.hardware_failed();
                 self.state.borrow_mut().finish(false);
                 let prefix = if self.state.borrow().stale {
                     "Refresh failed · Showing previous readings"
@@ -144,6 +163,7 @@ impl Overview {
                 };
                 self.status.set_text(&format!("{prefix}\n{message}"));
             }
+            _ => unreachable!("unrelated events are handled above"),
         }
     }
 

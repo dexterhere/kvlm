@@ -12,6 +12,7 @@ use std::{
 pub mod amd_sysfs;
 pub mod cpu;
 pub mod nvml;
+pub mod resources;
 pub mod vulkan;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

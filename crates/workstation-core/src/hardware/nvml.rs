@@ -75,7 +75,7 @@ fn probe_library(path: &OsStr) -> Result<(Vec<GpuDeviceProfile>, Vec<ProbeIssue>
     Ok((devices, issues))
 }
 
-fn memory_reading(total: u64, used: u64, free: u64) -> Result<MemoryPool, String> {
+pub(super) fn memory_reading(total: u64, used: u64, free: u64) -> Result<MemoryPool, String> {
     if used.checked_add(free).is_none_or(|sum| sum > total) {
         return Err("NVML memory counters exceed total VRAM.".into());
     }

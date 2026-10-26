@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 workstation-core.workspace = true
 workstation-runtimes.workspace = true
+tokio.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

@@ -264,6 +264,8 @@ pub struct HardwareProfile {
 - **Intel / Fallback Vulkan Probe (`vulkan.rs`):** Query `VkPhysicalDeviceMemoryProperties` via `ash` (dynamic Vulkan loader) or parse `vulkaninfo --summary` if present to detect Intel Arc / integrated GPU heaps.
 
 ### 4.4 Mathematical Memory Fit Formula
+**Implementation clarification (2026-10-24):** The initial core calculator supports one uniform full-attention sequence with supplied single-GGUF bytes and explicit K/V dimensions. GGML Q8_0 storage is 34 bytes per 32 elements, rather than the illustrative 1.0 byte coefficient below; Q4_0 is 18 bytes per 32. Context padding and separate K/V types are accounted for. The four-part result remains an estimate, and `llmfit` integration is deferred after API evaluation. See [decision 0004](../05-decisions/0004-static-memory-fit.md) for the supported scope, pinned upstream evidence, and unknown-input rules. The original target formula is retained below for traceability.
+
 Given a `ModelArtifact`, a `RuntimeConfig` (context window $C$, batch size $B$, KV cache data type $Q_{\text{KV}}$), and a `HardwareProfile`, the total required memory is broken into four components:
 
 $$M_{\text{required}} = M_{\text{weights}} + M_{\text{KV}} + M_{\text{buffers}} + M_{\text{overhead}}$$
@@ -292,6 +294,8 @@ $$M_{\text{required}} = M_{\text{weights}} + M_{\text{KV}} + M_{\text{buffers}} 
    - CPU-only runtime: $64\text{ MiB}$
 
 ### 4.5 Fit Classification Rules
+**Initial implementation policy (2026-10-24):** Classification applies to the selected fully resident placement. CPU uses 70%/75% available-RAM limits; dedicated GPU uses 85%/96%; shared GPU uses the minimum of its GPU-mapping and host-RAM limits rather than adding the pools. Limits are inclusive, and exceeding the maximum means NotRecommended for that placement. Missing metadata/readings or unverified compatibility stays Unknown. Partial offload and automatic alternative plans are not implemented. These are conservative static policies, not calibrated throughput claims or benchmark evidence; see [decision 0004](../05-decisions/0004-static-memory-fit.md). The broader target below remains pending integration.
+
 Let $V_{\text{avail}}$ be the usable GPU memory (`dedicated_vram_free_bytes`, or `shared_gtt_free_bytes` on unified memory systems) and $R_{\text{avail}}$ be `system_ram_available_bytes`:
 
 - **`Comfortable`:**
@@ -391,6 +395,16 @@ pub trait RuntimeAdapter: Send + Sync {
 ```
 
 ### 5.4 Engine-Specific Wire Protocols
+
+**Implementation note (2026-10-25):** Attached Ollama discovery and per-model inspection
+are read-only. `POST /api/show` supplies model declarations, while fresh `/api/ps`
+supplies reported loaded context/allocation. Defaults never become loaded settings,
+missing routing data never proves local execution, and runtime digests do not verify
+an Overview file. See [decision 0008](../05-decisions/0008-ollama-model-inspection.md).
+Quick Benchmark now permits one explicit request only after the guard in
+[decision 0009](../05-decisions/0009-quick-benchmark.md). General inference controls,
+model mutations, verified fit, and benchmark persistence remain pending.
+
 - **Ollama Adapter (`ollama.rs`):**
   - Default Endpoint: `http://127.0.0.1:11434`
   - Health & Version: `GET /api/version`
@@ -450,6 +464,22 @@ Before downloading any artifact or importing a GGUF into Ollama:
 ## 7. Benchmark Lab & Diagnostic Engine (`workstation-bench`)
 
 ### 7.1 Standardized Benchmark Protocol
+**Initial implementation (2026-10-25):** Quick Benchmark is one explicitly requested,
+local-only digest-pinned text request with cancellation and typed partial outcomes.
+Client first-response-text latency includes model loading and is not token-level
+TTFT/ITL; server decode rate uses independent server counters. There is no warm-up,
+forced cold load, resource sampling, repeated pass, persistence, or verified badge.
+See [decision 0009](../05-decisions/0009-quick-benchmark.md). The target protocol below
+remains pending full integration and real-hardware acceptance.
+
+**Follow-up implementation (2026-10-26):** SQLite history preserves requested snapshots
+and terminal outcomes ([0010](../05-decisions/0010-benchmark-history.md)). Bounded
+100ms-target sampling now stores observed system RAM and per-device VRAM/GTT maxima
+with coverage counts ([0011](../05-decisions/0011-benchmark-memory-sampling.md)).
+These observations are system/device-wide, not process RSS or certified true peaks.
+GPU utilization, repeated cold/warm protocols, empirical badges, and real-hardware
+acceptance remain pending. Existing records are not rewritten.
+
 Every benchmark run executes a deterministic pipeline to prevent noisy or misleading numbers:
 1. **Pre-Flight Check:** Record baseline free VRAM, free RAM, GPU temperature, and CPU load.
 2. **Cold Load Phase (Optional toggle):** If the model is unloaded, trigger `load_model` and record `cold_load_duration_ms` until the runtime reports `Ready`.

@@ -18,6 +18,12 @@ Never skip a stage, force-push shared branches, or commit directly to these thre
 branches. The initial foundation bootstrap is the sole direct-push exception.
 Do not label a milestone complete just because it has been merged.
 
+A dependent feature PR may carry prerequisite commits onto a branch created from
+`develop`. List those dependencies, review them first, and refresh the dependent
+branch after their integration. This does not merge the prerequisite PRs or change
+`develop`, `staging`, or `main`. While the user requests PR-only work, leave every
+PR unmerged and auto-merge disabled.
+
 ## Enforcement
 
 CI's `git-policy` check rejects incorrect pull-request routes and co-author trailers
