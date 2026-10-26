@@ -2,6 +2,7 @@
 //! Runtime integrations. Attached Ollama discovery and inspection are read-only; process control is planned.
 
 pub mod catalog_service;
+pub mod downloader;
 pub mod huggingface;
 pub mod llamacpp;
 pub mod lmstudio;

@@ -209,78 +209,105 @@ impl HuggingFaceClient {
         {
             return Err(HfError::InvalidRequest);
         }
-        let (owner, name) = repo_id.split_once('/').ok_or(HfError::InvalidRequest)?;
         let want = expected_size.min(HEADER_LIMIT);
-        let mut url = self.base.clone();
-        url.path_segments_mut()
-            .map_err(|()| HfError::InvalidRequest)?
-            .pop_if_empty()
-            .extend([owner, name, "resolve", revision])
-            .extend(filename.split('/'));
+        let url = self.resolve_url(repo_id, revision, filename)?;
         tokio::time::timeout(PREFIX_DEADLINE, async {
             let _permit = self
                 .gate
                 .acquire()
                 .await
                 .map_err(|_| HfError::BadResponse)?;
-            for _ in 0..=MAX_HOPS {
-                let response = self
-                    .client
-                    .get(url.clone())
-                    .header(header::RANGE, format!("bytes=0-{}", want - 1))
-                    .header(header::ACCEPT_ENCODING, "identity")
-                    .send()
-                    .await
-                    .map_err(map_transport)?;
-                let status = response.status();
-                if status.is_redirection() {
-                    let next = response
-                        .headers()
-                        .get(header::LOCATION)
-                        .and_then(|value| value.to_str().ok())
-                        .and_then(|location| url.join(location).ok())
-                        .ok_or(HfError::BadResponse)?;
-                    if !self.redirect_allowed(&next) {
+            let response = self.follow(url, format!("bytes=0-{}", want - 1)).await?;
+            match response.status() {
+                StatusCode::PARTIAL_CONTENT => {
+                    if content_range(&response) != Some((0, want - 1, expected_size)) {
                         return Err(HfError::BadResponse);
                     }
-                    url = next;
-                    continue;
                 }
-                match status {
-                    StatusCode::PARTIAL_CONTENT => {
-                        let range = response
-                            .headers()
-                            .get(header::CONTENT_RANGE)
-                            .and_then(|value| value.to_str().ok())
-                            .and_then(parse_content_range)
-                            .ok_or(HfError::BadResponse)?;
-                        if range != (0, want - 1, expected_size) {
-                            return Err(HfError::BadResponse);
-                        }
-                    }
-                    StatusCode::OK => {
-                        // A server that ignored the range: acceptable only for the right file.
-                        if response.content_length() != Some(expected_size) {
-                            return Err(HfError::BadResponse);
-                        }
-                    }
-                    StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                        return Err(HfError::AccessRequired);
-                    }
-                    StatusCode::NOT_FOUND => return Err(HfError::NotFound),
-                    StatusCode::TOO_MANY_REQUESTS => {
-                        return Err(HfError::RateLimited {
-                            retry_after_secs: retry_after(response.headers()),
-                        });
-                    }
-                    _ => return Err(HfError::BadResponse),
-                }
-                return read_exactly(response, want).await;
+                // A server that ignored the range: acceptable only for the right file.
+                StatusCode::OK if response.content_length() == Some(expected_size) => {}
+                status => return Err(status_error(status, &response)),
             }
-            Err(HfError::BadResponse)
+            read_exactly(response, want).await
         })
         .await
         .map_err(|_| HfError::Timeout)?
+    }
+
+    /// Open a stream of one GGUF file at a pinned commit, from byte `offset`.
+    ///
+    /// `206` must start at `offset` and end at the last byte of a file whose total equals
+    /// `expected_size`; a `200` restarts from zero (the stream says so in `start`). It does
+    /// not use the single-flight gate: a long transfer must not block catalog browsing.
+    pub async fn open_download(
+        &self,
+        repo_id: &str,
+        revision: &str,
+        filename: &str,
+        expected_size: u64,
+        offset: u64,
+    ) -> Result<DownloadStream, HfError> {
+        if !valid_repo_id(repo_id)
+            || !valid_revision(revision)
+            || !valid_remote_filename(filename)
+            || expected_size == 0
+            || offset >= expected_size
+        {
+            return Err(HfError::InvalidRequest);
+        }
+        let url = self.resolve_url(repo_id, revision, filename)?;
+        let response = self.follow(url, format!("bytes={offset}-")).await?;
+        let start = match response.status() {
+            StatusCode::PARTIAL_CONTENT => {
+                if content_range(&response) != Some((offset, expected_size - 1, expected_size)) {
+                    return Err(HfError::BadResponse);
+                }
+                offset
+            }
+            StatusCode::OK if response.content_length() == Some(expected_size) => 0,
+            status => return Err(status_error(status, &response)),
+        };
+        Ok(DownloadStream { response, start })
+    }
+
+    fn resolve_url(&self, repo_id: &str, revision: &str, filename: &str) -> Result<Url, HfError> {
+        let (owner, name) = repo_id.split_once('/').ok_or(HfError::InvalidRequest)?;
+        let mut url = self.base.clone();
+        url.path_segments_mut()
+            .map_err(|()| HfError::InvalidRequest)?
+            .pop_if_empty()
+            .extend([owner, name, "resolve", revision])
+            .extend(filename.split('/'));
+        Ok(url)
+    }
+
+    /// GET with a `Range`, following redirects by hand (at most four hops, only to allowed
+    /// hosts). Returns the first non-redirect response; the caller checks its status.
+    async fn follow(&self, mut url: Url, range: String) -> Result<reqwest::Response, HfError> {
+        for _ in 0..=MAX_HOPS {
+            let response = self
+                .client
+                .get(url.clone())
+                .header(header::RANGE, &range)
+                .header(header::ACCEPT_ENCODING, "identity")
+                .send()
+                .await
+                .map_err(map_transport)?;
+            if !response.status().is_redirection() {
+                return Ok(response);
+            }
+            let next = response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|location| url.join(location).ok())
+                .ok_or(HfError::BadResponse)?;
+            if !self.redirect_allowed(&next) {
+                return Err(HfError::BadResponse);
+            }
+            url = next;
+        }
+        Err(HfError::BadResponse)
     }
 
     /// Redirect targets must be https Hugging Face hosts on the default port, with no
@@ -464,6 +491,43 @@ async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, HfError
         body.extend_from_slice(&chunk);
     }
     Ok(body)
+}
+
+/// The body of an open download; `start` is the offset its first byte belongs at.
+pub struct DownloadStream {
+    response: reqwest::Response,
+    pub start: u64,
+}
+
+impl DownloadStream {
+    /// The next piece of the body, or `None` at the end. Errors carry no URLs.
+    pub async fn chunk(&mut self) -> Result<Option<Vec<u8>>, HfError> {
+        Ok(self
+            .response
+            .chunk()
+            .await
+            .map_err(map_transport)?
+            .map(|c| c.to_vec()))
+    }
+}
+
+fn content_range(response: &reqwest::Response) -> Option<(u64, u64, u64)> {
+    response
+        .headers()
+        .get(header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range)
+}
+
+fn status_error(status: StatusCode, response: &reqwest::Response) -> HfError {
+    match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => HfError::AccessRequired,
+        StatusCode::NOT_FOUND => HfError::NotFound,
+        StatusCode::TOO_MANY_REQUESTS => HfError::RateLimited {
+            retry_after_secs: retry_after(response.headers()),
+        },
+        _ => HfError::BadResponse,
+    }
 }
 
 /// `(first, last, total)` of a `Content-Range: bytes first-last/total` header.
