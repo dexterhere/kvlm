@@ -2,7 +2,11 @@
 //! Typed messages keep GTK objects out of blocking hardware probes.
 
 use crate::fit_workflow::{FitReport, FitRequest, estimate, fit_report, parse_scenario};
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, atomic::AtomicBool},
+};
 use tokio::sync::mpsc;
 use workstation_bench::{
     history::{self, PersistedRun},
@@ -12,7 +16,10 @@ use workstation_core::db::HistoryEntry;
 use workstation_core::hardware::{HardwareProfile, resources::ResourceSummary};
 use workstation_core::{
     fit::{gguf_fit::LayoutAssumption, memory_math::KvCacheType},
-    models::artifact::ModelArtifact,
+    models::{
+        artifact::ModelArtifact,
+        dedup::{Limits, ScanReport, Wanted, default_roots, scan},
+    },
 };
 use workstation_runtimes::catalog_service::{
     CatalogLoad, CatalogService, InspectLoad, LoadSource, ReleaseLoad,
@@ -54,6 +61,11 @@ pub enum CoreCommand {
         id: u64,
         repo_id: String,
         pinned: Option<String>,
+    },
+    /// Local-only: look for files already on disk with these artifacts' SHA-256.
+    ScanLocal {
+        id: u64,
+        wanted: Vec<Wanted>,
     },
     /// Explicit fetch of one file's header (first 16 MiB at most) and a fit estimate.
     InspectArtifact {
@@ -110,6 +122,10 @@ pub enum UiEvent {
     ArtifactInspected {
         id: u64,
         result: Result<Box<ArtifactDetails>, String>,
+    },
+    LocalScanned {
+        id: u64,
+        result: Result<Box<ScanReport>, String>,
     },
 }
 
@@ -173,6 +189,8 @@ pub trait CatalogBackend: Send + Sync + 'static {
         pinned: Option<String>,
     ) -> BoxFuture<Result<ReleaseLoad, String>>;
     fn inspect(&self, artifact: ModelArtifact) -> BoxFuture<Result<InspectLoad, String>>;
+    /// Blocking, cancellable file scan; the caller runs it on a blocking thread.
+    fn scan_local(&self, wanted: Vec<Wanted>, cancel: &AtomicBool) -> Result<ScanReport, String>;
 }
 
 /// Builds the real service on first use, so startup does no catalog work.
@@ -211,6 +229,19 @@ impl CatalogBackend for LiveCatalog {
         let service = self.service();
         Box::pin(async move { service?.inspect(&artifact).await })
     }
+    fn scan_local(&self, wanted: Vec<Wanted>, cancel: &AtomicBool) -> Result<ScanReport, String> {
+        // Digest hints are optional: an unreadable database only costs re-hashing.
+        let store = workstation_core::db::default_database_path()
+            .and_then(|path| workstation_core::db::HistoryStore::open(&path))
+            .ok();
+        Ok(scan(
+            &default_roots(),
+            &wanted,
+            store.as_ref(),
+            cancel,
+            &Limits::default(),
+        ))
+    }
 }
 
 /// Aborts the wrapped task when the guarding job is dropped or aborted.
@@ -244,6 +275,13 @@ fn inspect_failed(id: u64) -> UiEvent {
     UiEvent::ArtifactInspected {
         id,
         result: Err("Inspection worker failed. Retry.".into()),
+    }
+}
+
+fn scan_failed(id: u64) -> UiEvent {
+    UiEvent::LocalScanned {
+        id,
+        result: Err("Local file check failed. Retry.".into()),
     }
 }
 
@@ -363,6 +401,12 @@ where
         let mut release_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         let mut inspect_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         let probe_gate = Arc::new(tokio::sync::Semaphore::new(1));
+        let mut scan_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        // Tells the running scan, which a blocking thread cannot be aborted from, to stop.
+        let mut scan_cancel = Arc::new(AtomicBool::new(false));
+        // A replaced scan keeps running until it notices the flag; its permit travels with
+        // the blocking thread so the replacement starts only after it has stopped.
+        let scan_gate = Arc::new(tokio::sync::Semaphore::new(1));
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
@@ -392,6 +436,11 @@ where
                     continue;
                 }
                 result = inspect_jobs.join_next(), if !inspect_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = scan_jobs.join_next(), if !scan_jobs.is_empty() => {
                     if let Some(Ok(event)) = result
                         && events.send(event).await.is_err() { break; }
                     continue;
@@ -436,6 +485,26 @@ where
                     release_jobs.spawn(guarded(id, release_failed, async move {
                         let result = catalog.release(repo_id, pinned).await.map(Box::new);
                         UiEvent::ReleaseLoaded { id, result }
+                    }));
+                }
+                CoreCommand::ScanLocal { id, wanted } => {
+                    scan_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    scan_jobs.abort_all();
+                    scan_cancel = Arc::new(AtomicBool::new(false));
+                    let (catalog, cancel) = (Arc::clone(&catalog), Arc::clone(&scan_cancel));
+                    let gate = Arc::clone(&scan_gate);
+                    scan_jobs.spawn(guarded(id, scan_failed, async move {
+                        let Ok(permit) = gate.acquire_owned().await else {
+                            return scan_failed(id);
+                        };
+                        let result = tokio::task::spawn_blocking(move || {
+                            let _permit = permit;
+                            catalog.scan_local(wanted, &cancel)
+                        })
+                            .await
+                            .unwrap_or_else(|_| Err("Local file check failed. Retry.".into()))
+                            .map(Box::new);
+                        UiEvent::LocalScanned { id, result }
                     }));
                 }
                 CoreCommand::InspectArtifact { id, artifact } => {
@@ -510,6 +579,8 @@ where
                 }
             }
         }
+        // A scan on a blocking thread cannot be aborted; tell it to stop.
+        scan_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
     });
     (commands, event_rx)
 }
@@ -736,6 +807,16 @@ mod tests {
                 Err("fixture release failure".into())
             })
         }
+        fn scan_local(
+            &self,
+            wanted: Vec<Wanted>,
+            cancel: &AtomicBool,
+        ) -> Result<ScanReport, String> {
+            if wanted.iter().any(|w| w.artifact_id == "panic") {
+                panic!("fixture scan panic");
+            }
+            scan_local_fake(&wanted, cancel)
+        }
         fn inspect(&self, artifact: ModelArtifact) -> BoxFuture<Result<InspectLoad, String>> {
             Box::pin(async move {
                 match artifact.filename.as_str() {
@@ -758,6 +839,24 @@ mod tests {
                 }
             })
         }
+    }
+
+    fn scan_local_fake(wanted: &[Wanted], cancel: &AtomicBool) -> Result<ScanReport, String> {
+        use workstation_core::models::dedup::{LocalMatch, RootKind, Stop};
+        let mut report = ScanReport::default();
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            report.stopped = Some(Stop::Cancelled);
+        }
+        report.matches = wanted
+            .iter()
+            .filter(|w| w.artifact_id == "found")
+            .map(|w| LocalMatch {
+                artifact_id: w.artifact_id.clone(),
+                path: "/fixture/blob".into(),
+                root: RootKind::Ollama,
+            })
+            .collect();
+        Ok(report)
     }
 
     fn artifact_named(name: &str) -> Box<ModelArtifact> {
@@ -979,6 +1078,46 @@ mod tests {
                 (_, other) => panic!("unexpected {other:?}"),
             }
         }
+    }
+
+    fn wanted_named(id: &str) -> Wanted {
+        Wanted {
+            artifact_id: id.into(),
+            size: 1,
+            sha256: "a".repeat(64),
+        }
+    }
+
+    #[tokio::test]
+    async fn local_scans_report_matches_failures_and_the_newest_request_only() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::ScanLocal {
+                id: 1,
+                wanted: vec![wanted_named("found")],
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::LocalScanned { id: 1, result: Ok(report) } if report.matches.len() == 1));
+        commands
+            .send(CoreCommand::ScanLocal {
+                id: 2,
+                wanted: vec![wanted_named("panic")],
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::LocalScanned { id: 2, result: Err(message) } if message.contains("Local file check failed")));
+        commands
+            .send(CoreCommand::ScanLocal {
+                id: 3,
+                wanted: vec![wanted_named("none")],
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::LocalScanned { id: 3, result: Ok(report) } if report.matches.is_empty() && report.stopped.is_none()));
     }
 
     #[tokio::test]

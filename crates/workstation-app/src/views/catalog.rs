@@ -11,7 +11,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc;
-use workstation_core::models::{artifact::ModelArtifact, release::ModelRelease};
+use workstation_core::models::{
+    artifact::ModelArtifact,
+    dedup::{RootKind, RootState, Stop, Wanted},
+    release::ModelRelease,
+};
 use workstation_runtimes::catalog_service::{CatalogLoad, LoadSource, ReleaseLoad};
 
 const MAX_TEXT: usize = 512;
@@ -29,6 +33,8 @@ struct ArtifactRow {
     row: adw::ExpanderRow,
     children: Vec<gtk::Widget>,
     artifact: ModelArtifact,
+    /// Summary line without the local-copy note.
+    base_subtitle: String,
     loading: bool,
     loaded: bool,
 }
@@ -48,6 +54,8 @@ struct State {
     release: Option<(u64, String)>,
     /// Newest header inspection: request id and artifact id.
     inspect: Option<(u64, String)>,
+    /// Newest local-file check; older answers are dropped.
+    scan: u64,
     artifacts: HashMap<String, ArtifactRow>,
     rows: HashMap<String, RepoRow>,
 }
@@ -231,7 +239,79 @@ impl Explorer {
                 };
                 set_children(&entry.row, &mut entry.children, rows);
             }
+            UiEvent::LocalScanned { id, result } => {
+                if self.state.borrow().scan != *id {
+                    return;
+                }
+                match result {
+                    Ok(report) => self.show_local(report),
+                    Err(_) => {
+                        self.note_local("local check failed; try expanding the repository again")
+                    }
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Replaces the local-copy note on every file that was checked.
+    fn note_local(&self, note: &str) {
+        for entry in self.state.borrow().artifacts.values() {
+            if wanted_of(&entry.artifact).is_some() {
+                entry
+                    .row
+                    .set_subtitle(&text(&format!("{} · {note}", entry.base_subtitle)));
+            }
+        }
+    }
+
+    /// Marks each checked file with where an identical copy already is, if anywhere.
+    fn show_local(&self, report: &workstation_core::models::dedup::ScanReport) {
+        let state = self.state.borrow();
+        for entry in state.artifacts.values() {
+            if wanted_of(&entry.artifact).is_none() {
+                continue;
+            }
+            let id = &entry.artifact.artifact_id;
+            let places: Vec<String> = report
+                .matches
+                .iter()
+                .filter(|found| &found.artifact_id == id)
+                .map(|found| {
+                    format!(
+                        "{} ({})",
+                        clean(&found.path.to_string_lossy()),
+                        root_name(found.root)
+                    )
+                })
+                .collect();
+            let note = if !places.is_empty() {
+                format!("already on disk, SHA-256 verified: {}", places.join("; "))
+            } else {
+                let unreadable = report.skipped > 0
+                    || report
+                        .roots
+                        .iter()
+                        .any(|root| root.state == RootState::Unreadable);
+                match report.stopped {
+                    None if unreadable => {
+                        "some folders or files could not be read; a copy may exist".to_owned()
+                    }
+                    None => "no identical local copy found".to_owned(),
+                    Some(stop) => format!(
+                        "local check stopped ({}); a copy may exist",
+                        match stop {
+                            Stop::Cancelled => "replaced by a newer check",
+                            Stop::EntryLimit => "too many files",
+                            Stop::ByteLimit => "read limit reached",
+                            Stop::TimeLimit => "time limit reached",
+                        }
+                    ),
+                }
+            };
+            entry
+                .row
+                .set_subtitle(&text(&format!("{} · {note}", entry.base_subtitle)));
         }
     }
 
@@ -245,6 +325,7 @@ impl Explorer {
             state.artifacts.clear();
             state.release = None;
             state.inspect = None;
+            state.scan = 0;
         }
         for repo in &load.page.repos {
             if self.state.borrow().rows.contains_key(&repo.repo_id) {
@@ -331,6 +412,7 @@ impl Explorer {
                         });
                         rows.push(row.clone().upcast());
                         new_artifacts.push(ArtifactRow {
+                            base_subtitle: row.subtitle().to_string(),
                             row,
                             children: Vec::new(),
                             artifact: artifact.clone(),
@@ -350,6 +432,9 @@ impl Explorer {
                     .artifacts
                     .insert(row.artifact.artifact_id.clone(), row);
             }
+        }
+        if result.is_ok() {
+            self.handle().scan_local();
         }
     }
 }
@@ -443,6 +528,25 @@ impl Handle {
         });
     }
 
+    /// Local-only check of every loaded file that has a published size and checksum.
+    fn scan_local(&self) {
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
+        let wanted: Vec<Wanted> = state
+            .borrow()
+            .artifacts
+            .values()
+            .filter_map(|entry| wanted_of(&entry.artifact))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let id = next_id(&state);
+        state.borrow_mut().scan = id;
+        self.send(CoreCommand::ScanLocal { id, wanted });
+    }
+
     fn inspect(&self, artifact_id: &str) {
         let Some(state) = self.state.upgrade() else {
             return;
@@ -501,6 +605,34 @@ impl Handle {
             }
         });
     }
+}
+
+/// Only a file with a published size and checksum, and not split, can be matched.
+fn wanted_of(artifact: &ModelArtifact) -> Option<Wanted> {
+    if artifact.shards.is_some() {
+        return None;
+    }
+    Some(Wanted {
+        artifact_id: artifact.artifact_id.clone(),
+        size: artifact.size_bytes.filter(|size| *size > 0)?,
+        sha256: artifact.sha256.clone()?,
+    })
+}
+
+fn root_name(kind: RootKind) -> &'static str {
+    match kind {
+        RootKind::Ollama => "Ollama",
+        RootKind::HuggingFace => "Hugging Face cache",
+        RootKind::Application => "this application",
+    }
+}
+
+/// File names are untrusted text: control characters become `?`.
+fn clean(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
 }
 
 fn next_id(state: &Rc<RefCell<State>>) -> u64 {

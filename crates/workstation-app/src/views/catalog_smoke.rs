@@ -49,7 +49,7 @@ fn release() -> Box<ReleaseLoad> {
                 format: ArtifactFormat::Gguf,
                 quantization_hint: Some("Q4_K_M".into()),
                 size_bytes: Some(4_683_073_536),
-                sha256: None,
+                sha256: Some("ab".repeat(32)),
                 shards: None,
             }],
             dropped_invalid: 0,
@@ -163,6 +163,47 @@ fn saved_page_search_expand_and_stale_answers() {
         result: Ok(release()),
     });
     assert!(explorer.state.borrow().rows[&repo_id].loaded);
+
+    // Showing files starts a local-only check; a verified copy is noted on the file.
+    let CoreCommand::ScanLocal {
+        id: scan_id,
+        wanted,
+    } = pump(&mut rx)
+    else {
+        panic!("scan")
+    };
+    assert_eq!(wanted.len(), 1);
+    assert_eq!(wanted[0].artifact_id, "hf:fixture");
+    explorer.receive(&UiEvent::LocalScanned {
+        id: scan_id + 5,
+        result: Err("stale".into()),
+    });
+    assert!(
+        !explorer.state.borrow().artifacts["hf:fixture"]
+            .row
+            .subtitle()
+            .contains("on disk")
+    );
+    let mut report = workstation_core::models::dedup::ScanReport::default();
+    report
+        .matches
+        .push(workstation_core::models::dedup::LocalMatch {
+            artifact_id: "hf:fixture".into(),
+            path: "/x/bl\nob".into(),
+            root: workstation_core::models::dedup::RootKind::Ollama,
+        });
+    explorer.receive(&UiEvent::LocalScanned {
+        id: scan_id,
+        result: Ok(Box::new(report)),
+    });
+    let subtitle = explorer.state.borrow().artifacts["hf:fixture"]
+        .row
+        .subtitle()
+        .to_string();
+    assert!(
+        subtitle.contains("already on disk, SHA-256 verified: /x/bl?ob (Ollama)"),
+        "{subtitle}"
+    );
 
     // Expanding a file reads its header once; the answer shows the conditional fit.
     let artifact_row = explorer.state.borrow().artifacts["hf:fixture"].row.clone();
