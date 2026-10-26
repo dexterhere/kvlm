@@ -57,15 +57,13 @@ catalog_queries(
   result_json TEXT NOT NULL CHECK(length(CAST(result_json AS BLOB)) <= 4194304),
   fetched_at_unix_ms INTEGER NOT NULL
 );
-catalog_artifacts(
-  artifact_id TEXT PRIMARY KEY,          -- 'hf:<repo>@<rev>:<filename>'
-  repo_id TEXT NOT NULL, revision TEXT NOT NULL, filename TEXT NOT NULL,
-  format TEXT NOT NULL, quantization TEXT, size_bytes INTEGER,
-  sha256 TEXT, license TEXT, gated TEXT, shard_count INTEGER,
+catalog_releases(
+  repo_id TEXT NOT NULL, revision TEXT NOT NULL,   -- primary key (repo_id, revision)
+  release_json TEXT NOT NULL CHECK(length(CAST(release_json AS BLOB)) <= 1048576),
   fetched_at_unix_ms INTEGER NOT NULL
 );
 artifact_metadata(
-  artifact_id TEXT PRIMARY KEY REFERENCES catalog_artifacts(artifact_id),
+  repo_id TEXT NOT NULL, revision TEXT NOT NULL, filename TEXT NOT NULL,   -- primary key of all three
   gguf_json TEXT NOT NULL CHECK(length(CAST(gguf_json AS BLOB)) <= 262144),
   fetched_at_unix_ms INTEGER NOT NULL
 );
@@ -85,19 +83,19 @@ downloads(
 
 Rules stated as invariants:
 
-- A `catalog_artifacts` row is keyed by revision; an artifact at one revision is never
-  rewritten with different size or checksum. A new revision is a new row.
-- The spec's `catalog_artifacts` draft columns for architecture facts (`block_count`,
-  `head_count_kv`, and so on) live only in `artifact_metadata`, because they come from a
-  separate, user-triggered inspection and may be absent.
+- A `catalog_releases` row is keyed by repository and revision and stores the whole
+  normalized release, so family source, dropped counts, and unknowns survive a restart
+  (implementation correction: per-file rows lost that information). A revision is never
+  rewritten with a different size or checksum for an artifact that already had one.
+- Facts about one file's header (`artifact_metadata`) come from a separate, user-triggered
+  inspection and may be absent; they are never merged into the release row.
 - `local_file_digests` is a cache only. A row is used only if device, inode, size, mtime,
   and ctime all match the current `stat` (ctime cannot be reset by users, so a restored
   mtime does not hide an edit); otherwise the file is rehashed. Cached results are shown
   as "verified at <time>".
 - The catalog cache is bounded: at most 200 `catalog_queries` rows and 16 MiB of cached
-  JSON in total, evicted oldest `fetched_at` first. `catalog_artifacts` rows not
-  referenced by a cached query are evicted the same way. `downloads` keeps its own copy
-  of what it needs and is never evicted.
+  JSON, and 2 000 `catalog_releases` rows and 64 MiB, evicted oldest `fetched_at` first.
+  `downloads` keeps its own copy of what it needs and is never evicted.
 - `downloads` rows never store tokens, URLs, or remote filenames as paths.
 
 ## Hugging Face client

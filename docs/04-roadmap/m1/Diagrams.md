@@ -6,42 +6,41 @@ Companion documents: [Planned](Planned.md) · [Implementation](Implementation.md
 
 ```mermaid
 erDiagram
-    CATALOG_QUERY ||--o{ CATALOG_ARTIFACT : "returned"
-    CATALOG_ARTIFACT ||--o| ARTIFACT_METADATA : "inspected"
-    CATALOG_ARTIFACT ||--o{ DOWNLOAD : "copied into"
-    CATALOG_ARTIFACT }o--o{ LOCAL_FILE_DIGEST : "matched by sha256"
+    CATALOG_QUERY ||--o{ CATALOG_RELEASE : "lists repos later expanded into"
+    CATALOG_RELEASE ||--o| ARTIFACT_METADATA : "inspected per file"
+    CATALOG_RELEASE ||--o{ DOWNLOAD : "artifact copied into"
+    CATALOG_RELEASE }o--o{ LOCAL_FILE_DIGEST : "matched by sha256"
     CATALOG_QUERY {
         text query_key PK
+        text result_json
         int fetched_at_unix_ms
     }
-    CATALOG_ARTIFACT {
-        text artifact_id PK
-        text repo_id
-        text revision
-        text filename
-        int size_bytes
-        text sha256
-        text quantization
-        text license
-        text gated
+    CATALOG_RELEASE {
+        text repo_id PK
+        text revision PK
+        text release_json
+        int fetched_at_unix_ms
     }
     ARTIFACT_METADATA {
-        text artifact_id PK
+        text repo_id PK
+        text revision PK
+        text filename PK
         text gguf_json
-        int fetched_at_unix_ms
     }
     DOWNLOAD {
         int id PK
-        text artifact_id FK
+        text artifact_id
+        text expected_sha256
         text state
         int bytes_done
-        text expected_sha256
     }
     LOCAL_FILE_DIGEST {
         text path PK
+        int dev
+        int inode
         int size
         int mtime_ns
-        int inode
+        int ctime_ns
         text sha256
     }
 ```
