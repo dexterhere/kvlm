@@ -57,6 +57,7 @@ Each phase is one or more reviewable pull requests into `develop`, built in this
   publishes; a mismatch deletes the partial file and reports the failure.
 - Tokens live only in the desktop keyring. If no keyring is available, token features
   are disabled with an explanation; there is no plaintext fallback.
+- Downloads keep a free-space reserve so they cannot fill the disk the history database shares, and a crash never leaves the app guessing: startup reconciles files and records without touching the network.
 - Remote names (repository, filename) are untrusted. They are displayed but never used
   to build file paths.
 - The application sends no analytics and nothing beyond what the explicit action needs.
@@ -69,7 +70,6 @@ Each phase is one or more reviewable pull requests into `develop`, built in this
 | Sharded GGUF download and fit | No validated contract for combined size and layout |
 | Safetensors/EXL2/AWQ | No M1 runtime can use them |
 | Reusing a found file through Ollama import or llama-server | Belongs to M2 runtime management |
-| Hard disk-space preflight | Needs a safe filesystem query; write failures are handled instead |
 | Cross-device storage merging (links) | Mutates user storage semantics; report-only in M1 |
 
 ## Done means
