@@ -454,9 +454,17 @@ impl RootLock {
             .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
             .open(root.join(".lock"))
             .map_err(|_| InstallError::Io)?;
-        rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-            .map_err(|_| InstallError::Busy)?;
-        Ok(Self { _file: file })
+        // A lock is held by an open file description, which a concurrent fork in this very
+        // process shares until its exec closes it; a few short retries ride that out, while a
+        // genuinely busy lock (another instance) still reports Busy.
+        for attempt in 0..5 {
+            match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(_) if attempt < 4 => std::thread::sleep(Duration::from_millis(20)),
+                Err(_) => {}
+            }
+        }
+        Err(InstallError::Busy)
     }
 }
 

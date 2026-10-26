@@ -1,3 +1,685 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! M2: manage only owned child processes and bounded stdout/stderr logs.
-//! Not implemented in the development foundation.
+//! Supervision of the one managed `llama-server` process.
+//!
+//! One Tokio task owns the child and a small state machine. The rest of the application
+//! talks to it through a handle: commands in, a `watch` status out, and a bounded log
+//! buffer. The task signals only the child it spawned (never a pid read from anywhere) and
+//! only while that child is un-reaped, and it always ends a stop in `Stopped` or `Failed`.
+//!
+//! Readiness is an identity check, not a liveness check: `/health` must answer 200 **and**
+//! `/v1/models` must list this launch's random alias **and** the child must still be alive.
+
+pub mod log;
+pub mod record;
+
+use crate::llamacpp::install::prepare_root;
+use log::LogBuffer;
+use reqwest::Client;
+use rustix::process::{Pid, Signal, kill_process_group};
+use std::{
+    fs::{self, File},
+    net::TcpListener,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::Duration,
+};
+use tokio::{
+    process::{Child, Command},
+    sync::{mpsc, oneshot, watch},
+    task::JoinHandle,
+    time::{Instant, sleep_until},
+};
+use workstation_core::runtime::{
+    RuntimeLifecycleState,
+    profile::{self, LaunchProfile, valid_name},
+    random_hex,
+};
+
+pub const DEFAULT_START_TIMEOUT: Duration = Duration::from_secs(180);
+pub const DEFAULT_STOP_GRACE: Duration = Duration::from_secs(5);
+const STARTING_POLL: Duration = Duration::from_millis(500);
+const READY_POLL: Duration = Duration::from_secs(5);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const REAP_TIMEOUT: Duration = Duration::from_secs(5);
+const UNRESPONSIVE_AFTER: u32 = 6;
+const MAX_RESTARTS: usize = 3;
+const RESTART_WINDOW: Duration = Duration::from_secs(600);
+const FAILURE_LINES: usize = 50;
+const MAX_PROBE_BODY: usize = 64 * 1024;
+/// Environment passed to the child. Everything else, including `LLAMA_ARG_*` overrides and
+/// Hugging Face tokens, is dropped.
+const ENV_ALLOW: [&str; 8] = [
+    "HOME",
+    "XDG_CACHE_HOME",
+    "XDG_RUNTIME_DIR",
+    "XDG_DATA_DIRS",
+    "XDG_CONFIG_DIRS",
+    "LANG",
+    "LC_ALL",
+    "CUDA_VISIBLE_DEVICES",
+];
+
+#[derive(Clone, Debug)]
+pub struct StartSpec {
+    /// `runtimes/llamacpp`, the directory `llamacpp::install` publishes into.
+    pub install_root: PathBuf,
+    /// The installed build to run, e.g. `b11905-cpu`.
+    pub dir_name: String,
+    pub profile: LaunchProfile,
+    pub start_timeout: Duration,
+    pub stop_grace: Duration,
+    /// Restart after an unexpected exit: at most three in ten minutes, with backoff.
+    pub auto_restart: bool,
+}
+
+impl StartSpec {
+    pub fn new(install_root: PathBuf, dir_name: String, profile: LaunchProfile) -> Self {
+        Self {
+            install_root,
+            dir_name,
+            profile,
+            start_timeout: DEFAULT_START_TIMEOUT,
+            stop_grace: DEFAULT_STOP_GRACE,
+            auto_restart: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureKind {
+    InvalidProfile,
+    BinaryMissing,
+    ModelUnreadable,
+    PortInUse,
+    SpawnFailed,
+    ExitedEarly,
+    StartTimeout,
+    Crashed,
+    Unresponsive,
+    StuckOnStop,
+}
+
+impl FailureKind {
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::InvalidProfile => "The launch profile is not valid.",
+            Self::BinaryMissing => "The installed llama-server was not found or is not usable.",
+            Self::ModelUnreadable => "The model file is missing or cannot be read.",
+            Self::PortInUse => {
+                "The port is already in use. Choose another port or stop what is using it."
+            }
+            Self::SpawnFailed => "llama-server could not be started.",
+            Self::ExitedEarly => "llama-server exited while starting.",
+            Self::StartTimeout => "llama-server did not become ready in time.",
+            Self::Crashed => "llama-server stopped unexpectedly.",
+            Self::Unresponsive => "llama-server stopped answering and was stopped.",
+            Self::StuckOnStop => "llama-server did not exit when asked to stop.",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Failure {
+    pub kind: FailureKind,
+    pub exit_code: Option<i32>,
+    /// The newest log lines at the time of failure.
+    pub last_lines: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Status {
+    pub state: RuntimeLifecycleState,
+    pub generation: Option<String>,
+    pub pid: Option<u32>,
+    pub port: Option<u16>,
+    pub failure: Option<Failure>,
+    /// Automatic restarts performed since the last explicit start.
+    pub restarts: u32,
+}
+
+impl Status {
+    fn stopped() -> Self {
+        Self {
+            state: RuntimeLifecycleState::Stopped,
+            generation: None,
+            pid: None,
+            port: None,
+            failure: None,
+            restarts: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SupervisorError {
+    /// A process is already running or starting.
+    AlreadyRunning,
+    /// Refused before anything was spawned; nothing is running.
+    Refused(FailureKind),
+    /// The supervisor task has ended.
+    Gone,
+}
+
+impl std::fmt::Display for SupervisorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyRunning => f.write_str("A llama-server is already running."),
+            Self::Refused(kind) => f.write_str(kind.describe()),
+            Self::Gone => f.write_str("The runtime supervisor is not running."),
+        }
+    }
+}
+impl std::error::Error for SupervisorError {}
+
+enum Cmd {
+    Start(Box<StartSpec>, oneshot::Sender<Result<(), SupervisorError>>),
+    Stop(oneshot::Sender<()>),
+    Restart(oneshot::Sender<Result<(), SupervisorError>>),
+}
+
+/// The handle. Dropping it stops the child (the task sees the channel close).
+pub struct Supervisor {
+    tx: mpsc::Sender<Cmd>,
+    status: watch::Receiver<Status>,
+    logs: LogBuffer,
+    task: Option<JoinHandle<()>>,
+}
+
+impl Supervisor {
+    /// `record_path` is the private file kept while a child runs (see `record`).
+    pub fn spawn(record_path: PathBuf) -> Self {
+        let (tx, rx) = mpsc::channel(8);
+        let (status_tx, status) = watch::channel(Status::stopped());
+        let logs = LogBuffer::default();
+        let task = tokio::spawn(actor(rx, status_tx, logs.clone(), record_path));
+        Self {
+            tx,
+            status,
+            logs,
+            task: Some(task),
+        }
+    }
+
+    pub fn status(&self) -> Status {
+        self.status.borrow().clone()
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<Status> {
+        self.status.clone()
+    }
+
+    pub fn logs(&self) -> LogBuffer {
+        self.logs.clone()
+    }
+
+    /// Returns once the process is spawned (or refused); readiness arrives through `status`.
+    pub async fn start(&self, spec: StartSpec) -> Result<(), SupervisorError> {
+        let (reply, answer) = oneshot::channel();
+        self.tx
+            .send(Cmd::Start(Box::new(spec), reply))
+            .await
+            .map_err(|_| SupervisorError::Gone)?;
+        answer.await.map_err(|_| SupervisorError::Gone)?
+    }
+
+    /// Returns when the process has been stopped and reaped.
+    pub async fn stop(&self) -> Result<(), SupervisorError> {
+        let (reply, answer) = oneshot::channel();
+        self.tx
+            .send(Cmd::Stop(reply))
+            .await
+            .map_err(|_| SupervisorError::Gone)?;
+        answer.await.map_err(|_| SupervisorError::Gone)
+    }
+
+    pub async fn restart(&self) -> Result<(), SupervisorError> {
+        let (reply, answer) = oneshot::channel();
+        self.tx
+            .send(Cmd::Restart(reply))
+            .await
+            .map_err(|_| SupervisorError::Gone)?;
+        answer.await.map_err(|_| SupervisorError::Gone)?
+    }
+
+    /// Stop the child and end the task; use at application exit.
+    pub async fn shutdown(mut self) {
+        let _ = self.stop().await;
+        if let Some(task) = self.task.take() {
+            drop(self.tx);
+            let _ = task.await;
+        }
+    }
+}
+
+struct Run {
+    child: Child,
+    pid: Pid,
+    alias: String,
+    port: u16,
+    spec: StartSpec,
+    started: Instant,
+    ready: bool,
+    failed_probes: u32,
+    probe: Option<JoinHandle<()>>,
+    pumps: Vec<JoinHandle<()>>,
+    next_probe: Instant,
+}
+
+enum Health {
+    Ready,
+    Loading,
+    Down,
+}
+
+struct State {
+    status_tx: watch::Sender<Status>,
+    logs: LogBuffer,
+    record_path: PathBuf,
+    client: Client,
+    run: Option<Run>,
+    last_spec: Option<StartSpec>,
+    restarts: Vec<Instant>,
+    restart_at: Option<Instant>,
+}
+
+impl State {
+    fn publish(&self, state: RuntimeLifecycleState, failure: Option<Failure>) {
+        let (generation, pid, port) = self.run.as_ref().map_or((None, None, None), |r| {
+            (
+                Some(r.alias.clone()),
+                Some(r.pid.as_raw_pid() as u32),
+                Some(r.port),
+            )
+        });
+        let restarts = self.status_tx.borrow().restarts;
+        let _ = self.status_tx.send(Status {
+            state,
+            generation,
+            pid,
+            port,
+            failure,
+            restarts,
+        });
+    }
+
+    fn fail(&mut self, kind: FailureKind, exit_code: Option<i32>) {
+        let last_lines = self
+            .logs
+            .tail(FAILURE_LINES)
+            .into_iter()
+            .map(|l| l.text)
+            .collect();
+        self.publish(
+            RuntimeLifecycleState::Failed,
+            Some(Failure {
+                kind,
+                exit_code,
+                last_lines,
+            }),
+        );
+    }
+}
+
+async fn actor(
+    mut rx: mpsc::Receiver<Cmd>,
+    status_tx: watch::Sender<Status>,
+    logs: LogBuffer,
+    record_path: PathBuf,
+) {
+    let client = Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(PROBE_TIMEOUT)
+        .build()
+        .expect("static client configuration");
+    let mut state = State {
+        status_tx,
+        logs,
+        record_path,
+        client,
+        run: None,
+        last_spec: None,
+        restarts: Vec::new(),
+        restart_at: None,
+    };
+    let (probe_tx, mut probe_rx) = mpsc::channel::<(String, Health)>(1);
+    loop {
+        let next_probe = state.run.as_ref().map(|r| r.next_probe);
+        let deadline = state
+            .run
+            .as_ref()
+            .filter(|r| !r.ready)
+            .map(|r| r.started + r.spec.start_timeout);
+        tokio::select! {
+            command = rx.recv() => match command {
+                None => {
+                    stop_run(&mut state).await;
+                    break;
+                }
+                Some(Cmd::Start(spec, reply)) => {
+                    state.restarts.clear();
+                    state.status_tx.send_modify(|s| s.restarts = 0);
+                    let _ = reply.send(start(&mut state, *spec).await);
+                }
+                Some(Cmd::Stop(reply)) => {
+                    state.restart_at = None;
+                    stop_run(&mut state).await;
+                    let _ = reply.send(());
+                }
+                Some(Cmd::Restart(reply)) => {
+                    state.restart_at = None;
+                    let spec = state.last_spec.clone();
+                    stop_run(&mut state).await;
+                    let result = match spec {
+                        Some(spec) => start(&mut state, spec).await,
+                        None => Err(SupervisorError::Refused(FailureKind::InvalidProfile)),
+                    };
+                    let _ = reply.send(result);
+                }
+            },
+            status = wait_child(&mut state.run) => {
+                let code = status.ok().and_then(|s| s.code());
+                on_exit(&mut state, code).await;
+            }
+            Some((alias, health)) = probe_rx.recv() => on_probe(&mut state, alias, health).await,
+            () = sleep_until_opt(next_probe), if next_probe.is_some() => {
+                schedule_probe(&mut state, &probe_tx);
+            }
+            () = sleep_until_opt(deadline), if deadline.is_some() => {
+                stop_run(&mut state).await;
+                state.fail(FailureKind::StartTimeout, None);
+            }
+            () = sleep_until_opt(state.restart_at), if state.restart_at.is_some() => {
+                state.restart_at = None;
+                if let Some(spec) = state.last_spec.clone() {
+                    let _ = start(&mut state, spec).await;
+                }
+            }
+        }
+    }
+}
+
+async fn sleep_until_opt(at: Option<Instant>) {
+    match at {
+        Some(at) => sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn wait_child(run: &mut Option<Run>) -> std::io::Result<std::process::ExitStatus> {
+    match run {
+        Some(run) => run.child.wait().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Validate, pre-flight and spawn. On success the state is `Starting`.
+async fn start(state: &mut State, spec: StartSpec) -> Result<(), SupervisorError> {
+    if state.run.is_some() {
+        return Err(SupervisorError::AlreadyRunning);
+    }
+    state.last_spec = Some(spec.clone());
+    state.restart_at = None;
+    state.logs.clear();
+    let refuse = |state: &mut State, kind: FailureKind| {
+        state.fail(kind, None);
+        Err(SupervisorError::Refused(kind))
+    };
+    let alias = match random_hex(8) {
+        Ok(alias) => alias,
+        Err(_) => return refuse(state, FailureKind::SpawnFailed),
+    };
+    let mut profile = spec.profile.clone();
+    // The model must be a readable regular file; the child gets its resolved path.
+    match fs::canonicalize(&profile.model_path) {
+        Ok(path) if path.is_file() && File::open(&path).is_ok() => {
+            profile.model_path = path.to_string_lossy().into_owned();
+        }
+        _ => return refuse(state, FailureKind::ModelUnreadable),
+    }
+    let args = match profile.arguments(&alias) {
+        Ok(args) => args,
+        Err(_) => return refuse(state, FailureKind::InvalidProfile),
+    };
+    let Some((program, dir)) = resolve_program(&spec.install_root, &spec.dir_name) else {
+        return refuse(state, FailureKind::BinaryMissing);
+    };
+    // A conflict is reported, never resolved by signalling whatever holds the port.
+    if TcpListener::bind((profile::LOOPBACK, profile.port)).is_err() {
+        return refuse(state, FailureKind::PortInUse);
+    }
+    let mut command = Command::new(&program);
+    command
+        .args(&args)
+        .env_clear()
+        .env("LD_LIBRARY_PATH", &dir)
+        .current_dir(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .process_group(0);
+    for name in ENV_ALLOW {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => return refuse(state, FailureKind::SpawnFailed),
+    };
+    let Some(raw) = child.id() else {
+        return refuse(state, FailureKind::SpawnFailed);
+    };
+    let pid = i32::try_from(raw)
+        .ok()
+        .and_then(Pid::from_raw)
+        .expect("a live child has a positive pid");
+    let mut pumps = Vec::new();
+    if let Some(out) = child.stdout.take() {
+        pumps.push(tokio::spawn(log::pump(out, state.logs.clone(), false)));
+    }
+    if let Some(err) = child.stderr.take() {
+        pumps.push(tokio::spawn(log::pump(err, state.logs.clone(), true)));
+    }
+    if let Some(ticks) = record::start_ticks(raw) {
+        let _ = record::write(
+            &state.record_path,
+            &record::Record {
+                pid: raw,
+                start_ticks: ticks,
+                exe: program.clone(),
+                generation: alias.clone(),
+            },
+        );
+    }
+    state.run = Some(Run {
+        child,
+        pid,
+        alias,
+        port: profile.port,
+        spec,
+        started: Instant::now(),
+        ready: false,
+        failed_probes: 0,
+        probe: None,
+        pumps,
+        next_probe: Instant::now() + STARTING_POLL,
+    });
+    state.publish(RuntimeLifecycleState::Starting, None);
+    Ok(())
+}
+
+/// `llama-server` inside a build directory this application published: real directory,
+/// real executable file, no links.
+fn resolve_program(root: &Path, dir_name: &str) -> Option<(PathBuf, PathBuf)> {
+    if !valid_name(dir_name) || dir_name.starts_with('.') || prepare_root(root).is_err() {
+        return None;
+    }
+    let dir = root.join(dir_name);
+    if !fs::symlink_metadata(&dir).ok()?.is_dir() {
+        return None;
+    }
+    let program = dir.join("llama-server");
+    let meta = fs::symlink_metadata(&program).ok()?;
+    (meta.is_file() && meta.permissions().mode() & 0o100 != 0).then_some((program, dir))
+}
+
+fn schedule_probe(state: &mut State, probe_tx: &mpsc::Sender<(String, Health)>) {
+    let Some(run) = state.run.as_mut() else {
+        return;
+    };
+    run.next_probe = Instant::now() + if run.ready { READY_POLL } else { STARTING_POLL };
+    if run.probe.as_ref().is_some_and(|p| !p.is_finished()) {
+        return;
+    }
+    let (client, port, alias, tx) = (
+        state.client.clone(),
+        run.port,
+        run.alias.clone(),
+        probe_tx.clone(),
+    );
+    run.probe = Some(tokio::spawn(async move {
+        let health = probe(&client, port, &alias).await;
+        let _ = tx.send((alias, health)).await;
+    }));
+}
+
+async fn probe(client: &Client, port: u16, alias: &str) -> Health {
+    let base = format!("http://127.0.0.1:{port}");
+    match client.get(format!("{base}/health")).send().await {
+        Ok(r) if r.status().as_u16() == 200 => {}
+        Ok(r) if r.status().as_u16() == 503 => return Health::Loading,
+        _ => return Health::Down,
+    }
+    let Ok(mut response) = client.get(format!("{base}/v1/models")).send().await else {
+        return Health::Down;
+    };
+    if response.status().as_u16() != 200 {
+        return Health::Loading;
+    }
+    let mut body = Vec::new();
+    while let Ok(Some(chunk)) = response.chunk().await {
+        if body.len() + chunk.len() > MAX_PROBE_BODY {
+            return Health::Down;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let listed = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| {
+            v.get("data")?
+                .as_array()?
+                .iter()
+                .any(|m| m.get("id").and_then(|i| i.as_str()) == Some(alias))
+                .then_some(())
+        });
+    if listed.is_some() {
+        Health::Ready
+    } else {
+        Health::Down
+    }
+}
+
+async fn on_probe(state: &mut State, alias: String, health: Health) {
+    let Some(run) = state.run.as_mut() else {
+        return;
+    };
+    if run.alias != alias {
+        return; // a probe from an earlier launch
+    }
+    match health {
+        Health::Ready => {
+            run.failed_probes = 0;
+            if !run.ready {
+                run.ready = true;
+                state.publish(RuntimeLifecycleState::Ready, None);
+            }
+        }
+        Health::Loading if !run.ready => {}
+        Health::Loading | Health::Down => {
+            run.failed_probes += 1;
+            if run.ready && run.failed_probes >= UNRESPONSIVE_AFTER {
+                stop_run(state).await;
+                state.fail(FailureKind::Unresponsive, None);
+            }
+        }
+    }
+}
+
+async fn on_exit(state: &mut State, code: Option<i32>) {
+    let Some(mut run) = state.run.take() else {
+        return;
+    };
+    let was_ready = run.ready;
+    finish(&mut run, &state.record_path).await;
+    let kind = if was_ready {
+        FailureKind::Crashed
+    } else {
+        FailureKind::ExitedEarly
+    };
+    state.fail(kind, code);
+    if !state.last_spec.as_ref().is_some_and(|s| s.auto_restart) {
+        return;
+    }
+    let now = Instant::now();
+    state
+        .restarts
+        .retain(|t| now.duration_since(*t) < RESTART_WINDOW);
+    if state.restarts.len() < MAX_RESTARTS {
+        let backoff = Duration::from_secs(1 << state.restarts.len());
+        state.restarts.push(now);
+        state.restart_at = Some(now + backoff);
+        let count = u32::try_from(state.restarts.len()).unwrap_or(u32::MAX);
+        state.status_tx.send_modify(|s| s.restarts = count);
+    }
+}
+
+/// Stop the current child, if any: SIGTERM to its group, SIGKILL after the grace period,
+/// always reaped. Ends in `Stopped`, or `Failed` when the child cannot be reaped.
+async fn stop_run(state: &mut State) {
+    if state.run.is_none() {
+        if state.status_tx.borrow().state != RuntimeLifecycleState::Failed {
+            state.publish(RuntimeLifecycleState::Stopped, None);
+        }
+        return;
+    }
+    state.publish(RuntimeLifecycleState::Stopping, None);
+    let mut run = state.run.take().expect("checked above");
+    // The child has not been reaped, so its pid (and group) cannot have been reused.
+    let _ = kill_process_group(run.pid, Signal::TERM);
+    let exited = tokio::time::timeout(run.spec.stop_grace, run.child.wait())
+        .await
+        .is_ok();
+    let mut stuck = false;
+    if !exited {
+        let _ = kill_process_group(run.pid, Signal::KILL);
+        stuck = tokio::time::timeout(REAP_TIMEOUT, run.child.wait())
+            .await
+            .is_err();
+    }
+    finish(&mut run, &state.record_path).await;
+    if stuck {
+        state.fail(FailureKind::StuckOnStop, None);
+    } else {
+        state.publish(RuntimeLifecycleState::Stopped, None);
+    }
+}
+
+/// Release what a finished run holds: the probe, the log readers (given a moment to drain
+/// the last lines), and the on-disk record.
+async fn finish(run: &mut Run, record_path: &Path) {
+    if let Some(probe) = run.probe.take() {
+        probe.abort();
+    }
+    for mut pump in run.pumps.drain(..) {
+        if tokio::time::timeout(Duration::from_secs(1), &mut pump)
+            .await
+            .is_err()
+        {
+            pump.abort();
+        }
+    }
+    record::remove(record_path);
+}

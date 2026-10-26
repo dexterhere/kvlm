@@ -20,7 +20,7 @@ workstation-runtimes = { path = "crates/workstation-runtimes" }
 workstation-bench = { path = "crates/workstation-bench" }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "macros", "process", "io-util"] }
 async-channel = "2"
 libc = "0.2"
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
