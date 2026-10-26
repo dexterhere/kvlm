@@ -71,8 +71,13 @@ in Ollama, the Hugging Face cache or the application's store, downloads with pau
 and checksum verification, and keeps a gated-model token in your desktop keyring. A live run
 on the reference machine is recorded in the
 [M1 acceptance evidence](docs/03-development/m1-acceptance.md); the stored-token restart
-check passed. See the [M1 plan](docs/04-roadmap/m1/Planned.md). Managed runtimes,
-controlled benchmark comparisons, and more hardware matrices come in M2 to M4; the
+check passed. See the [M1 plan](docs/04-roadmap/m1/Planned.md).
+
+**M2 is implemented on `develop`.** The Runtimes page can install the official portable
+llama.cpp build (checksum verified, no root), save launch profiles, start, stop and restart
+a managed server on `127.0.0.1`, and show its log. A live run with the real server is in the
+[M2 acceptance evidence](docs/03-development/m2-acceptance.md); only the CPU build was served.
+Controlled benchmark comparisons and more hardware matrices come in M3 and M4; the
 [roadmap](docs/04-roadmap/milestones.md) tracks them.
 
 This is an independent community project; it is not an official GNOME application or a
