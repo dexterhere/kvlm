@@ -1,8 +1,7 @@
 # M1 acceptance evidence
 
-Date: 2026-10-27. Status: **M1 is implemented on `develop`; acceptance is not signed off.**
-One required check is pending (the token restart check below), and sign-off is the project
-owner's decision. This page records what was run, what it showed, and what it does not claim.
+Date: 2026-10-27. Status: **M1 is implemented on `develop`; evidence is complete, sign-off is pending.**
+All required checks have now been run; sign-off is the project owner's decision. This page records what was run, what it showed, and what it does not claim.
 
 M1's definition of done ([plan](../04-roadmap/m1/Planned.md)) is search, details, fit,
 duplicate detection, an interrupted-then-resumed download with a verified checksum, a stored
@@ -34,9 +33,9 @@ The run also showed that the search list does not reliably say which repositorie
 while a repository's detail does. The exact access therefore appears once a repository is
 expanded; the list should not be read as proof that a repository is open.
 
-## Token survives restart: pending
+## Token survives restart: passed
 
-The same example has two separate-process steps that store a throwaway token only if none is
+The example has two separate-process steps that store a throwaway token only if none is
 saved, read it back from a fresh process, and remove it:
 
 ```sh
@@ -44,12 +43,18 @@ cargo run --locked -p workstation-runtimes --example m1_acceptance -- /tmp/x key
 cargo run --locked -p workstation-runtimes --example m1_acceptance -- /tmp/x keyring-check
 ```
 
-The expected output is `token survived restart: true`, `in memory after load: true`, and
-`still present afterwards: false`. These steps write to the user's real desktop keyring, so
-the automated session did not run them; the permission was refused and that was respected.
-Until a person runs them and records the output here, "stored token surviving restart" is
-not verified. Unit tests with an in-memory store cover the surrounding logic (save, load,
-clear, failure and timeout paths), but they do not exercise gnome-keyring.
+Run by the project owner on the reference machine (gnome-keyring) on 2026-10-27:
+
+```text
+keyring: throwaway token saved (this process now exits)
+keyring: token survived restart: true
+keyring: in memory after load: true
+keyring: removed, still present afterwards: false
+```
+
+The throwaway item was removed. This shows the encrypted Secret Service path works against
+gnome-keyring; locked-keyring prompts and a missing keyring are covered by unit tests with an
+in-memory store, not by live runs.
 
 ## Automated checks
 
@@ -74,6 +79,6 @@ machine, run one at a time.
 
 ## Sign-off
 
-Awaiting the token restart output above and the project owner's decision. Merging the phase
+Awaiting the project owner's decision. Merging the phase
 PRs into `develop` is not acceptance, and promotion to `staging` and `main` follows the Git
 workflow only after sign-off.
