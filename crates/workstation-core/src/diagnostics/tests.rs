@@ -1,5 +1,5 @@
 use super::*;
-use crate::experiments::{Coverage, Engine, Itl, NewExperiment, Pass, Scope, Settings};
+use crate::experiments::{Coverage, Engine, Itl, NewExperiment, Pass, Sampled, Scope, Settings};
 
 fn sampled(peak: f64, mean: f64) -> Sampled {
     Sampled {
@@ -84,40 +84,50 @@ fn no_completed_measured_pass_means_nothing_is_evaluated() {
     );
 }
 
+const DEDICATED: Context = Context {
+    offloadable_layers: Some(33),
+    unified_memory: Some(false),
+};
+
 #[test]
-fn spill_triggers_on_vram_with_large_ram_or_on_fewer_layers_than_the_model_has() {
-    let metrics = |vram: f64, rss: f64| PassMetrics {
+fn spill_triggers_on_vram_with_model_memory_in_ram_or_on_fewer_layers_than_the_model_has() {
+    let metrics = |vram: f64, ram: u64| PassMetrics {
         wall_ms: 1000,
         gpu_memory_bytes: Some(sampled(vram, vram)),
-        process_rss_bytes: Some(sampled(rss, rss)),
+        model_ram_bytes: Some(ram),
         ..PassMetrics::default()
     };
-    let ctx = Context::default();
     let hit = evaluate(
         &experiment(
             Some("cuda"),
             Ownership::Managed,
-            vec![metrics(4.0 * GIB, 300.0 * 1024.0 * 1024.0); 3],
+            vec![metrics(4.0 * GIB, 300 * 1024 * 1024); 3],
         ),
-        &ctx,
+        &DEDICATED,
     );
     let f = by(&hit, "DIAG-01");
     assert_eq!(f.status, FindingStatus::Triggered);
     assert!(f.warning && f.message.contains("Consistent with"));
     assert_eq!(f.follow_up, Some(Variable::CacheTypeQ8));
 
-    // Exactly the threshold is not above it.
+    // Exactly the threshold is not above it; the layer signal is then the one left unchecked.
     let edge = evaluate(
         &experiment(
             Some("cuda"),
             Ownership::Managed,
-            vec![metrics(4.0 * GIB, SPILL_RAM_BYTES); 3],
+            vec![metrics(4.0 * GIB, 256 * 1024 * 1024); 3],
         ),
-        &ctx,
+        &DEDICATED,
     );
-    assert_eq!(by(&edge, "DIAG-01").status, FindingStatus::Clear);
+    let f = by(&edge, "DIAG-01");
+    assert_eq!(f.status, FindingStatus::Clear);
+    assert!(
+        f.missing.iter().any(|m| m.contains("offloaded layers")),
+        "unchecked signal is named"
+    );
+    assert!(f.message.contains("Not checked"));
 
-    // Layers: requested 99 is not the measure, the model's real count is.
+    // Layers: the model's real count is the measure, per pass or experiment-wide.
     let mut e = experiment(
         Some("cuda"),
         Ownership::Attached,
@@ -127,43 +137,84 @@ fn spill_triggers_on_vram_with_large_ram_or_on_fewer_layers_than_the_model_has()
         gpu_layers: Some(20),
         ..Settings::default()
     });
-    let layers = evaluate(
-        &e,
-        &Context {
-            offloadable_layers: Some(33),
-            unified_memory: Some(false),
-        },
+    assert_eq!(
+        by(&evaluate(&e, &DEDICATED), "DIAG-01").status,
+        FindingStatus::Triggered
     );
-    assert_eq!(by(&layers, "DIAG-01").status, FindingStatus::Triggered);
     e.observed = Some(Settings {
         gpu_layers: Some(33),
         ..Settings::default()
     });
-    let full = evaluate(
-        &e,
-        &Context {
-            offloadable_layers: Some(33),
-            unified_memory: Some(false),
-        },
+    let full = by(&evaluate(&e, &DEDICATED), "DIAG-01");
+    assert_eq!(full.status, FindingStatus::Clear);
+    assert!(
+        full.missing.iter().any(|m| m.contains("system RAM")),
+        "memory signal reported as unchecked"
     );
-    assert_eq!(by(&full, "DIAG-01").status, FindingStatus::Clear);
+    e.observed = None;
+    e.passes
+        .iter_mut()
+        .for_each(|p| p.metrics.as_mut().unwrap().offloaded_layers = Some(20));
+    assert_eq!(
+        by(&evaluate(&e, &DEDICATED), "DIAG-01").status,
+        FindingStatus::Triggered
+    );
 }
 
 #[test]
-fn spill_is_not_applicable_for_cpu_only_zero_layers_and_unified_memory() {
+fn process_resident_size_alone_is_not_model_allocation() {
+    let metrics = PassMetrics {
+        gpu_memory_bytes: Some(sampled(4.0 * GIB, 4.0 * GIB)),
+        process_rss_bytes: Some(sampled(400.0 * 1024.0 * 1024.0, 400.0 * 1024.0 * 1024.0)),
+        ..PassMetrics::default()
+    };
+    let f = by(
+        &evaluate(
+            &experiment(Some("cuda"), Ownership::Managed, vec![metrics; 3]),
+            &DEDICATED,
+        ),
+        "DIAG-01",
+    );
+    assert_eq!(f.status, FindingStatus::NotEvaluated);
+}
+
+#[test]
+fn spill_signals_from_different_passes_are_not_combined() {
+    let vram_only = PassMetrics {
+        gpu_memory_bytes: Some(sampled(4.0 * GIB, 4.0 * GIB)),
+        ..PassMetrics::default()
+    };
+    let ram_only = PassMetrics {
+        model_ram_bytes: Some(1 << 30),
+        ..PassMetrics::default()
+    };
+    let e = experiment(
+        Some("cuda"),
+        Ownership::Managed,
+        vec![vram_only, ram_only.clone(), ram_only],
+    );
+    assert_eq!(
+        by(&evaluate(&e, &DEDICATED), "DIAG-01").status,
+        FindingStatus::NotEvaluated
+    );
+}
+
+#[test]
+fn spill_is_not_applicable_for_cpu_only_zero_layers_and_unified_memory_and_unknown_topology_waits()
+{
     let mut e = experiment(
         Some("cpu"),
         Ownership::Managed,
         vec![PassMetrics::default(); 3],
     );
     assert_eq!(
-        by(&evaluate(&e, &Context::default()), "DIAG-01").status,
+        by(&evaluate(&e, &DEDICATED), "DIAG-01").status,
         FindingStatus::NotApplicable
     );
     e.spec.backend = Some("cuda".into());
     e.spec.requested.gpu_layers = Some(0);
     assert_eq!(
-        by(&evaluate(&e, &Context::default()), "DIAG-01").status,
+        by(&evaluate(&e, &DEDICATED), "DIAG-01").status,
         FindingStatus::NotApplicable
     );
     e.spec.requested.gpu_layers = Some(99);
@@ -175,6 +226,17 @@ fn spill_is_not_applicable_for_cpu_only_zero_layers_and_unified_memory() {
         by(&evaluate(&e, &apu), "DIAG-01").status,
         FindingStatus::NotApplicable
     );
+    e.observed = Some(Settings {
+        gpu_layers: Some(20),
+        ..Settings::default()
+    });
+    let unknown = Context {
+        offloadable_layers: Some(33),
+        unified_memory: None,
+    };
+    let f = by(&evaluate(&e, &unknown), "DIAG-01");
+    assert_eq!(f.status, FindingStatus::NotEvaluated);
+    assert!(f.missing[0].contains("share memory"));
 }
 
 #[test]
@@ -184,10 +246,19 @@ fn spill_names_every_missing_input() {
         Ownership::Attached,
         vec![PassMetrics::default(); 3],
     );
-    let f = by(&evaluate(&e, &Context::default()), "DIAG-01");
+    let f = by(
+        &evaluate(
+            &e,
+            &Context {
+                offloadable_layers: None,
+                unified_memory: Some(false),
+            },
+        ),
+        "DIAG-01",
+    );
     assert_eq!(f.status, FindingStatus::NotEvaluated);
-    assert!(f.missing.iter().any(|m| m.contains("GPU memory")));
-    assert!(f.missing.iter().any(|m| m.contains("attached runtime")));
+    assert!(f.missing.iter().any(|m| m.contains("system RAM")));
+    assert!(f.missing.iter().any(|m| m.contains("offloaded layers")));
     assert!(f.missing.iter().any(|m| m.contains("layer count")));
 }
 
@@ -382,6 +453,70 @@ fn failed_passes_do_not_feed_any_rule() {
     e.passes[0].state = State::Failed;
     assert_eq!(
         by(&evaluate(&e, &Context::default()), "DIAG-04").status,
+        FindingStatus::NotEvaluated
+    );
+}
+
+#[test]
+fn cpu_share_uses_each_passs_own_wall_time() {
+    let pass = |wall: u64, cpu: Option<u64>| PassMetrics {
+        wall_ms: wall,
+        gpu_utilization_percent: Some(sampled(5.0, 5.0)),
+        process_cpu_ms: cpu,
+        ..PassMetrics::default()
+    };
+    let e = experiment(
+        Some("cuda"),
+        Ownership::Managed,
+        vec![pass(10_000, Some(900)), pass(100, None), pass(100, None)],
+    );
+    let f = by(&evaluate(&e, &Context::default()), "DIAG-02");
+    assert_eq!(
+        f.status,
+        FindingStatus::Clear,
+        "the one usable pass is 9% busy"
+    );
+}
+
+#[test]
+fn slow_prompt_does_not_combine_unrelated_passes() {
+    let a = PassMetrics {
+        ttft_ms: Some(9000.0),
+        ..PassMetrics::default()
+    };
+    let b = PassMetrics {
+        prompt_tokens: Some(4096),
+        ..PassMetrics::default()
+    };
+    let e = experiment(Some("cpu"), Ownership::Managed, vec![a.clone(), a, b]);
+    assert_eq!(
+        by(&evaluate(&e, &Context::default()), "DIAG-03").status,
+        FindingStatus::NotEvaluated
+    );
+}
+
+#[test]
+fn jitter_handles_a_zero_median_and_ignores_non_finite_latency() {
+    let itl = |median_ms: f64, p95_ms: f64| PassMetrics {
+        itl: Some(Itl {
+            intervals: 8,
+            median_ms,
+            p95_ms,
+        }),
+        ..PassMetrics::default()
+    };
+    let e = experiment(Some("cpu"), Ownership::Managed, vec![itl(0.0, 100.0); 3]);
+    assert_eq!(
+        by(&evaluate(&e, &Context::default()), "DIAG-04").status,
+        FindingStatus::Triggered
+    );
+    let bad = experiment(
+        Some("cpu"),
+        Ownership::Managed,
+        vec![itl(f64::INFINITY, 100.0); 3],
+    );
+    assert_eq!(
+        by(&evaluate(&bad, &Context::default()), "DIAG-04").status,
         FindingStatus::NotEvaluated
     );
 }

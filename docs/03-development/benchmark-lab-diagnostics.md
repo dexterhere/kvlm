@@ -7,13 +7,13 @@ Milestone 3 phase 3d. `workstation-core::diagnostics::evaluate` is a pure functi
 - **Not evaluated**: an input was missing; the finding lists it ("Not evaluated: missing GPU utilization reading").
 - **Not applicable**: the rule does not fit this setup (for example a CPU-only profile).
 
-Every finding carries the measured inputs it used as `name: value` lines. Only completed measured passes feed a rule, and each input is the median across those passes. Thresholds are strict: a value equal to the threshold does not trigger.
+Every finding carries the measured inputs it used as `name: value` lines. Only completed measured passes feed a rule. A rule combines inputs only within the same pass, so two passes that each hold half of the evidence never add up to a finding; the figure used is the median over the passes that hold all of a rule's inputs. Thresholds are strict: a value equal to the threshold does not trigger, and a non-finite reading is ignored.
 
 ## Rules
 
 | Rule | Triggers when | Test it with |
 | --- | --- | --- |
-| DIAG-01 spill or offload pressure | GPU memory is in use and the owned process holds more than 256 MiB in system RAM, or the runtime reports fewer offloaded layers than the model can offload (block count plus the output layer, not the requested 99) | smaller K/V cache (`q8_0`) |
+| DIAG-01 spill or offload pressure | GPU memory is in use and the runtime reports more than 256 MiB of model memory in system RAM, or it reports fewer offloaded layers than the model can offload (block count plus the output layer, not the requested 99) | smaller K cache (`q8_0`) |
 | DIAG-02 suspected CPU fallback | a GPU backend was requested, mean GPU utilization is below 15% **and** the owned process used more than 70% of the pass's wall time in CPU | none; check the build and offload |
 | DIAG-03 slow prompt processing | median warm time to first token above 3000 ms with more than 2048 prompt tokens | flash attention on |
 | DIAG-04 generation jitter | the 95th-percentile inter-token latency is more than 2.5 times the median, from valid inter-token latency only | none |
@@ -22,6 +22,6 @@ DIAG-01 is not applicable to a profile that requests no GPU (backend CPU or zero
 
 ## Limits
 
-DIAG-01 reads the process's resident memory, which can include pages of the memory-mapped model file even when every layer is on the GPU, so the memory signal is a hint, not a measurement of where the weights live. The layer count signal is stronger but needs the runtime to report offloaded layers and the model's layer count; llama.cpp's properties endpoint does not report offloaded layers, so for that engine the finding often rests on the memory signal alone and says so in its evidence.
+DIAG-01 never uses the process's resident size as model allocation: that figure also counts mapped files and the runtime itself, so a fully offloaded model can show hundreds of megabytes. The memory signal needs the runtime to report model memory held in system RAM (for example Ollama's loaded-model sizes); llama.cpp does not, so for that engine the finding rests on the layer signal. If only one of the two signals can be checked and it does not trigger, the finding is Clear but lists the unchecked signal in `missing` and in its message. A machine whose memory topology is unknown is Not evaluated rather than assumed to be dedicated.
 
 The model layer count and the unified-memory flag come from the caller (`Context`), because the experiment record does not hold them.

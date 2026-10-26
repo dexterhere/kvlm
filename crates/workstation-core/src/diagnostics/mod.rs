@@ -3,10 +3,12 @@
 //! inputs it used and says what was missing when it could not run. A triggered rule never
 //! claims a cause: it says what the measurements are consistent with and names the
 //! controlled change that would test it.
+//!
+//! A rule only combines inputs that belong to the same pass. Passes missing any input of a
+//! rule are left out of that rule, and the figure used is the median over the rest.
 
 use crate::experiments::{
-    Experiment, Finding, FindingStatus, Ownership, PassKind, PassMetrics, Sampled, Settings,
-    Spread, State, Variable,
+    Experiment, Finding, FindingStatus, Ownership, PassKind, PassMetrics, Spread, State, Variable,
 };
 
 /// Model memory held in system RAM, beyond which spill is suspected while video memory is in use.
@@ -23,8 +25,11 @@ pub struct Context {
     /// Layers the model can place on a GPU: its block count plus the output layer.
     pub offloadable_layers: Option<u32>,
     /// Shared CPU/GPU memory (an APU); spill between pools is not meaningful there.
+    /// `None` when the machine's memory topology is not known.
     pub unified_memory: Option<bool>,
 }
+
+const RULES: [&str; 4] = ["DIAG-01", "DIAG-02", "DIAG-03", "DIAG-04"];
 
 /// One finding per rule, always in the order DIAG-01 to DIAG-04.
 pub fn evaluate(experiment: &Experiment, context: &Context) -> Vec<Finding> {
@@ -37,16 +42,7 @@ pub fn evaluate(experiment: &Experiment, context: &Context) -> Vec<Finding> {
     if ok.is_empty() {
         return RULES
             .iter()
-            .map(|id| {
-                finding(
-                    id,
-                    FindingStatus::NotEvaluated,
-                    vec![],
-                    vec!["a completed measured pass".into()],
-                    None,
-                    "Not evaluated: no measured pass completed.".into(),
-                )
-            })
+            .map(|id| not_evaluated(id, vec!["a completed measured pass".into()]))
             .collect();
     }
     vec![
@@ -56,8 +52,6 @@ pub fn evaluate(experiment: &Experiment, context: &Context) -> Vec<Finding> {
         jitter(&ok),
     ]
 }
-
-const RULES: [&str; 4] = ["DIAG-01", "DIAG-02", "DIAG-03", "DIAG-04"];
 
 fn finding(
     rule: &str,
@@ -101,22 +95,13 @@ fn not_evaluated(rule: &str, missing: Vec<String>) -> Finding {
     )
 }
 
-fn median(values: impl Iterator<Item = f64>) -> Option<f64> {
-    Spread::of(&values.collect::<Vec<_>>()).map(|s| s.median)
+/// Median of the finite values; `None` when there are none.
+fn median(values: impl IntoIterator<Item = f64>) -> Option<f64> {
+    Spread::of(&values.into_iter().collect::<Vec<_>>()).map(|s| s.median)
 }
 
-fn sampled_peak(
-    metrics: &[&PassMetrics],
-    pick: fn(&PassMetrics) -> Option<Sampled>,
-) -> Option<f64> {
-    median(metrics.iter().filter_map(|m| pick(m).map(|s| s.peak)))
-}
-
-fn sampled_mean(
-    metrics: &[&PassMetrics],
-    pick: fn(&PassMetrics) -> Option<Sampled>,
-) -> Option<f64> {
-    median(metrics.iter().filter_map(|m| pick(m).map(|s| s.mean)))
+fn finite(value: f64) -> Option<f64> {
+    value.is_finite().then_some(value)
 }
 
 fn mib(bytes: f64) -> String {
@@ -135,72 +120,102 @@ fn gpu_requested(experiment: &Experiment) -> Option<bool> {
         .map(|b| !b.eq_ignore_ascii_case("cpu"))
 }
 
-fn observed(experiment: &Experiment) -> Option<&Settings> {
-    experiment.observed.as_ref()
-}
-
 fn spill(experiment: &Experiment, context: &Context, ok: &[&PassMetrics]) -> Finding {
     const RULE: &str = "DIAG-01";
     if gpu_requested(experiment) == Some(false) {
         return not_applicable(RULE, "the profile does not use a GPU.");
     }
-    if context.unified_memory == Some(true) {
-        return not_applicable(
+    match context.unified_memory {
+        Some(true) => {
+            return not_applicable(
+                RULE,
+                "this machine shares one memory pool between CPU and GPU.",
+            );
+        }
+        None => return not_evaluated(RULE, vec!["whether CPU and GPU share memory".into()]),
+        Some(false) => {}
+    }
+
+    let mut evidence = Vec::new();
+    let mut unchecked = Vec::new();
+    let mut triggered = false;
+    let mut checked = false;
+
+    // Signal A: video memory in use and model memory held in system RAM, in the same pass.
+    let pairs: Vec<(f64, f64)> = ok
+        .iter()
+        .filter_map(|m| {
+            let vram = m.gpu_memory_bytes.map(|s| s.peak).and_then(finite)?;
+            let ram = m.model_ram_bytes? as f64;
+            Some((vram, ram))
+        })
+        .collect();
+    if let (Some(vram), Some(ram)) = (
+        median(pairs.iter().map(|p| p.0)),
+        median(pairs.iter().map(|p| p.1)),
+    ) {
+        checked = true;
+        evidence.push(format!("gpu_memory_peak: {}", mib(vram)));
+        evidence.push(format!("model_memory_in_system_ram: {}", mib(ram)));
+        triggered |= vram > 0.0 && ram > SPILL_RAM_BYTES;
+    } else {
+        unchecked.push("model memory held in system RAM (as reported by the runtime)".to_string());
+    }
+
+    // Signal B: layers the runtime says it offloaded against the layers the model can offload.
+    let layers =
+        median(ok.iter().filter_map(|m| m.offloaded_layers).map(f64::from)).or_else(|| {
+            experiment
+                .observed
+                .as_ref()
+                .and_then(|o| o.gpu_layers)
+                .map(f64::from)
+        });
+    match (layers, context.offloadable_layers) {
+        (Some(layers), Some(offloadable)) => {
+            checked = true;
+            evidence.push(format!("offloaded_layers: {layers:.0} of {offloadable}"));
+            triggered |= layers < f64::from(offloadable);
+        }
+        (layers, offloadable) => {
+            if layers.is_none() {
+                unchecked.push("offloaded layers reported by the runtime".to_string());
+            }
+            if offloadable.is_none() {
+                unchecked.push("the model's layer count".to_string());
+            }
+        }
+    }
+
+    if !checked {
+        return not_evaluated(RULE, unchecked);
+    }
+    if triggered {
+        return finding(
             RULE,
-            "this machine shares one memory pool between CPU and GPU.",
+            FindingStatus::Triggered,
+            evidence,
+            unchecked,
+            Some(Variable::CacheTypeQ8),
+            "Consistent with part of the model or its working memory being held in system RAM while the GPU is also in use. A smaller K/V cache would test this.".into(),
         );
     }
-    let vram = sampled_peak(ok, |m| m.gpu_memory_bytes);
-    let rss = sampled_peak(ok, |m| m.process_rss_bytes);
-    let layers = observed(experiment).and_then(|o| o.gpu_layers);
-    let mut evidence = Vec::new();
-    let mut triggered = false;
-    let mut evaluated = false;
-
-    if let (Some(vram), Some(rss)) = (vram, rss) {
-        evaluated = true;
-        evidence.push(format!("gpu_memory_peak: {}", mib(vram)));
-        evidence.push(format!("process_rss_peak: {}", mib(rss)));
-        triggered |= vram > 0.0 && rss > SPILL_RAM_BYTES;
-    }
-    if let (Some(layers), Some(offloadable)) = (layers, context.offloadable_layers) {
-        evaluated = true;
-        evidence.push(format!("offloaded_layers: {layers} of {offloadable}"));
-        triggered |= layers < offloadable;
-    }
-    if !evaluated {
-        let mut missing = Vec::new();
-        if vram.is_none() {
-            missing.push("GPU memory reading".to_string());
-        }
-        if rss.is_none() {
-            missing.push(match experiment.spec.ownership {
-                Ownership::Attached => "process memory (attached runtime)".to_string(),
-                Ownership::Managed => "process memory reading".to_string(),
-            });
-        }
-        if layers.is_none() {
-            missing.push("offloaded layers reported by the runtime".into());
-        }
-        if context.offloadable_layers.is_none() {
-            missing.push("model layer count".into());
-        }
-        return not_evaluated(RULE, missing);
-    }
-    let (status, follow_up, message) = if triggered {
-        (
-            FindingStatus::Triggered,
-            Some(Variable::CacheTypeQ8),
-            "Consistent with part of the model or its working memory being held in system RAM while the GPU is also in use. A smaller K/V cache would test this.".to_string(),
-        )
+    let message = if unchecked.is_empty() {
+        "The readings do not suggest memory spill between GPU and system RAM.".to_string()
     } else {
-        (
-            FindingStatus::Clear,
-            None,
-            "The readings do not suggest memory spill between GPU and system RAM.".to_string(),
+        format!(
+            "The readings available do not suggest memory spill. Not checked: {}.",
+            unchecked.join(", ")
         )
     };
-    finding(RULE, status, evidence, vec![], follow_up, message)
+    finding(
+        RULE,
+        FindingStatus::Clear,
+        evidence,
+        unchecked,
+        None,
+        message,
+    )
 }
 
 fn cpu_fallback(experiment: &Experiment, ok: &[&PassMetrics]) -> Finding {
@@ -210,28 +225,40 @@ fn cpu_fallback(experiment: &Experiment, ok: &[&PassMetrics]) -> Finding {
         None => return not_evaluated(RULE, vec!["requested backend".into()]),
         Some(true) => {}
     }
-    let gpu = sampled_mean(ok, |m| m.gpu_utilization_percent);
-    let cpu_ms = median(ok.iter().filter_map(|m| m.process_cpu_ms.map(|v| v as f64)));
-    let wall = median(ok.iter().map(|m| m.wall_ms as f64));
-    let mut missing = Vec::new();
-    if gpu.is_none() {
-        missing.push("GPU utilization reading".to_string());
+    if experiment.spec.ownership == Ownership::Attached {
+        return not_evaluated(
+            RULE,
+            vec!["owned process CPU time (needs a managed runtime)".into()],
+        );
     }
-    if cpu_ms.is_none() || experiment.spec.ownership == Ownership::Attached {
-        missing.push("owned process CPU time (needs a managed runtime)".to_string());
-    }
-    let (Some(gpu), Some(cpu_ms), Some(wall), true) =
-        (gpu, cpu_ms, wall.filter(|w| *w > 0.0), missing.is_empty())
-    else {
+    // Per pass: GPU utilization and the process's CPU share of that pass's own wall time.
+    let passes: Vec<(f64, f64)> = ok
+        .iter()
+        .filter_map(|m| {
+            let gpu = m.gpu_utilization_percent.map(|s| s.mean).and_then(finite)?;
+            let cpu_ms = m.process_cpu_ms? as f64;
+            (m.wall_ms > 0).then_some((gpu, cpu_ms / m.wall_ms as f64))
+        })
+        .collect();
+    let (Some(gpu), Some(share)) = (
+        median(passes.iter().map(|p| p.0)),
+        median(passes.iter().map(|p| p.1)),
+    ) else {
+        let mut missing = Vec::new();
+        if !ok.iter().any(|m| m.gpu_utilization_percent.is_some()) {
+            missing.push("GPU utilization reading".to_string());
+        }
+        if !ok.iter().any(|m| m.process_cpu_ms.is_some()) {
+            missing.push("owned process CPU time".to_string());
+        }
+        if missing.is_empty() {
+            missing.push("a pass with both GPU utilization and process CPU time".into());
+        }
         return not_evaluated(RULE, missing);
     };
-    let share = cpu_ms / wall;
     let evidence = vec![
         format!("gpu_utilization_mean: {gpu:.0}%"),
-        format!(
-            "process_cpu_time: {cpu_ms:.0} ms of {wall:.0} ms wall ({:.0}%)",
-            share * 100.0
-        ),
+        format!("process_cpu_share_of_wall_time: {:.0}%", share * 100.0),
     ];
     if gpu < FALLBACK_GPU_UTILIZATION_PERCENT && share > FALLBACK_CPU_SHARE {
         finding(
@@ -256,16 +283,27 @@ fn cpu_fallback(experiment: &Experiment, ok: &[&PassMetrics]) -> Finding {
 
 fn slow_prompt(ok: &[&PassMetrics]) -> Finding {
     const RULE: &str = "DIAG-03";
-    let ttft = median(ok.iter().filter_map(|m| m.ttft_ms));
-    let tokens = median(ok.iter().filter_map(|m| m.prompt_tokens.map(|t| t as f64)));
-    let mut missing = Vec::new();
-    if ttft.is_none() {
-        missing.push("time to first token".to_string());
-    }
-    if tokens.is_none() {
-        missing.push("prompt token count".to_string());
-    }
-    let (Some(ttft), Some(tokens)) = (ttft, tokens) else {
+    let passes: Vec<(f64, f64)> = ok
+        .iter()
+        .filter_map(|m| {
+            let ttft = m.ttft_ms.and_then(finite)?;
+            Some((ttft, m.prompt_tokens? as f64))
+        })
+        .collect();
+    let (Some(ttft), Some(tokens)) = (
+        median(passes.iter().map(|p| p.0)),
+        median(passes.iter().map(|p| p.1)),
+    ) else {
+        let mut missing = Vec::new();
+        if !ok.iter().any(|m| m.ttft_ms.is_some()) {
+            missing.push("time to first token".to_string());
+        }
+        if !ok.iter().any(|m| m.prompt_tokens.is_some()) {
+            missing.push("prompt token count".to_string());
+        }
+        if missing.is_empty() {
+            missing.push("a pass with both time to first token and prompt token count".into());
+        }
         return not_evaluated(RULE, missing);
     };
     if tokens <= SLOW_PROMPT_TOKENS {
@@ -303,21 +341,27 @@ fn slow_prompt(ok: &[&PassMetrics]) -> Finding {
 
 fn jitter(ok: &[&PassMetrics]) -> Finding {
     const RULE: &str = "DIAG-04";
-    let ratios: Vec<f64> = ok
+    let valid: Vec<(f64, f64)> = ok
         .iter()
         .filter_map(|m| m.itl)
-        .filter(|i| i.median_ms > 0.0)
-        .map(|i| i.p95_ms / i.median_ms)
+        .filter(|i| i.median_ms.is_finite() && i.p95_ms.is_finite() && i.median_ms >= 0.0)
+        .map(|i| (i.median_ms, i.p95_ms))
         .collect();
-    let Some(ratio) = median(ratios.into_iter()) else {
+    let (Some(median_ms), Some(p95_ms)) = (
+        median(valid.iter().map(|p| p.0)),
+        median(valid.iter().map(|p| p.1)),
+    ) else {
         let reason = ok
             .iter()
             .find_map(|m| m.itl_unknown_reason.clone())
-            .unwrap_or_else(|| "inter-token latency".into());
+            .unwrap_or_else(|| "none reported".into());
         return not_evaluated(RULE, vec![format!("valid inter-token latency ({reason})")]);
     };
-    let evidence = vec![format!("itl_p95_over_median: {ratio:.2}")];
-    if ratio > JITTER_RATIO {
+    let evidence = vec![format!(
+        "itl_p95: {p95_ms:.1} ms against median {median_ms:.1} ms"
+    )];
+    // Compared without dividing, so a zero median with a slow tail still counts.
+    if p95_ms > JITTER_RATIO * median_ms {
         finding(
             RULE,
             FindingStatus::Triggered,
