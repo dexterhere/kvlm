@@ -2,7 +2,7 @@
 //! Read-only Hugging Face model explorer: repositories, then their GGUF files.
 //! Nothing here touches the network until the user searches or expands a row.
 
-use super::downloads::Downloads;
+use super::{access::Access, downloads::Downloads};
 use crate::bridge::{ArtifactDetails, CoreCommand, UiEvent};
 use adw::prelude::*;
 use std::{
@@ -67,6 +67,7 @@ pub struct Explorer {
     status: gtk::Label,
     list: gtk::ListBox,
     more: gtk::Button,
+    access: Access,
     downloads: Downloads,
     state: Rc<RefCell<State>>,
     commands: mpsc::Sender<CoreCommand>,
@@ -94,10 +95,12 @@ impl Explorer {
             .build();
         let more = gtk::Button::with_label("Load more");
         more.set_visible(false);
+        let access = Access::new(commands.clone());
         let downloads = Downloads::new(commands.clone());
         let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
         for child in [
             bar.upcast_ref::<gtk::Widget>(),
+            access.widget.upcast_ref(),
             downloads.widget.upcast_ref(),
             status.upcast_ref(),
             list.upcast_ref(),
@@ -123,6 +126,7 @@ impl Explorer {
             status,
             list,
             more,
+            access,
             downloads,
             state: Rc::new(RefCell::new(State::default())),
             commands,
@@ -171,6 +175,7 @@ impl Explorer {
     }
 
     pub fn receive(&self, event: &UiEvent) {
+        self.access.receive(event);
         self.downloads.receive(event);
         match event {
             UiEvent::DownloadFinished { outcome }

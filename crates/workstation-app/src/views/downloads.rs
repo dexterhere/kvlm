@@ -317,7 +317,9 @@ fn state_text(row: &DownloadRow) -> String {
 
 fn failure_text(code: Option<&str>) -> &'static str {
     match code {
-        Some("access_required") => "access needed (the repository is gated)",
+        Some("access_required") => {
+            "access needed: accept the repository's terms on huggingface.co and add a token under Hugging Face access"
+        }
         Some("not_found") => "file not found at the pinned commit",
         Some("rate_limited") => "rate limited by Hugging Face",
         Some("network") => "network problem",
