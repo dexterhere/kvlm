@@ -42,7 +42,7 @@ fn release() -> Box<ReleaseLoad> {
             license: None,
             gated: GatedAccess::Manual,
             artifacts: vec![ModelArtifact {
-                artifact_id: "a".into(),
+                artifact_id: "hf:fixture".into(),
                 repo_id: "<b>o</b>/n-GGUF".into(),
                 revision: REV.into(),
                 filename: "m-Q4_K_M.gguf".into(),
@@ -55,6 +55,49 @@ fn release() -> Box<ReleaseLoad> {
             dropped_invalid: 0,
             other_weight_files: 2,
         },
+        source: LoadSource::Live,
+        notice: None,
+    })
+}
+
+fn details() -> Box<crate::bridge::ArtifactDetails> {
+    use workstation_core::{
+        fit::{gguf_fit::LayoutAssumption, memory_math::KvCacheType},
+        hardware::{HardwareProfile, MemoryPool},
+        models::gguf::GgufMetadata,
+    };
+    let metadata = GgufMetadata {
+        file_bytes: 100,
+        tensor_count: 1,
+        tensor_bytes: 4,
+        alignment: 32,
+        architecture: Some("future-net".into()),
+        attention: None,
+        warnings: vec![],
+    };
+    let scenario =
+        crate::fit_workflow::parse_scenario("8192", "512", KvCacheType::F16, KvCacheType::F16)
+            .unwrap();
+    let hardware = HardwareProfile {
+        profile_hash: None,
+        cpu: None,
+        system_ram: Some(MemoryPool {
+            total_bytes: 8 << 30,
+            available_bytes: Some(4 << 30),
+        }),
+        gpus: vec![],
+        issues: vec![],
+        captured_at_unix_ms: 1,
+    };
+    let report = crate::fit_workflow::fit_report(
+        metadata,
+        &scenario,
+        LayoutAssumption::UniformFullAttention,
+        hardware,
+    )
+    .unwrap();
+    Box::new(crate::bridge::ArtifactDetails {
+        report,
         source: LoadSource::Live,
         notice: None,
     })
@@ -120,6 +163,32 @@ fn saved_page_search_expand_and_stale_answers() {
         result: Ok(release()),
     });
     assert!(explorer.state.borrow().rows[&repo_id].loaded);
+
+    // Expanding a file reads its header once; the answer shows the conditional fit.
+    let artifact_row = explorer.state.borrow().artifacts["hf:fixture"].row.clone();
+    artifact_row.set_expanded(true);
+    let CoreCommand::InspectArtifact { id, artifact } = pump(&mut rx) else {
+        panic!("inspect")
+    };
+    assert_eq!(artifact.filename, "m-Q4_K_M.gguf");
+    explorer.receive(&UiEvent::ArtifactInspected {
+        id: id + 7,
+        result: Err("stale".into()),
+    });
+    assert!(explorer.state.borrow().artifacts["hf:fixture"].loading);
+    explorer.receive(&UiEvent::ArtifactInspected {
+        id,
+        result: Ok(details()),
+    });
+    {
+        let state = explorer.state.borrow();
+        let entry = &state.artifacts["hf:fixture"];
+        assert!(entry.loaded && !entry.loading);
+        assert!(entry.children.len() >= 4);
+    }
+    artifact_row.set_expanded(false);
+    artifact_row.set_expanded(true);
+    assert!(rx.try_recv().is_err(), "a loaded file is not fetched again");
 
     // A failed search keeps the list and offers a retry.
     explorer.entry.set_text("qwen");
