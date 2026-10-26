@@ -6,7 +6,10 @@
 //! matches. The pinned commit plus that digest are the integrity guarantee; the server's
 //! word is not. Tokens, gated access and the keyring arrive in a later phase.
 
-use crate::huggingface::{HfError, HuggingFaceClient};
+use crate::{
+    huggingface::{HfError, HuggingFaceClient},
+    secrets::TokenSlot,
+};
 use sha2::{Digest, Sha256};
 use std::{
     io::Write,
@@ -83,9 +86,9 @@ fn now_ms() -> u64 {
 }
 
 impl Downloader {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(token: TokenSlot) -> Result<Self, String> {
         Ok(Self::with_parts(
-            Arc::new(HuggingFaceClient::new().map_err(|e| e.to_string())?),
+            Arc::new(HuggingFaceClient::new(token).map_err(|e| e.to_string())?),
             db::default_database_path()?,
             db::default_models_dir()?,
         ))

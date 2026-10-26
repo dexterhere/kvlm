@@ -5,7 +5,10 @@
 //! notice; "no access" and "not found" never do, because stale data could hide that a
 //! repository was removed or made private. Nothing here runs at startup.
 
-use crate::huggingface::{HfError, HuggingFaceClient};
+use crate::{
+    huggingface::{HfError, HuggingFaceClient},
+    secrets::TokenSlot,
+};
 use std::{
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -89,9 +92,9 @@ fn describe(error: &HfError) -> String {
 }
 
 impl CatalogService {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(token: TokenSlot) -> Result<Self, String> {
         Ok(Self::with_parts(
-            HuggingFaceClient::new().map_err(|error| error.to_string())?,
+            HuggingFaceClient::new(token).map_err(|error| error.to_string())?,
             db::default_database_path()?,
         ))
     }
@@ -251,6 +254,11 @@ impl CatalogService {
             source: LoadSource::Live,
             notice: saved.is_err().then(|| CACHE_WRITE_FAILED.to_owned()),
         })
+    }
+
+    /// Ask Hugging Face who the loaded token belongs to (explicit action only).
+    pub async fn validate_token(&self) -> Result<String, String> {
+        self.client.whoami().await.map_err(|error| describe(&error))
     }
 
     /// Cached release only; the newest one when no commit is given.

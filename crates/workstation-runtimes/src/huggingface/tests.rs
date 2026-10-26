@@ -464,7 +464,7 @@ async fn release_with_hostile_filenames_drops_them() {
 
 #[test]
 fn production_client_builds_with_tls_roots() {
-    assert!(HuggingFaceClient::new().is_ok());
+    assert!(HuggingFaceClient::new(TokenSlot::default()).is_ok());
 }
 
 const FILE_LINE: &str =
@@ -663,7 +663,7 @@ async fn prefix_maps_statuses_and_rejects_invalid_identities_unsent() {
 
 #[test]
 fn production_redirects_stay_on_https_hugging_face_hosts() {
-    let client = HuggingFaceClient::new().unwrap();
+    let client = HuggingFaceClient::new(TokenSlot::default()).unwrap();
     for ok in [
         "https://cdn-lfs.hf.co/repos/x?sig=1",
         "https://cas-bridge.xethub.hf.co/a",
@@ -716,5 +716,122 @@ fn only_public_addresses_are_allowed_for_hugging_face_hosts() {
         "::ffff:10.0.0.1",
     ] {
         assert!(!is_public(private.parse().unwrap()), "{private}");
+    }
+}
+
+fn slot_with(token: &str) -> TokenSlot {
+    let slot = TokenSlot::default();
+    slot.set(Some(crate::secrets::Token::parse(token).unwrap()));
+    slot
+}
+
+fn authorization(request: &RecordedRequest) -> Option<&String> {
+    request
+        .headers
+        .iter()
+        .find(|header| header.starts_with("authorization:"))
+}
+
+#[tokio::test]
+async fn the_token_goes_only_to_the_first_hop_of_a_file_request() {
+    let body = header_bytes(64);
+    let server = Server::start(|_| {
+        vec![
+            route(FILE_LINE, Reply::Redirect("/cdn/blob?sig=signed".into())),
+            route("GET /cdn/blob?sig=signed HTTP/1.1", ranged(0, &body, 64)),
+        ]
+    });
+    let client = server.client_with(slot_with("hf_secret123"));
+    client
+        .fetch_prefix("owner/name", REV, FILE, 64)
+        .await
+        .unwrap();
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        authorization(&requests[0]).map(String::as_str),
+        Some("authorization: bearer hf_secret123")
+    );
+    assert_eq!(authorization(&requests[1]), None, "forwarded on a redirect");
+}
+
+#[tokio::test]
+async fn api_listing_calls_never_carry_the_token_and_no_token_means_no_header() {
+    let server = Server::start(|_| {
+        vec![
+            route(SEARCH_LINE, json_reply(json!([search_row("o/n")]))),
+            route(FILE_LINE, ranged(0, &header_bytes(64), 64)),
+        ]
+    });
+    let with = server.client_with(slot_with("hf_secret123"));
+    with.search("", None).await.unwrap();
+    assert_eq!(authorization(&server.last()), None);
+
+    let without = server.client();
+    without
+        .fetch_prefix("owner/name", REV, FILE, 64)
+        .await
+        .unwrap();
+    assert_eq!(authorization(&server.last()), None);
+}
+
+#[tokio::test]
+async fn whoami_needs_a_token_reports_the_name_and_maps_rejection() {
+    let server = Server::start(|_| {
+        vec![route(
+            "GET /api/whoami-v2 HTTP/1.1",
+            json_reply(json!({"name": "someone", "type": "user"})),
+        )]
+    });
+    // Nothing is sent without a token.
+    assert_eq!(server.client().whoami().await, Err(HfError::TokenRejected));
+    assert!(server.lines().is_empty());
+
+    let client = server.client_with(slot_with("hf_secret123"));
+    assert_eq!(client.whoami().await.unwrap(), "someone");
+    assert_eq!(
+        authorization(&server.last()).map(String::as_str),
+        Some("authorization: bearer hf_secret123")
+    );
+
+    for code in [401, 403] {
+        let server = Server::start(|_| vec![route("GET /api/whoami-v2 HTTP/1.1", status(code))]);
+        assert_eq!(
+            server.client_with(slot_with("hf_x")).whoami().await,
+            Err(HfError::TokenRejected)
+        );
+    }
+    let server = Server::start(|_| {
+        vec![route(
+            "GET /api/whoami-v2 HTTP/1.1",
+            json_reply(json!({"name": "bad\nname"})),
+        )]
+    });
+    assert_eq!(
+        server.client_with(slot_with("hf_x")).whoami().await,
+        Err(HfError::BadResponse)
+    );
+}
+
+#[test]
+fn production_tokens_are_for_huggingface_co_over_https_only() {
+    let client = HuggingFaceClient::new(TokenSlot::default()).unwrap();
+    for ok in [
+        "https://huggingface.co/o/n/resolve/x/f.gguf",
+        "https://huggingface.co:443/api/whoami-v2",
+    ] {
+        assert!(client.token_origin(&Url::parse(ok).unwrap()), "{ok}");
+    }
+    for bad in [
+        "http://huggingface.co/x",
+        "https://hf.co/x",
+        "https://cdn-lfs.huggingface.co/x",
+        "https://huggingface.co:444/x",
+        "https://user@huggingface.co/x",
+        "https://huggingface.co.evil.example/x",
+        "https://evilhuggingface.co/x",
+        "https://127.0.0.1/x",
+    ] {
+        assert!(!client.token_origin(&Url::parse(bad).unwrap()), "{bad}");
     }
 }

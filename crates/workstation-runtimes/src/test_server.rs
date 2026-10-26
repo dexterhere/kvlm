@@ -234,6 +234,14 @@ impl Server {
         HuggingFaceClient::for_test(self.port)
     }
 
+    pub(crate) fn client_with(&self, token: crate::secrets::TokenSlot) -> HuggingFaceClient {
+        HuggingFaceClient::for_test_with(self.port, token)
+    }
+
+    pub(crate) fn requests(&self) -> Vec<RecordedRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+
     pub(crate) fn lines(&self) -> Vec<String> {
         self.requests
             .lock()
