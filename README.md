@@ -1,34 +1,91 @@
-# GNOME Local AI Workstation
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="Local AI Workstation logo: three stacked memory slabs with a small neural network on top" width="128" height="128">
+</p>
 
-A community-built GNOME desktop application for understanding what local AI models
-your hardware can run, managing inference runtimes safely, and measuring performance.
+<h1 align="center">GNOME Local AI Workstation</h1>
 
-**Status: M0 complete for the accepted reference baseline; integration pending.**
-The four-crate GNOME application provides hardware discovery, attached-Ollama discovery and inspection,
-conditional CPU/CUDA memory estimates for local LLaMA/Qwen2 GGUFs, a local-only
-Quick Benchmark, SQLite history, and a saved `Benchmark Verified` indicator for an
-exact Ollama manifest and hardware configuration. Real Qwen CUDA inference and
-verification after a separate-process restart passed. See the
-[M0 acceptance record](docs/03-development/m0-acceptance.md) for measurements and limits.
+<p align="center">
+  <strong>Know what your machine can run, then measure it.</strong><br>
+  A native GTK4/Libadwaita control plane for local AI models on Linux.
+</p>
 
-Fit estimates remain conditional on the supplied scenario and attention-layout
-assumption. A saved benchmark proves a prior request, not every future context or
-placement. Downloads, managed runtimes, process attribution, and controlled benchmark
-comparisons remain later milestones. The measured native GTK/CUDA results on Hyprland
-and their documented limits were explicitly accepted for M0 on 2026-10-26.
-GNOME-session validation remains a follow-up; it is not claimed as tested.
-This is an independent community project;
-it is not an official GNOME application or a GNOME Circle member.
+<p align="center">
+  <a href="docs/04-roadmap/milestones.md">Roadmap</a> ·
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="COPYING">GPL-3.0-or-later</a>
+</p>
 
-## Goals
+Running a local model starts with guesswork: will a 7B Q4_K_M fit in 6 GB of VRAM, what
+happens at 32K context, and is Ollama already holding the file you are about to download?
+Local AI Workstation answers those questions on your own hardware, with the arithmetic
+shown, and then lets you check the answer with a real benchmark.
 
-- Explain model fit across dedicated VRAM, shared GPU memory, and system RAM.
-- Attach safely to existing runtimes or supervise application-owned processes.
-- Compare reproducible benchmarks and explain performance bottlenecks.
-- Export endpoint configurations for developer tools.
+It is a local inference **control plane**, not a chatbot, a custom inference engine, or a
+privileged daemon. It needs no root, sends no telemetry, and never guesses: when data is
+missing the answer is `Unknown`, not an optimistic fit.
 
-The project is a local inference control plane, not a chatbot, custom inference
-engine, or privileged system daemon. No usage analytics or crash-report uploads.
+## Who it is for
+
+Linux developers who run models locally, for coding assistants, tooling, or experiments,
+on a laptop or workstation with one GPU, an APU with shared memory, or only a CPU. If you
+juggle Ollama, llama.cpp, and Hugging Face downloads and want to know why a model is slow
+or does not fit, this is for you.
+
+## What it does today
+
+| Capability | What you get |
+| --- | --- |
+| Hardware discovery | CPU and RAM, NVIDIA VRAM through NVML, AMD VRAM and GTT through sysfs |
+| Three memory pools | Dedicated VRAM, shared GPU memory (GTT), and system RAM are kept separate; shared GPU memory is never added to host RAM |
+| Memory fit | Weights, K/V cache, compute buffers, and runtime allowance for LLaMA and Qwen2 GGUF files at an explicit context, with a per-component breakdown |
+| Attached Ollama | Read-only discovery and inspection of an existing Ollama server; the application never stops it, changes its units, or deletes its models |
+| Quick Benchmark | One explicit, local-only streaming request with cancellation, server decode rate, and sampled RAM/VRAM/GTT peaks |
+| History and verification | SQLite run history, and a `Benchmark Verified` badge tied to the exact Ollama manifest and hardware, restored after restart |
+
+## How it works
+
+```text
+GGUF header ─┐
+Settings     ─┼─► fit estimate ──► Comfortable / Constrained / Not recommended / Unknown
+Live memory  ─┘                              │
+                                             ▼
+                          Quick Benchmark ──► SQLite history ──► Benchmark Verified
+```
+
+Fit estimates are conditional on the scenario you supply (context length, K/V type, batch
+size, and an attention-layout assumption). A saved benchmark proves one prior request, not
+every future context or placement, and the interface says so.
+
+## Status
+
+**M0 is complete for the accepted reference baseline and merged into `main`.** Real Qwen
+CUDA inference and verification after a separate-process restart passed on an RTX 4050
+laptop; see the [M0 acceptance record](docs/03-development/m0-acceptance.md) for
+measurements and limits. The measured native GTK/CUDA results on Hyprland were accepted
+on 2026-10-26. GNOME-session validation remains a follow-up and is not claimed as tested.
+
+**M1 is implemented on `develop` and awaiting sign-off.** The Models page searches Hugging Face
+GGUF repositories, shows a file's header and a conditional fit, notes files you already have
+in Ollama, the Hugging Face cache or the application's store, downloads with pause, resume
+and checksum verification, and keeps a gated-model token in your desktop keyring. A live run
+on the reference machine is recorded in the
+[M1 acceptance evidence](docs/03-development/m1-acceptance.md); the stored-token restart
+check passed. See the [M1 plan](docs/04-roadmap/m1/Planned.md). Managed runtimes,
+controlled benchmark comparisons, and more hardware matrices come in M2 to M4; the
+[roadmap](docs/04-roadmap/milestones.md) tracks them.
+
+This is an independent community project; it is not an official GNOME application or a
+GNOME Circle member.
+
+## Principles
+
+- **Honest by default:** missing metadata stays `Unknown`; unmeasured memory channels are
+  reported with coverage limits, never as zero.
+- **Local first:** no usage analytics or crash uploads. Network requests happen only after
+  an explicit action.
+- **Do not touch what you do not own:** an attached runtime is read-only; no root required.
+- **Reproducible:** tests need no GPU, model download, running runtime, or internet.
 
 ## Get started
 
