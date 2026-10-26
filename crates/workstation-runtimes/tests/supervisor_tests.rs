@@ -5,7 +5,7 @@
 use rustix::process::{Pid, test_kill_process, test_kill_process_group};
 use std::{
     fs,
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -92,12 +92,21 @@ impl Drop for Env {
     }
 }
 
+/// A port nobody in this test process holds: a shared counter, so parallel tests never
+/// hand out the same one. Occupied ports are skipped by a connect probe, never a bind: a
+/// probe listener can leak into a concurrently forked child and make the real bind fail.
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    static NEXT_PORT: AtomicU64 = AtomicU64::new(0);
+    // Below the kernel's ephemeral range (32768+), so outgoing test connections never hold it.
+    let base = 12_000 + (std::process::id() as u64 % 15_000);
+    loop {
+        let port = (base + NEXT_PORT.fetch_add(1, Ordering::Relaxed)) as u16;
+        if TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(200))
+            .is_err()
+        {
+            return port;
+        }
+    }
 }
 
 async fn until(rx: &mut watch::Receiver<Status>, ok: impl Fn(&Status) -> bool) -> Status {
@@ -639,4 +648,47 @@ fn a_fifo_in_place_of_the_record_does_not_hang_the_reader() {
     if made.is_ok_and(|s| s.success()) {
         assert!(record::read(&path).is_none());
     }
+}
+
+#[tokio::test]
+async fn a_managed_server_serves_a_streamed_completion_end_to_end() {
+    use std::sync::atomic::AtomicBool;
+    use workstation_runtimes::llamacpp::client::{ChatRequest, DEFAULT_DEADLINE, LlamaClient};
+    let env = Env::new();
+    let sup = Supervisor::spawn(env.record()).await.unwrap();
+    let mut rx = sup.subscribe();
+    sup.start(env.spec("serve")).await.unwrap();
+    let ready = until(&mut rx, |s| s.state == S::Ready).await;
+    let client = LlamaClient::new(ready.port.unwrap()).unwrap();
+    assert_eq!(client.props().await.unwrap().n_ctx, Some(2048));
+    assert_eq!(client.busy().await, Some(false));
+    let alias = ready.generation.unwrap();
+    let mut text = String::new();
+    let end = client
+        .stream_chat(
+            &ChatRequest {
+                model: &alias,
+                prompt: "hi",
+                max_tokens: 8,
+                seed: 1,
+                temperature: 0.0,
+                cache_prompt: false,
+            },
+            DEFAULT_DEADLINE,
+            &AtomicBool::new(false),
+            |e| {
+                if let workstation_runtimes::llamacpp::client::StreamEvent::Content {
+                    text: t,
+                    ..
+                } = e
+                {
+                    text.push_str(t);
+                }
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!((text.as_str(), end.content_events), ("Hello from fake", 3));
+    assert_eq!(end.usage.unwrap().completion_tokens, 3);
+    sup.shutdown().await;
 }

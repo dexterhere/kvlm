@@ -93,6 +93,36 @@ fn answer(mut stream: TcpStream, mode: &str, alias: &str) {
         } else {
             (200, r#"{"status":"ok"}"#.to_owned())
         }
+    } else if line.starts_with("GET /props") {
+        (
+            200,
+            r#"{"default_generation_settings":{"n_ctx":2048},"total_slots":1,"build_info":"fake"}"#
+                .to_owned(),
+        )
+    } else if line.starts_with("GET /slots") {
+        (
+            200,
+            r#"[{"id":0,"n_ctx":2048,"is_processing":false}]"#.to_owned(),
+        )
+    } else if line.starts_with("GET /metrics") {
+        (
+            200,
+            "llamacpp:requests_processing 0\nllamacpp:tokens_predicted_total 3\n".to_owned(),
+        )
+    } else if line.starts_with("POST /v1/chat/completions") {
+        let mut sse = String::new();
+        for word in ["Hello", " from", " fake"] {
+            sse.push_str(&format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{word}\"}}}}]}}\n\n"
+            ));
+        }
+        sse.push_str("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":3},\"timings\":{\"predicted_n\":3,\"predicted_ms\":30.0}}\n\ndata: [DONE]\n\n");
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}",
+            sse.len()
+        );
+        return;
     } else if line.starts_with("GET /v1/models") {
         let id = if mode == "wrong_alias" {
             "someone-else"
