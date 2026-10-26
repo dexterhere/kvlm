@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Normalized model family: the grouping above a concrete release.
 
+use super::artifact::quantization_from_filename;
 use serde::{Deserialize, Serialize};
 
 /// How the family name was found, so the interface can say it was derived.
@@ -51,7 +52,15 @@ fn family_name(name: &str) -> String {
     let trimmed = ["-GGUF", "_GGUF", ".gguf", "-gguf"]
         .iter()
         .fold(name, |acc, suffix| acc.strip_suffix(suffix).unwrap_or(acc));
-    let segments: Vec<&str> = trimmed.split('-').collect();
+    let mut segments: Vec<&str> = trimmed.split('-').collect();
+    // `Foo-Q4_K_M` and `Foo-Q8_0` are one family: drop trailing quantization labels.
+    while segments.len() > 1
+        && segments.last().is_some_and(|last| {
+            quantization_from_filename(last).is_some_and(|q| q.eq_ignore_ascii_case(last))
+        })
+    {
+        segments.pop();
+    }
     let cut = segments
         .iter()
         .skip(1)
@@ -59,7 +68,7 @@ fn family_name(name: &str) -> String {
         .map(|index| index + 1);
     match cut {
         Some(cut) => segments[..cut].join("-"),
-        None => trimmed.to_owned(),
+        None => segments.join("-"),
     }
 }
 
@@ -99,6 +108,8 @@ mod tests {
             "TinyLlama"
         );
         assert_eq!(derive_family(None, "a/phi-3-mini-GGUF").name, "phi-3-mini");
+        assert_eq!(derive_family(None, "o/Foo-Q4_K_M-GGUF").name, "Foo");
+        assert_eq!(derive_family(None, "o/Foo-Q8_0-GGUF").name, "Foo");
     }
 
     #[test]

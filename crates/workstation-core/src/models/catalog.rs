@@ -88,6 +88,68 @@ pub struct RawRepoDetail {
 pub enum CatalogError {
     InvalidRepoId,
     InvalidRevision,
+    /// An artifact's identity, name, or checksum is not canonical, or two artifacts collide.
+    InvalidArtifact,
+}
+
+/// Check a release the way normalization would have built it. Used before caching and
+/// after reading a cached row, so a damaged or hand-built release never reaches a URL
+/// or a file path.
+pub fn validate_release(release: &ModelRelease) -> Result<(), CatalogError> {
+    if !valid_repo_id(&release.repo_id) {
+        return Err(CatalogError::InvalidRepoId);
+    }
+    if !valid_revision(&release.revision) {
+        return Err(CatalogError::InvalidRevision);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for artifact in &release.artifacts {
+        let canonical_hash = artifact
+            .sha256
+            .as_deref()
+            .is_none_or(|sha| canonical_sha256(sha).as_deref() == Some(sha));
+        let ok = artifact.repo_id == release.repo_id
+            && artifact.revision == release.revision
+            && valid_remote_filename(&artifact.filename)
+            && artifact.filename.to_ascii_lowercase().ends_with(".gguf")
+            && artifact.artifact_id
+                == artifact_id(&release.repo_id, &release.revision, &artifact.filename)
+            && canonical_hash
+            && (artifact.shards.is_none() || artifact.sha256.is_none())
+            && seen.insert(artifact.artifact_id.as_str());
+        if !ok {
+            return Err(CatalogError::InvalidArtifact);
+        }
+    }
+    Ok(())
+}
+
+fn facts(sibling: &RawSibling) -> (Option<u64>, Option<String>) {
+    (
+        sibling.size,
+        sibling.lfs_sha256.as_deref().and_then(canonical_sha256),
+    )
+}
+
+/// One sibling per file name. Identical repeats collapse; conflicting repeats are
+/// all dropped and counted, because no single answer can be trusted.
+fn unique_by_name(siblings: Vec<RawSibling>, dropped: &mut u32) -> Vec<RawSibling> {
+    let mut by_name: BTreeMap<String, Vec<RawSibling>> = BTreeMap::new();
+    for sibling in siblings {
+        by_name
+            .entry(sibling.filename.clone())
+            .or_default()
+            .push(sibling);
+    }
+    let mut unique = Vec::new();
+    for (_, mut copies) in by_name {
+        if copies.iter().all(|c| facts(c) == facts(&copies[0])) {
+            unique.push(copies.swap_remove(0));
+        } else {
+            *dropped = dropped.saturating_add(u32::try_from(copies.len()).unwrap_or(u32::MAX));
+        }
+    }
+    unique
 }
 
 const OTHER_WEIGHT_EXTENSIONS: &[&str] = &[".safetensors", ".bin", ".pt", ".pth", ".onnx"];
@@ -134,6 +196,7 @@ pub fn normalize_release(raw: RawRepoDetail) -> Result<ModelRelease, CatalogErro
         }
     }
 
+    let singles = unique_by_name(singles, &mut dropped_invalid);
     let mut artifacts: Vec<ModelArtifact> = singles
         .into_iter()
         .map(|sibling| {
@@ -154,6 +217,14 @@ pub fn normalize_release(raw: RawRepoDetail) -> Result<ModelRelease, CatalogErro
 
     for ((_, count), mut parts) in groups {
         parts.sort_by_key(|(index, _)| *index);
+        let conflicting = parts
+            .windows(2)
+            .any(|w| w[0].0 == w[1].0 && facts(&w[0].1) != facts(&w[1].1));
+        if conflicting {
+            dropped_invalid =
+                dropped_invalid.saturating_add(u32::try_from(parts.len()).unwrap_or(u32::MAX));
+            continue;
+        }
         parts.dedup_by_key(|(index, _)| *index);
         let complete = parts.len() == usize::from(count);
         // The first part names the group; the total is known only for a full set.
@@ -320,6 +391,47 @@ mod tests {
             normalize_release(raw).unwrap_err(),
             CatalogError::InvalidRepoId
         );
+    }
+
+    #[test]
+    fn duplicate_names_collapse_or_are_dropped() {
+        let release = normalize_release(detail(vec![
+            sibling("same.gguf", Some(10), Some(SHA)),
+            sibling("same.gguf", Some(10), Some(&SHA.to_uppercase())),
+            sibling("clash.gguf", Some(10), Some(SHA)),
+            sibling("clash.gguf", Some(11), Some(SHA)),
+            sibling("s-00001-of-00002.gguf", Some(1), None),
+            sibling("s-00001-of-00002.gguf", Some(2), None),
+            sibling("s-00002-of-00002.gguf", Some(3), None),
+        ]))
+        .unwrap();
+        let names: Vec<_> = release
+            .artifacts
+            .iter()
+            .map(|a| a.filename.as_str())
+            .collect();
+        assert_eq!(names, ["same.gguf"]);
+        assert_eq!(release.dropped_invalid, 5);
+        assert_eq!(validate_release(&release), Ok(()));
+    }
+
+    #[test]
+    fn validation_rejects_forged_artifacts() {
+        let good = normalize_release(detail(vec![sibling("m.gguf", Some(1), Some(SHA))])).unwrap();
+        assert_eq!(validate_release(&good), Ok(()));
+        let mutate: [fn(&mut ModelRelease); 6] = [
+            |r| r.artifacts[0].filename = "../escape.gguf".into(),
+            |r| r.artifacts[0].sha256 = Some("../outside".into()),
+            |r| r.artifacts[0].revision = "main".into(),
+            |r| r.artifacts[0].artifact_id = "hf:other".into(),
+            |r| r.artifacts.push(r.artifacts[0].clone()),
+            |r| r.artifacts[0].sha256 = Some(SHA.to_uppercase()),
+        ];
+        for change in mutate {
+            let mut bad = good.clone();
+            change(&mut bad);
+            assert_eq!(validate_release(&bad), Err(CatalogError::InvalidArtifact));
+        }
     }
 
     #[test]
