@@ -520,12 +520,13 @@ impl Core {
         let _ops = self.ops.lock().await;
         // Ask the supervisor itself, not a cached copy: while `ops` is held no start can
         // begin, so what it reports now stays true until the removal is done.
-        let holds = match &*self.sup.lock().await {
-            Sup::Up(supervisor) => holds_process(&supervisor.status()),
-            _ => false,
-        };
-        if holds {
-            return Err("Stop the server before removing a build.".into());
+        if let Sup::Up(supervisor) = &*self.sup.lock().await {
+            if holds_process(&supervisor.status()) {
+                return Err("Stop the server before removing a build.".into());
+            }
+            // Cancels an automatic restart that is waiting after a crash, so nothing can
+            // start from the build while it is being deleted.
+            supervisor.stop().await.map_err(|e| e.to_string())?;
         }
         let paths = blocking(paths).await?;
         blocking(move || {
@@ -577,6 +578,7 @@ impl Core {
     }
 
     async fn restart(&self) -> Result<(), String> {
+        let _ops = self.ops.lock().await;
         let guard = self.up().await?;
         let Sup::Up(supervisor) = &*guard else {
             return Err("The runtime supervisor is not available.".into());

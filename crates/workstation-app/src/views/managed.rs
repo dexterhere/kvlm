@@ -26,7 +26,8 @@ use crate::{
 
 const MAX_TEXT: usize = 300;
 const LOG_REFRESH_MS: u32 = 1000;
-const LOAD_RETRIES: u32 = 20;
+/// After this many refused attempts the card says it is still waiting; it never gives up.
+const LOAD_NOTICE_AFTER: u32 = 20;
 
 /// Which actions the current state allows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -331,19 +332,24 @@ fn try_load(inner: &Rc<Inner>, attempt: u32) {
         .try_send(CoreCommand::Managed(ManagedCommand::Load { id }))
         .is_ok()
     {
-        inner.state.borrow_mut().load = Some(id);
-        return;
-    }
-    if attempt >= LOAD_RETRIES {
-        inner.state.borrow_mut().notice =
-            Some("The runtime state could not be loaded. Restart the application.".into());
+        let mut state = inner.state.borrow_mut();
+        state.load = Some(id);
+        if attempt > LOAD_NOTICE_AFTER {
+            state.notice = None;
+        }
+        drop(state);
         render(inner);
         return;
+    }
+    if attempt == LOAD_NOTICE_AFTER {
+        inner.state.borrow_mut().notice =
+            Some("Still waiting for the application to finish starting.".into());
+        render(inner);
     }
     let weak = Rc::downgrade(inner);
     gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
         if let Some(inner) = weak.upgrade() {
-            try_load(&inner, attempt + 1);
+            try_load(&inner, attempt.saturating_add(1));
         }
     });
 }
