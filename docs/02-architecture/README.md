@@ -29,8 +29,16 @@ GLib main thread. UI commands use Tokio mpsc, and worker events return through
 Blocking SQLite, NVML, and sysfs calls must use `spawn_blocking` when implemented.
 Closing the application must cancel worker work and release owned resources.
 
-The foundation bridge only confirms that the worker is available. It does not probe
-hardware, touch models, connect to runtimes, or create the database.
+The bridge accepts hardware-detection commands and uses `spawn_blocking` for
+read-only CPU/RAM, DRM, and NVML snapshots. Bounded channels and a disabled Refresh
+control prevent request buildup; queued duplicates are coalesced. Closing the
+window closes its event channel, discards late results, and releases the worker.
+Already-running blocking OS/library calls cannot be forcibly cancelled; runtime
+shutdown has a two-second wait bound. The app does not touch models, connect to
+inference runtimes, or create the database yet.
+
+See [0002: Hardware snapshots](../05-decisions/0002-hardware-snapshots.md) for
+the implemented partial-reading contract and known probe limits.
 
 ## Intended data flow
 

@@ -3,9 +3,11 @@
 A community-built GNOME desktop application for understanding what local AI models
 your hardware can run, managing inference runtimes safely, and measuring performance.
 
-**Status: development foundation.** The workspace and four-view application shell
-are in place. Hardware discovery, inference, downloads, fit analysis, database storage,
-and benchmarks are not implemented yet. This is an independent community project;
+**Status: early development.** Overview now detects CPU topology, available RAM,
+NVIDIA VRAM/capability, and AMD VRAM/GTT, with asynchronous Refresh and explicit
+probe limitations. NVIDIA reference-machine and fixture checks pass; live AMD and
+separate CPU-only machine validation remain outstanding. Inference, downloads, fit
+analysis, database storage, and benchmarks are not implemented yet. This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 
 ## Goals
@@ -28,8 +30,10 @@ a C toolchain, and pkg-config. See the
 cargo run --locked -p workstation-app
 ```
 
-The shell does not require Ollama, a GPU, or model downloads. It makes no network
-requests at startup. Cargo may download build dependencies.
+The app does not require Ollama, a GPU, or model downloads. Hardware probes are
+read-only and run outside GTK's main thread. Missing GPU support leaves usable CPU
+and RAM readings visible. It makes no network requests at startup. Cargo may
+download build dependencies. Use Refresh or `Ctrl+R` to capture a new snapshot.
 
 ```sh
 cargo fmt --all --check

@@ -4,8 +4,9 @@ Run Rust tests with `cargo test --workspace --locked`. Put unit tests beside the
 implementation and integration tests under the owning crate's `tests/` directory.
 This root is not a Cargo package; standalone Rust files here would not execute.
 
-The initial application tests exercise real Tokio command/event delivery and worker
-channel shutdown without initializing GTK. Future memory-fit tests belong in
+Application tests exercise Tokio command/event delivery, blocking-probe shutdown,
+refresh coalescing, and stale-reading recovery without initializing GTK. Core tests
+exercise sanitized hardware snapshots and missing optional libraries. Future memory-fit tests belong in
 `crates/workstation-core/tests/`; mock Ollama HTTP tests belong in
 `crates/workstation-runtimes/tests/`. Add them when the behavior is implemented.
 
