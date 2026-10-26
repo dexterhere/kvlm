@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! GTK-independent domain and services. Planned modules contain no operational stubs.
 
+pub mod compare;
 pub mod db;
 pub mod diagnostics;
 pub mod experiments;
