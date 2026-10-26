@@ -19,8 +19,9 @@ file-level quantization labels do not determine every tensor's type.
 ## Decision
 
 - Implement a local, read-only metadata inspector in `workstation-core` for bounded,
-  little-endian, single-file GGUF v3 and flat metadata arrays. Reject split-file
-  metadata and nested arrays as unsupported by this subset.
+  little-endian, single-file GGUF v3 and flat metadata arrays. Reject actual shards
+  and nested arrays. Accept retained split markers only under the validated
+  single-file contract in the [inspection guide](../03-development/gguf-metadata.md#retained-split-markers).
 - Bound header and directory size, entry counts, strings, keys, names, arrays, and
   alignment before allocating or traversing attacker-controlled lengths. Reject
   malformed encodings, duplicate identifiers, invalid tensor layouts, arithmetic
@@ -51,3 +52,17 @@ Workspace formatting, Clippy, 13 Rust tests, repository validation, 4 Python tes
 and 5 Meson checks passed, along with a staged install and synthetic CLI checks.
 See the [validation notes](../03-development/gguf-metadata.md#validation-for-this-slice).
 No real-model, runtime, or hardware acceptance is claimed; M0 remains incomplete.
+
+## Amendment: retained split markers, 2026-10-26
+
+The blanket rejection of `split.*` keys also rejected a local merged Qwen GGUF.
+The [upstream merge implementation](https://github.com/ggml-org/llama.cpp/blob/9febe63d5a379f8568bae7116a5b2ba844a4a4a6/tools/gguf-split/gguf-split.cpp)
+preserves the first shard's metadata and resets its split count to zero. Accept
+the complete, correctly typed tuple only when the shard index is zero, the count
+is zero or one, and the declared total matches the selected file's header tensor
+count. Continue validating every tensor's layout and file bounds. This does not
+implement shard assembly or extend architecture-specific fit support.
+
+The actual 339-tensor Qwen file now passes read-only inspection. Regression tests
+retain rejection of actual shards, malformed markers, truncation, and overlap;
+see the [follow-up validation](../03-development/gguf-metadata.md#merged-file-regression-validation-2026-10-26).

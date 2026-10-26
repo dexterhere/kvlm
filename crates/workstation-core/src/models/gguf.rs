@@ -100,7 +100,7 @@ pub fn inspect_file(path: &Path) -> Result<GgufMetadata, GgufError> {
 
 /// Reset a seekable reader to its start and inspect only header/metadata/directory.
 /// The reader must report its real length. Gaps and trailing data are permitted;
-/// explicit split metadata, nested arrays and unrecognized tensor types are rejected.
+/// Shards, inconsistent split markers, nested arrays and unknown tensor types fail.
 pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, GgufError> {
     let file_bytes = reader.seek(SeekFrom::End(0))?;
     reader.seek(SeekFrom::Start(0))?;
@@ -127,17 +127,39 @@ pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, Gg
     let mut alignment = 32;
     let mut llama = LlamaMetadata::default();
     let mut warnings = Vec::new();
+    let (mut split_no, mut split_count, mut split_tensors) = (None, None, None);
     for _ in 0..entry_count {
         let key = input.string(256)?;
         if key.is_empty() || !keys.insert(key.clone()) {
             return Err(GgufError::Invalid("empty or duplicate metadata key"));
         }
-        if key.starts_with("split.") {
-            return Err(GgufError::Unsupported("split metadata"));
+        if key.starts_with("split.")
+            && !matches!(
+                key.as_str(),
+                "split.no" | "split.count" | "split.tensors.count"
+            )
+        {
+            return Err(GgufError::Unsupported("unknown split metadata"));
         }
         let value_type = input.u32()?;
         let value = input.value(value_type)?;
         match key.as_str() {
+            "split.no" | "split.count" => {
+                let Value::U16(number) = value else {
+                    return Err(GgufError::Invalid("split index or count type"));
+                };
+                if key == "split.no" {
+                    split_no = Some(number);
+                } else {
+                    split_count = Some(number);
+                }
+            }
+            "split.tensors.count" => {
+                let Value::I32(number) = value else {
+                    return Err(GgufError::Invalid("split tensor count type"));
+                };
+                split_tensors = Some(number);
+            }
             "general.architecture" => {
                 let Value::Text(name) = value else {
                     return Err(GgufError::Invalid("architecture type"));
@@ -208,6 +230,18 @@ pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, Gg
         }
         if key.starts_with("clip.") || key.starts_with("vision.") || key.starts_with("mtp.") {
             warn(&mut warnings, LayoutWarning::AuxiliaryMetadata);
+        }
+    }
+
+    match (split_no, split_count, split_tensors) {
+        (None, None, None) => {}
+        (_, Some(2..), _) => return Err(GgufError::Unsupported("split files")),
+        // llama.cpp's merge tool retains the first shard's keys and sets count to zero.
+        (Some(0), Some(0 | 1), Some(total)) if u64::try_from(total).ok() == Some(tensor_count) => {}
+        _ => {
+            return Err(GgufError::Invalid(
+                "inconsistent or incomplete split metadata",
+            ));
         }
     }
 
@@ -319,7 +353,9 @@ fn tensor_type(kind: u32) -> Result<(u64, u64), GgufError> {
 }
 
 enum Value {
+    U16(u16),
     U32(u32),
+    I32(i32),
     Bool(bool),
     Text(String),
     Other,
@@ -380,7 +416,9 @@ impl<R: Read + Seek> Input<'_, R> {
 
     fn value(&mut self, kind: u32) -> Result<Value, GgufError> {
         match kind {
+            2 => Ok(Value::U16(u16::from_le_bytes(self.fixed()?))),
             4 => Ok(Value::U32(self.u32()?)),
+            5 => Ok(Value::I32(i32::from_le_bytes(self.fixed()?))),
             7 => match self.fixed::<1>()?[0] {
                 0 => Ok(Value::Bool(false)),
                 1 => Ok(Value::Bool(true)),

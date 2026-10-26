@@ -18,7 +18,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Benchmark history](03-development/benchmark-history.md) | SQLite snapshots, outcomes, restart recovery, and storage limits |
 | 03 | [Quick Benchmark](03-development/quick-benchmark.md) | Local-only guard, one explicit streaming request, timings, cancellation, and limits |
 | 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
-| 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection example, supported subset, and limits |
+| 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection, merged-file split markers, validation evidence, and limits |
 | 03 | [GGUF fit scenarios](03-development/gguf-fit.md) | Local declarations with explicit settings, assumptions, and unknown compatibility |
 | 03 | [Desktop CPU fit workflow](03-development/desktop-cpu-fit.md) | File selection, explicit inputs, fresh RAM, asynchronous estimates, and validation limits |
 | 04 | [Milestones](04-roadmap/milestones.md) | Current state and M0–M4 delivery order |
