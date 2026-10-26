@@ -277,3 +277,20 @@ fn a_command_name_with_invalid_utf8_still_counts_and_a_huge_proc_is_refused() {
         "partial scan is not a total"
     );
 }
+
+#[test]
+fn gpu_memory_is_reported_for_the_largest_device_and_unknown_reads_are_ignored() {
+    let t0 = Instant::now();
+    let mut load = LoadAggregate::default();
+    load.add_gpu_memory(t0, "pci:a", None);
+    load.add_gpu_memory(t0, "pci:a", Some(1 << 30));
+    load.add_gpu_memory(t0 + Duration::from_millis(100), "pci:a", Some(3 << 30));
+    load.add_gpu_memory(t0, "pci:b", Some(2 << 30));
+    let mut metrics = PassMetrics::default();
+    load.apply(&mut metrics);
+    let memory = metrics.gpu_memory_bytes.unwrap();
+    assert_eq!(memory.peak, (3u64 << 30) as f64);
+    assert_eq!(memory.coverage.samples, 2);
+    assert_eq!(memory.coverage.scope, Scope::Device);
+    assert!(PassMetrics::default().gpu_memory_bytes.is_none());
+}
