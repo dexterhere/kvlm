@@ -11,6 +11,7 @@ use std::{
 pub mod catalog_cache;
 pub mod digests;
 pub mod downloads;
+pub mod experiments;
 pub mod profiles;
 pub mod queries;
 pub mod schema;

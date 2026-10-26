@@ -167,7 +167,7 @@ impl State {
         self.selected_build
             .as_deref()
             .filter(|name| installs.iter().any(|r| r.dir_name == *name))
-            .or_else(|| installs.last().map(|r| r.dir_name.as_str()))
+            .or_else(|| installs.first().map(|r| r.dir_name.as_str()))
     }
 }
 

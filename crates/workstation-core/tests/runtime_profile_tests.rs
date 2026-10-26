@@ -168,13 +168,14 @@ fn installs_are_recorded_listed_and_removed() {
 #[test]
 fn a_v2_database_upgrades_and_keeps_its_history() {
     let dir = Dir::new();
-    // Open once to build the layout, then drop the v3 tables and step the version back:
+    // Open once to build the layout, then drop the v3 and v4 tables and step the version back:
     // exactly what an older install holds.
     drop(HistoryStore::open(&dir.db()).unwrap());
     let connection = Connection::open(dir.db()).unwrap();
     connection
         .execute_batch(
             "INSERT INTO benchmark_runs(started_at_unix_ms,snapshot_json) VALUES (7,'{}');
+             DROP TABLE diagnostic_findings; DROP TABLE experiment_passes; DROP TABLE experiments;
              DROP TABLE runtime_profiles; DROP TABLE runtime_installs;",
         )
         .unwrap();
