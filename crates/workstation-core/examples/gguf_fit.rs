@@ -82,7 +82,7 @@ fn main() -> ExitCode {
 
     println!("GGUF file bytes (size estimate): {}", metadata.file_bytes);
     println!("Declared architecture: {:?}", metadata.architecture);
-    println!("Declared LLaMA metadata: {:?}", metadata.llama);
+    println!("Declared attention metadata: {:?}", metadata.attention);
     println!("Layout warnings: {:?}", metadata.warnings);
     println!("Scenario values are user-supplied, not observed runtime settings.");
     println!("Requested context tokens: {context_tokens}");

@@ -124,6 +124,25 @@ pub struct FitAssessment {
     pub limits: Option<MemoryLimits>,
 }
 
+impl FitAssessment {
+    /// Conditional memory policy only; never establishes runtime compatibility.
+    pub fn memory_class(&self) -> Option<FitClass> {
+        let memory = self.breakdown?;
+        let limits = self.limits?;
+        Some(classify_memory(memory.total_bytes, limits))
+    }
+}
+
+fn classify_memory(bytes: u64, limits: MemoryLimits) -> FitClass {
+    if bytes <= limits.comfortable_bytes {
+        FitClass::Comfortable
+    } else if bytes <= limits.maximum_bytes {
+        FitClass::Constrained
+    } else {
+        FitClass::NotRecommended
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FitError {
     ZeroValue(&'static str),
@@ -243,13 +262,17 @@ pub fn assess_fit(
     } else if let Some(memory) = breakdown {
         match limits {
             None => (FitClass::Unknown, FitReason::MissingMemoryReading),
-            Some(limits) if memory.total_bytes > limits.maximum_bytes => {
+            Some(limits)
+                if classify_memory(memory.total_bytes, limits) == FitClass::NotRecommended =>
+            {
                 (FitClass::NotRecommended, FitReason::ExceedsMaximumBudget)
             }
             Some(_) if compatibility == RuntimeCompatibility::Unknown => {
                 (FitClass::Unknown, FitReason::UnverifiedRuntime)
             }
-            Some(limits) if memory.total_bytes <= limits.comfortable_bytes => {
+            Some(limits)
+                if classify_memory(memory.total_bytes, limits) == FitClass::Comfortable =>
+            {
                 (FitClass::Comfortable, FitReason::WithinComfortableBudget)
             }
             Some(_) => (FitClass::Constrained, FitReason::WithinMaximumBudget),

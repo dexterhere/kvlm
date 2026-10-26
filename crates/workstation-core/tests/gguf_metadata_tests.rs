@@ -157,7 +157,7 @@ fn accepts_minimal_header_and_unknown_architecture_without_fit_claims() {
     assert_eq!(empty_result.tensor_bytes, 0);
     assert_eq!(empty_result.alignment, 32);
     assert_eq!(empty_result.architecture, None);
-    assert_eq!(empty_result.llama, None);
+    assert_eq!(empty_result.attention, None);
 
     let unknown = header(
         &[metadata(
@@ -169,7 +169,7 @@ fn accepts_minimal_header_and_unknown_architecture_without_fit_claims() {
     );
     let unknown_result = inspect_reader(&mut Cursor::new(unknown)).unwrap();
     assert_eq!(unknown_result.architecture.as_deref(), Some("future-net"));
-    assert_eq!(unknown_result.llama, None);
+    assert_eq!(unknown_result.attention, None);
 }
 
 #[test]
@@ -184,7 +184,7 @@ fn accepts_merged_and_single_file_split_markers_without_reading_payload() {
         assert_eq!(result.tensor_count, 1);
         assert_eq!(result.tensor_bytes, 4);
         assert_eq!(result.architecture.as_deref(), Some("qwen2"));
-        assert_eq!(result.llama, None);
+        assert_eq!(result.attention.unwrap().block_count, None);
         assert!(!source.read_payload);
     }
 }
@@ -254,7 +254,7 @@ fn retains_positive_llama_declarations_regardless_of_metadata_order() {
         &[],
     );
     let result = inspect_reader(&mut Cursor::new(input)).unwrap();
-    let llama = result.llama.unwrap();
+    let llama = result.attention.unwrap();
     assert_eq!(llama.context_length, Some(8192));
     assert_eq!(llama.block_count, Some(32));
     assert_eq!(llama.embedding_length, Some(4096));
@@ -262,6 +262,97 @@ fn retains_positive_llama_declarations_regardless_of_metadata_order() {
     assert_eq!(llama.kv_heads, Some(8));
     assert_eq!(llama.key_length, None);
     assert_eq!(llama.value_length, None);
+}
+
+#[test]
+fn retains_qwen2_attention_declarations_without_deriving_missing_lengths() {
+    let result = inspect_reader(&mut Cursor::new(qwen_fixture(vec![
+        metadata(b"qwen2.attention.head_count_kv", TYPE_U32, &u32_value(4)),
+        metadata(b"qwen2.embedding_length", TYPE_U32, &u32_value(3584)),
+        metadata(b"qwen2.attention.head_count", TYPE_U32, &u32_value(28)),
+        metadata(b"qwen2.block_count", TYPE_U32, &u32_value(28)),
+        metadata(b"qwen2.context_length", TYPE_U32, &u32_value(131_072)),
+    ])))
+    .unwrap();
+    let attention = result.attention.unwrap();
+    assert_eq!(attention.context_length, Some(131_072));
+    assert_eq!(attention.block_count, Some(28));
+    assert_eq!(attention.embedding_length, Some(3584));
+    assert_eq!(attention.attention_heads, Some(28));
+    assert_eq!(attention.kv_heads, Some(4));
+    assert_eq!(attention.key_length, None);
+    assert_eq!(attention.value_length, None);
+
+    let partial = inspect_reader(&mut Cursor::new(qwen_fixture(vec![
+        metadata(b"qwen2.embedding_length", TYPE_U32, &u32_value(3584)),
+        metadata(b"qwen2.attention.head_count", TYPE_U32, &u32_value(28)),
+        metadata(b"qwen2.attention.key_length", TYPE_U32, &u32_value(96)),
+    ])))
+    .unwrap()
+    .attention
+    .unwrap();
+    assert_eq!(partial.key_length, Some(96));
+    assert_eq!(partial.value_length, None);
+}
+
+#[test]
+fn qwen2_dimensions_require_positive_u32_scalars_and_matching_namespace() {
+    for (key, kind, value) in [
+        (b"qwen2.block_count".as_slice(), TYPE_U32, u32_value(0)),
+        (b"qwen2.embedding_length".as_slice(), TYPE_U32, u32_value(0)),
+        (
+            b"qwen2.attention.head_count".as_slice(),
+            TYPE_U32,
+            u32_value(0),
+        ),
+        (
+            b"qwen2.attention.head_count_kv".as_slice(),
+            TYPE_U32,
+            u32_value(0),
+        ),
+        (
+            b"qwen2.block_count".as_slice(),
+            10,
+            28_u64.to_le_bytes().to_vec(),
+        ),
+    ] {
+        invalid(&qwen_fixture(vec![metadata(key, kind, &value)]));
+    }
+
+    let qwen_only_llama_fields = qwen_fixture(vec![metadata(
+        b"llama.block_count",
+        TYPE_U32,
+        &u32_value(99),
+    )]);
+    assert_eq!(
+        inspect_reader(&mut Cursor::new(qwen_only_llama_fields))
+            .unwrap()
+            .attention
+            .unwrap()
+            .block_count,
+        None
+    );
+
+    let llama_with_qwen_fields = header(
+        &[
+            metadata(
+                b"general.architecture",
+                TYPE_STRING,
+                &string_value(b"llama"),
+            ),
+            metadata(b"llama.block_count", TYPE_U32, &u32_value(2)),
+            metadata(b"qwen2.block_count", TYPE_U32, &u32_value(99)),
+        ],
+        &[],
+    );
+    assert_eq!(
+        inspect_reader(&mut Cursor::new(llama_with_qwen_fields))
+            .unwrap()
+            .attention
+            .unwrap()
+            .block_count,
+        Some(2)
+    );
 }
 
 #[test]
@@ -512,6 +603,67 @@ fn emits_conservative_layout_warnings() {
     assert!(warnings.contains(&LayoutWarning::RecurrentMetadata));
     assert!(warnings.contains(&LayoutWarning::TensorLayoutMetadata));
     assert!(warnings.contains(&LayoutWarning::AuxiliaryMetadata));
+}
+
+#[test]
+fn qwen2_layout_metadata_emits_conservative_warnings() {
+    let markers: [(&[u8], u32, Vec<u8>, LayoutWarning); 8] = [
+        (
+            b"qwen2.attention.sliding_window",
+            TYPE_U32,
+            u32_value(4096),
+            LayoutWarning::SlidingWindowMetadata,
+        ),
+        (
+            b"qwen2.attention.sliding_window_pattern",
+            TYPE_U32,
+            u32_value(2),
+            LayoutWarning::SlidingWindowMetadata,
+        ),
+        (
+            b"qwen2.attention.causal",
+            TYPE_BOOL,
+            bool_value(0),
+            LayoutWarning::NonCausalAttention,
+        ),
+        (
+            b"qwen2.full_attention_interval",
+            TYPE_U32,
+            u32_value(2),
+            LayoutWarning::HybridMetadata,
+        ),
+        (
+            b"qwen2.expert_count",
+            TYPE_U32,
+            u32_value(2),
+            LayoutWarning::ExpertMetadata,
+        ),
+        (
+            b"qwen2.recurrent.state_size",
+            TYPE_U32,
+            u32_value(2),
+            LayoutWarning::RecurrentMetadata,
+        ),
+        (
+            b"qwen2.adapters.lora_rank",
+            TYPE_U32,
+            u32_value(2),
+            LayoutWarning::AdapterMetadata,
+        ),
+        (
+            b"qwen2.tensor_data_layout",
+            TYPE_STRING,
+            string_value(b"repacked"),
+            LayoutWarning::TensorLayoutMetadata,
+        ),
+    ];
+    for (key, kind, value, warning) in markers {
+        let result = inspect_reader(&mut Cursor::new(qwen_fixture(vec![metadata(
+            key, kind, &value,
+        )])))
+        .unwrap();
+        assert_eq!(result.warnings, vec![warning], "{key:?}");
+    }
 }
 
 #[test]

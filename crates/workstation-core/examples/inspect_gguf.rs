@@ -27,7 +27,7 @@ fn main() -> ExitCode {
     println!("Tensor bytes: {}", metadata.tensor_bytes);
     println!("Alignment: {}", metadata.alignment);
     println!("Architecture: {:?}", metadata.architecture);
-    println!("LLaMA declared metadata: {:?}", metadata.llama);
+    println!("Attention declarations: {:?}", metadata.attention);
     println!("Layout warnings: {:?}", metadata.warnings);
     println!("Declared metadata only; runtime compatibility and fit remain unverified.");
     ExitCode::SUCCESS
