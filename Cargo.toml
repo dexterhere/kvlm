@@ -22,6 +22,13 @@ gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "macros"] }
 async-channel = "2"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+nvml-wrapper = "0.13"
+reqwest = { version = "0.12.28", default-features = false }
+rusqlite = { version = "0.41.0", features = ["bundled"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

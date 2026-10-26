@@ -21,16 +21,60 @@ workstation-app ──> workstation-bench ──> workstation-runtimes ──> w
 Dependencies flow toward core; core must not import GTK or runtime/UI crates.
 Workspace dependency versions are centralized in the root `Cargo.toml`.
 
+Core exposes synchronous, bounded local GGUF inspection through `models::gguf`.
+It validates a supported header/directory subset and computes tensor storage bytes
+without reading payloads. Architecture values remain declarations, not runtime
+configuration or fit evidence. See [the inspection guide](../03-development/gguf-metadata.md).
+CLI examples call it synchronously. Overview sends typed fit requests to a blocking
+worker; no file inspection or hardware probing occurs on the GTK thread.
+
+`fit::gguf_fit` connects inspected declarations to the static calculator with an
+explicit runtime scenario and available-memory budget. Only a labeled uniform
+full-attention assumption, complete dimensions, and one sequence allow a breakdown.
+Warnings block that path; absence of warnings does not establish support. Runtime
+compatibility stays Unknown. See [the scenario guide](../03-development/gguf-fit.md).
+The [desktop CPU workflow](../03-development/desktop-cpu-fit.md) reuses that adapter
+and reads Linux `MemAvailable` afresh for each estimate without probing GPUs again.
+Request generations discard replies after file, scenario, or hardware changes.
+
 ## Execution model
 
 The application creates one multi-thread Tokio runtime. GTK widgets remain on the
 GLib main thread. UI commands use Tokio mpsc, and worker events return through
 `async_channel` and `glib::MainContext::spawn_local`. No GTK objects cross into workers.
-Blocking SQLite, NVML, and sysfs calls must use `spawn_blocking` when implemented.
-Closing the application must cancel worker work and release owned resources.
+Blocking SQLite, NVML, and sysfs calls use `spawn_blocking`.
+Closing the application cancels asynchronous HTTP work and releases channels.
+Already-running blocking probes cannot be forcibly cancelled; shutdown uses a bounded
+runtime wait.
 
-The foundation bridge only confirms that the worker is available. It does not probe
-hardware, touch models, connect to runtimes, or create the database.
+On this dependent feature branch, hardware discovery runs in `spawn_blocking` and
+returns typed snapshots to Overview. Attached-Ollama discovery is carried from its
+unmerged PR and runs asynchronously on Tokio; it never changes runtime state.
+Hardware, fit, and GGUF prerequisite PRs have not been merged either.
+Model selection sends `InspectOllama { id, model }` and receives correlated inspection
+events; UI generations reject stale replies. `/api/show` and fresh `/api/ps` requests
+run concurrently on Tokio. Their partial failures remain separate. Declared metadata
+is not converted into loaded settings or a fit classification; see
+[decision 0008](../05-decisions/0008-ollama-model-inspection.md).
+Quick Benchmark runs one separately tracked Tokio task alongside other commands.
+The bridge rejects duplicate runs and aborts its task set when the UI closes.
+Out-of-band watch cancellation drops the HTTP future; no external process is signaled.
+`workstation-runtimes` owns execution-time local-only checks, bounded NDJSON parsing,
+and client arrival timestamps; `workstation-bench` owns the fixed workload, outcome,
+overall deadline, and server-derived decode rate. See
+[decision 0009](../05-decisions/0009-quick-benchmark.md).
+`workstation-core::db` owns versioned SQLite history; `workstation-bench::history`
+saves a requested snapshot before inference and finalizes the outcome afterwards.
+The bridge loads history off-thread and sends correlated UI events. No prompt or
+output text is persisted. See [decision 0010](../05-decisions/0010-benchmark-history.md).
+`hardware::resources` reads memory only for stable snapshot devices. The bench
+sampler schedules bounded single-flight blocking probes around runtime checks and
+generation; it retains maxima/counts and returns promptly on the runner outcome.
+Native probe cleanup also stays in blocking workers. Optional terminal JSON fields
+preserve legacy history without a structural migration. See
+[decision 0011](../05-decisions/0011-benchmark-memory-sampling.md).
+The core calculator is pure: callers supply supported model/runtime metadata and
+available-memory readings; it performs no probing, network, database, or GTK work.
 
 ## Intended data flow
 
@@ -39,8 +83,12 @@ An independent successful run for the artifact/hardware pair → empirical verif
 Runtime adapter → stream timings + telemetry → stored benchmark → diagnostic advice.
 Catalog metadata → digest match against existing blobs → user-requested download if needed.
 
-Shared GPU memory may overlap physical system RAM. Never count it as extra physical
-capacity; the detailed accounting and CPU-only classification remain open decisions.
+Shared GPU memory overlaps physical system RAM. The initial calculator caps its
+resident footprint by both GPU mapping and host-RAM budgets, without adding them.
+CPU-only and selected GPU placement policies are defined in
+[decision 0004](../05-decisions/0004-static-memory-fit.md). Offload, verified layout
+and compatibility evidence, actual runtime settings, and GPU fit wiring remain
+separate work. CPU estimates in Overview are explicitly labeled scenarios.
 
 ## Ownership and storage
 
@@ -48,7 +96,7 @@ Attached processes permit only supported, authorized API operations. Stop/restar
 and process signals are reserved for managed processes whose ownership is known.
 All operations are rootless and managed endpoints default to `127.0.0.1`.
 
-Future application data belongs under `$XDG_DATA_HOME/local-ai-workstation/`
+Application history belongs under `$XDG_DATA_HOME/local-ai-workstation/`
 (default `~/.local/share/local-ai-workstation/`), not in the checkout. SQLite uses
 WAL and foreign keys; schema changes need versioned migrations. Credentials belong
 in Secret Service. Native distribution is the first target. A Flatpak host bridge

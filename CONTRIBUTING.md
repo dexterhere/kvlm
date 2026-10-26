@@ -35,6 +35,14 @@ before submitting. Explain anything you could not test. See
 
 ## Commits and pull requests
 
+Create a feature branch from `develop` and open its pull request against `develop`.
+Promotion is `develop → staging → main`; do not skip stages or commit directly to
+integration branches. Enable the local commit checks once per checkout:
+
+```sh
+git config core.hooksPath .githooks
+```
+
 Follow the [Git workflow](docs/03-development/git-workflow.md): small, frequent,
 meaningful commits with imperative subjects such as `fix: reject attached runtime stops`.
 Commit only work you intend to include. Never commit credentials, model weights,

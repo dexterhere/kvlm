@@ -9,6 +9,10 @@ publish.workspace = true
 
 [dependencies]
 workstation-core.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

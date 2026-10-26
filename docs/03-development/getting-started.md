@@ -43,9 +43,15 @@ cargo run --locked -p workstation-app
 ```
 
 Run from a graphical session. A headless build can run unit tests without showing
-a window. The initial app has four navigation pages, keyboard navigation, and a
-background-worker readiness message. Empty pages describe unimplemented features;
-they do not show synthetic hardware or inference results. Source-tree execution
+a window. Overview shows real hardware snapshots with Refresh and `Ctrl+R`. The
+local [CPU scenario panel](desktop-cpu-fit.md) inspects user-selected GGUF metadata
+and estimates explicitly configured inputs on a background worker. The
+Runtimes page provides manual Refresh for attached Ollama discovery and Inspect
+for per-model declarations and fresh loaded readings. See the
+[inspection guide](ollama-inspection.md). The Models page remains a placeholder.
+Benchmark Lab offers the explicitly triggered
+[Quick Benchmark](quick-benchmark.md), with local-only preflight and one fixed request;
+no results are fabricated or persisted. Source-tree execution
 does not require installed desktop metadata or a compiled settings schema.
 
 ## Check changes
@@ -57,8 +63,7 @@ cargo test --workspace --locked
 python3 scripts/check_repository.py
 python3 -m unittest discover -s tests -p 'test_*.py'
 glib-compile-schemas --strict --dry-run data
-appstreamcli validate --no-net --override=url-homepage-missing=info \
-  data/org.gnome.LocalAIWorkstation.metainfo.xml.in
+appstreamcli validate --no-net data/org.gnome.LocalAIWorkstation.metainfo.xml.in
 ```
 
 `Cargo.lock` is committed because this workspace ships an application. Use `--locked`
@@ -68,8 +73,8 @@ For offline builds, first cache dependencies with `cargo fetch --locked`, then a
 
 Validate the generated `.desktop` file with `meson test` after Meson setup below;
 `desktop-file-validate` rejects the source template's `.in` extension. AppStream
-currently reports the missing public homepage as informational because the project
-is unpublished. Add the real URL and remove this override before release.
+uses the verified GitHub repository URL and developer namespace; no severity
+override is needed.
 
 ## Build and install with Meson
 
@@ -94,6 +99,18 @@ inside the build tree so it does not interfere with regular Cargo builds. This i
 a native build foundation, not completed `.deb`, `.rpm`, AppImage, or Flatpak packaging.
 
 ## Common problems
+
+For an explicit local hardware check, run:
+
+```sh
+cargo run --locked -p workstation-core --example probe_hardware
+```
+
+This opt-in example prints a JSON snapshot, including device identifiers; review
+and redact it before sharing. Normal tests use sanitized fixtures and never run
+this live probe. NVIDIA requires a working runtime `libnvidia-ml.so.1`, not CUDA
+development headers. AMD reads kernel DRM sysfs. Missing libraries/nodes are
+reported as probe notices. Intel/Vulkan memory probing remains future work.
 
 - Missing `gtk4.pc` or `libadwaita-1.pc`: install development packages and inspect `pkg-config`.
 - Display errors: launch from a graphical session; compilation and unit tests are headless.

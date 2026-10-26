@@ -4,14 +4,18 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use workstation_core::APP_NAME;
 
-use crate::bridge::{self, CoreCommand, UiEvent};
+use crate::bridge::{self, UiEvent};
 use crate::views;
 
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
+    let (commands, events) = bridge::start(runtime);
+    let overview = views::overview::Overview::new(commands.clone());
+    let runtimes = views::runtimes::Runtimes::new(commands.clone());
+    let benchmarks = views::bench_lab::Benchmarks::new(commands);
     let stack = adw::ViewStack::new();
     stack.set_vexpand(true);
     stack.add_titled_with_icon(
-        &views::overview::build(),
+        &overview.widget,
         Some("overview"),
         "Overview",
         "utilities-system-monitor-symbolic",
@@ -23,13 +27,13 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         "system-search-symbolic",
     );
     stack.add_titled_with_icon(
-        &views::runtimes::build(),
+        &runtimes.widget,
         Some("runtimes"),
         "Runtimes",
         "network-server-symbolic",
     );
     stack.add_titled_with_icon(
-        &views::bench_lab::build(),
+        &benchmarks.widget,
         Some("benchmarks"),
         "Benchmarks",
         "applications-science-symbolic",
@@ -39,7 +43,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         .stack(&stack)
         .policy(adw::ViewSwitcherPolicy::Wide)
         .build();
-    let title = adw::WindowTitle::new(APP_NAME, "Development foundation");
+    let title = adw::WindowTitle::new(APP_NAME, "Development preview");
     let header = adw::HeaderBar::builder().title_widget(&switcher).build();
     let menu = gio::Menu::new();
     menu.append(Some("Quit"), Some("app.quit"));
@@ -53,7 +57,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
 
     let bottom_switcher = adw::ViewSwitcherBar::builder().stack(&stack).build();
     let status = gtk::Label::builder()
-        .label("Starting background worker…")
+        .label("Detecting hardware · Ollama not checked")
         .wrap(true)
         .margin_top(8)
         .margin_bottom(8)
@@ -101,27 +105,67 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         );
     }
 
-    let (commands, events) = bridge::start(runtime);
-    if commands.send(CoreCommand::Initialize).is_err() {
-        status.set_label("Background worker unavailable.");
-    }
+    let refresh = gio::SimpleAction::new("refresh", None);
+    let weak_stack = stack.downgrade();
+    let weak_hardware = overview.refresh.downgrade();
+    let weak_runtime = runtimes.refresh.downgrade();
+    refresh.connect_activate(move |_, _| {
+        let Some(stack) = weak_stack.upgrade() else {
+            return;
+        };
+        let button = match stack.visible_child_name().as_deref() {
+            Some("overview") => weak_hardware.upgrade(),
+            Some("runtimes") => weak_runtime.upgrade(),
+            _ => None,
+        };
+        if let Some(button) = button {
+            button.emit_clicked();
+        }
+    });
+    window.add_action(&refresh);
+    app.set_accels_for_action("win.refresh", &["<Primary>r"]);
+    overview.request();
+    benchmarks.request_history();
     let closing_events = events.clone();
     window.connect_close_request(move |_| {
         closing_events.close();
         glib::Propagation::Proceed
     });
+    let shutdown_events = events.clone();
+    app.connect_shutdown(move |_| {
+        shutdown_events.close();
+    });
     let weak_status = status.downgrade();
     glib::MainContext::default().spawn_local(async move {
-        let _commands = commands;
+        let mut hardware_status = "Detecting hardware";
+        let mut runtime_status = "Ollama not checked";
         while let Ok(event) = events.recv().await {
             let Some(status) = weak_status.upgrade() else {
                 break;
             };
+            overview.receive(&event);
+            runtimes.receive(&event);
+            benchmarks.receive(&event);
             match event {
-                UiEvent::WorkerReady => {
-                    status.set_label("Development foundation · No runtime connected")
+                UiEvent::HardwareDetected(_) => hardware_status = "Hardware snapshot ready",
+                UiEvent::HardwareFailed(_) => hardware_status = "Hardware detection failed",
+                UiEvent::OllamaDiscovered(discovery) => {
+                    runtime_status = if discovery.installed.is_ok() && discovery.running.is_ok() {
+                        "Connected: Ollama · Attached :11434"
+                    } else {
+                        "Connected: Ollama · Model discovery incomplete"
+                    }
                 }
+                UiEvent::OllamaFailed(_) => {
+                    runtime_status = "Ollama unavailable · See Runtimes to retry"
+                }
+                UiEvent::FitFinished { .. }
+                | UiEvent::OllamaInspected { .. }
+                | UiEvent::BenchmarkFinished { .. }
+                | UiEvent::BenchmarkHistorySaved { .. }
+                | UiEvent::BenchmarkHistoryLoaded { .. } => continue,
             }
+            status.set_label(&format!("{hardware_status} · {runtime_status}"));
         }
     });
 

@@ -4,8 +4,22 @@ A community-built GNOME desktop application for understanding what local AI mode
 your hardware can run, managing inference runtimes safely, and measuring performance.
 
 **Status: development foundation.** The workspace and four-view application shell
-are in place. Hardware discovery, inference, downloads, fit analysis, database storage,
-and benchmarks are not implemented yet. This is an independent community project;
+are in place, plus a supplied-metadata static memory-fit calculator and bounded
+local GGUF metadata inspection in core. This dependent branch also includes hardware
+discovery in Overview. Read-only attached-Ollama discovery is also carried from its
+unmerged PR.
+Overview now includes local GGUF inspection and CPU scenario estimates with explicit
+assumptions and fresh RAM readings. Runtimes now supports selecting an installed
+Ollama model for read-only metadata
+inspection and fresh loaded-allocation readings. Declared defaults stay separate
+from loaded settings, and routing remains unverified when evidence is missing.
+Benchmark Lab now runs one explicitly requested Ollama text benchmark after
+execution-time local-only checks, with cancellation and separate client/server
+measurements. SQLite history now preserves run snapshots and outcomes across
+restarts. Background sampling now records observed system RAM and per-device
+VRAM/GTT peaks with explicit coverage limits. Verified runtime fit, downloads,
+process memory attribution, and empirical badge verification remain unimplemented.
+This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 
 ## Goals
@@ -30,6 +44,34 @@ cargo run --locked -p workstation-app
 
 The shell does not require Ollama, a GPU, or model downloads. It makes no network
 requests at startup. Cargo may download build dependencies.
+
+Exercise the core calculator without a GPU, model, or runtime:
+
+```sh
+cargo run --locked -p workstation-core --example memory_fit
+```
+
+The example clearly labels synthetic inputs. The API estimates weights, separate K/V
+cache storage, buffers, and runtime allowance, then classifies one selected CPU/GPU
+placement. Missing metadata or unverified compatibility remains Unknown; shared memory
+is never added to host RAM. This does not grant benchmark verification. See the
+[calculator guide](docs/03-development/static-memory-fit.md) for scope and checks.
+
+For local GGUF inspection, see the [metadata guide](docs/03-development/gguf-metadata.md).
+This reports declarations and tensor layout; runtime compatibility remains unverified.
+The [GGUF fit scenario guide](docs/03-development/gguf-fit.md) connects those
+declarations to explicit settings and a supplied budget. It requires an explicit
+layout assumption for a breakdown and cannot return a positive fit classification.
+Use the [desktop CPU workflow](docs/03-development/desktop-cpu-fit.md) to select a
+local file and configure a scenario directly in Overview. Use the
+[Ollama inspection workflow](docs/03-development/ollama-inspection.md) to inspect an
+installed model in Runtimes. Those inspection workflows do not run inference.
+The [Quick Benchmark workflow](docs/03-development/quick-benchmark.md) sends one
+fixed inference request only after Check and Run in Benchmark Lab.
+The [benchmark history guide](docs/03-development/benchmark-history.md) explains
+durable snapshots, storage errors, and unfinished runs.
+The [memory sampling guide](docs/03-development/benchmark-memory-sampling.md) explains
+observed peaks, unknown channels, and system/device attribution limits.
 
 ```sh
 cargo fmt --all --check
