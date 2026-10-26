@@ -9,6 +9,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
+use workstation_core::models::artifact::ModelArtifact;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -226,5 +227,113 @@ async fn unwritable_cache_does_not_hide_a_live_result() {
     assert_eq!(
         release.notice.as_deref(),
         Some("Could not save this result for offline use.")
+    );
+}
+
+/// A real-shaped GGUF: one qwen2 declaration and one 4-byte tensor, 8 bytes of payload room.
+fn gguf_bytes() -> Vec<u8> {
+    let mut out = b"GGUF".to_vec();
+    out.extend(3u32.to_le_bytes());
+    out.extend(1u64.to_le_bytes()); // tensors
+    out.extend(1u64.to_le_bytes()); // metadata entries
+    let key = b"general.architecture";
+    out.extend((key.len() as u64).to_le_bytes());
+    out.extend(key);
+    out.extend(8u32.to_le_bytes());
+    out.extend(5u64.to_le_bytes());
+    out.extend(b"qwen2");
+    let name = b"weight";
+    out.extend((name.len() as u64).to_le_bytes());
+    out.extend(name);
+    out.extend(1u32.to_le_bytes());
+    out.extend(1u64.to_le_bytes());
+    out.extend(0u32.to_le_bytes()); // F32
+    out.extend(0u64.to_le_bytes());
+    out.resize(out.len().div_ceil(32) * 32, 0);
+    out.extend(0f32.to_le_bytes());
+    out
+}
+
+fn artifact_for(size: u64) -> ModelArtifact {
+    use workstation_core::models::artifact::ArtifactFormat;
+    ModelArtifact {
+        artifact_id: format!("hf:{REPO}@{REV_A}:m.gguf"),
+        repo_id: REPO.into(),
+        revision: REV_A.into(),
+        filename: "m.gguf".into(),
+        format: ArtifactFormat::Gguf,
+        quantization_hint: None,
+        size_bytes: Some(size),
+        sha256: Some(SHA256.into()),
+        shards: None,
+    }
+}
+
+fn file_line() -> String {
+    format!("GET /{REPO}/resolve/{REV_A}/m.gguf HTTP/1.1")
+}
+
+#[tokio::test]
+async fn inspect_reads_the_header_once_then_replays_it_without_the_network() {
+    let bytes = gguf_bytes();
+    let db = TempDb::new();
+    let server =
+        Server::start(|_| vec![route(&file_line(), ranged(0, &bytes, bytes.len() as u64))]);
+    let svc = service(server.port(), &db);
+    let artifact = artifact_for(bytes.len() as u64);
+
+    let live = svc.inspect(&artifact).await.unwrap();
+    assert_eq!(live.source, LoadSource::Live);
+    assert_eq!(live.metadata.architecture.as_deref(), Some("qwen2"));
+    assert_eq!(live.metadata.file_bytes, bytes.len() as u64);
+
+    let dead = service(1, &db); // nothing listens: only the saved copy can answer
+    let saved = dead.inspect(&artifact).await.unwrap();
+    assert!(matches!(saved.source, LoadSource::Cached { .. }));
+    assert_eq!(saved.metadata, live.metadata);
+    assert_eq!(server.lines().len(), 1);
+}
+
+#[tokio::test]
+async fn inspect_refuses_unknown_sizes_shards_and_bad_headers_without_caching() {
+    let db = TempDb::new();
+    let server = Server::start(|_| {
+        vec![route(
+            &file_line(),
+            ranged(0, b"not gguf at all, sorry..", 24),
+        )]
+    });
+    let svc = service(server.port(), &db);
+
+    let mut unknown = artifact_for(24);
+    unknown.size_bytes = None;
+    assert!(
+        svc.inspect(&unknown)
+            .await
+            .unwrap_err()
+            .contains("size is unknown")
+    );
+
+    let mut sharded = artifact_for(24);
+    sharded.shards = Some(workstation_core::models::artifact::ShardInfo {
+        count: 2,
+        complete: true,
+    });
+    assert!(
+        svc.inspect(&sharded)
+            .await
+            .unwrap_err()
+            .contains("split into several files")
+    );
+    assert!(server.lines().is_empty());
+
+    let error = svc.inspect(&artifact_for(24)).await.unwrap_err();
+    assert!(error.contains("not valid GGUF"), "{error}");
+    let store = HistoryStore::open(&db.0).unwrap();
+    assert!(
+        store
+            .cached_artifact_metadata(REPO, REV_A, "m.gguf")
+            .unwrap()
+            .is_none()
     );
 }
