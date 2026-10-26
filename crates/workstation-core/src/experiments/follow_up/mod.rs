@@ -14,6 +14,8 @@ pub fn requested_settings(profile: &LaunchProfile) -> Settings {
         cache_type_v: Some(profile.cache_type_v.flag_value().into()),
         flash_attention: Some(profile.flash_attention),
         ubatch_size: Some(profile.ubatch_size),
+        no_mmap: Some(profile.extra.contains(&ExtraFlag::NoMmap)),
+        mlock: Some(profile.extra.contains(&ExtraFlag::Mlock)),
         ..Settings::default()
     };
     for flag in &profile.extra {
@@ -37,6 +39,7 @@ pub fn observed_from_arguments(args: &[String]) -> Settings {
             .and_then(|i| args.get(i + 1))
             .map(String::as_str)
     };
+    let complete = args.iter().any(|a| a == "--model");
     let number = |name: &str| value(name).and_then(|v| v.parse::<u32>().ok());
     let cache = |name: &str| {
         value(name)
@@ -56,6 +59,9 @@ pub fn observed_from_arguments(args: &[String]) -> Settings {
         ubatch_size: number("--ubatch-size"),
         threads: number("--threads"),
         parallel: number("--parallel"),
+        // A launch vector (it names a model) is complete, so an absent switch is off, not unknown.
+        no_mmap: complete.then(|| args.iter().any(|a| a == "--no-mmap")),
+        mlock: complete.then(|| args.iter().any(|a| a == "--mlock")),
     }
 }
 
@@ -101,7 +107,7 @@ pub fn with_variable(
                 .parallel
                 .unwrap_or(DEFAULT_SLOTS)
                 .max(1);
-            if prompt + u64::from(max_tokens) > u64::from(half / slots) {
+            if prompt.saturating_add(u64::from(max_tokens)) > u64::from(half / slots) {
                 return Err(
                     "Half the context would not leave room for the prompt and the answer.".into(),
                 );

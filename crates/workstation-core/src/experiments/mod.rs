@@ -199,6 +199,8 @@ pub struct Settings {
     pub ubatch_size: Option<u32>,
     pub threads: Option<u32>,
     pub parallel: Option<u32>,
+    pub no_mmap: Option<bool>,
+    pub mlock: Option<bool>,
 }
 
 impl Settings {
@@ -233,6 +235,54 @@ impl Settings {
         if differ(&self.parallel, &other.parallel) {
             out.push("parallel");
         }
+        if differ(&self.no_mmap, &other.no_mmap) {
+            out.push("no_mmap");
+        }
+        if differ(&self.mlock, &other.mlock) {
+            out.push("mlock");
+        }
+        out
+    }
+
+    /// Names of the settings that are not identical, counting a value known on one side only
+    /// as a difference. A controlled comparison needs this: a flag that appears or vanishes
+    /// is a change, not an unknown.
+    pub fn all_differences(&self, other: &Self) -> Vec<&'static str> {
+        let mut out = self.differences(other);
+        let one_sided = [
+            (
+                "context_length",
+                self.context_length.is_some() != other.context_length.is_some(),
+            ),
+            (
+                "gpu_layers",
+                self.gpu_layers.is_some() != other.gpu_layers.is_some(),
+            ),
+            (
+                "cache_type_k",
+                self.cache_type_k.is_some() != other.cache_type_k.is_some(),
+            ),
+            (
+                "cache_type_v",
+                self.cache_type_v.is_some() != other.cache_type_v.is_some(),
+            ),
+            (
+                "flash_attention",
+                self.flash_attention.is_some() != other.flash_attention.is_some(),
+            ),
+            (
+                "ubatch_size",
+                self.ubatch_size.is_some() != other.ubatch_size.is_some(),
+            ),
+            ("threads", self.threads.is_some() != other.threads.is_some()),
+            (
+                "parallel",
+                self.parallel.is_some() != other.parallel.is_some(),
+            ),
+            ("no_mmap", self.no_mmap.is_some() != other.no_mmap.is_some()),
+            ("mlock", self.mlock.is_some() != other.mlock.is_some()),
+        ];
+        out.extend(one_sided.into_iter().filter(|(_, d)| *d).map(|(n, _)| n));
         out
     }
 }
@@ -311,8 +361,8 @@ impl NewExperiment {
         .into_iter()
         .flatten()
         {
-            if text.len() > MAX_TEXT || text.chars().any(char::is_control) {
-                return Err("A stored field is too long or has control characters.".into());
+            if text.is_empty() || text.len() > MAX_TEXT || text.chars().any(char::is_control) {
+                return Err("A stored field is empty, too long or has control characters.".into());
             }
         }
         if self.variable.is_some() != self.baseline_id.is_some() {

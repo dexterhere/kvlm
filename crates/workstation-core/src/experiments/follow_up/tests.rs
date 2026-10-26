@@ -125,3 +125,21 @@ fn half_context_is_refused_when_it_cannot_be_shown_to_fit() {
         "4 slots: 512 each"
     );
 }
+
+#[test]
+fn memory_switches_are_part_of_the_snapshots() {
+    let mut p = profile();
+    let plain = requested_settings(&p);
+    p.extra.push(ExtraFlag::NoMmap);
+    let with = requested_settings(&p);
+    assert_eq!(plain.differences(&with), vec!["no_mmap"]);
+    let args = p.arguments("abcdef0123456789").unwrap();
+    assert_eq!(observed_from_arguments(&args).no_mmap, Some(true));
+    assert_eq!(observed_from_arguments(&args).mlock, Some(true));
+    assert_eq!(observed_from_arguments(&[]).mlock, None);
+}
+
+#[test]
+fn an_enormous_prompt_length_is_refused_without_overflow() {
+    assert!(with_variable(&profile(), Variable::HalfContext, Some(u64::MAX), 96).is_err());
+}

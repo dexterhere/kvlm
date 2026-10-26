@@ -121,7 +121,7 @@ fn same<T: PartialEq>(a: &T, b: &T, what: &'static str) -> Result<(), Refusal> {
 
 fn same_known(a: &Option<String>, b: &Option<String>, what: &'static str) -> Result<(), Refusal> {
     match (a, b) {
-        (Some(x), Some(y)) if x == y => Ok(()),
+        (Some(x), Some(y)) if !x.is_empty() && x == y => Ok(()),
         _ => Err(Refusal::Mismatch(what)),
     }
 }
@@ -208,7 +208,10 @@ pub fn compare_follow_up(
         "the runtime (only llama.cpp can be changed)",
     )?;
 
-    let changed = baseline.spec.requested.differences(&variant.spec.requested);
+    let changed = baseline
+        .spec
+        .requested
+        .all_differences(&variant.spec.requested);
     let allowed = declared_fields(variable);
     let other: Vec<&'static str> = changed
         .iter()
@@ -253,14 +256,15 @@ fn took_effect(
     };
     match variable {
         Variable::CacheTypeQ8 => {
-            if var.cache_type_k.as_deref() != Some("q8_0")
-                || base.cache_type_k.as_deref() == Some("q8_0")
-            {
+            // The baseline's value must be known too: an unknown baseline may already have
+            // had the new value, in which case nothing changed.
+            let was = base.cache_type_k.as_deref();
+            if var.cache_type_k.as_deref() != Some("q8_0") || was.is_none() || was == Some("q8_0") {
                 return Err(Refusal::ChangeNotObserved("K cache type"));
             }
         }
         Variable::FlashAttentionOn => {
-            if var.flash_attention != Some(true) || base.flash_attention == Some(true) {
+            if var.flash_attention != Some(true) || base.flash_attention != Some(false) {
                 return Err(Refusal::ChangeNotObserved("flash attention"));
             }
         }
@@ -271,7 +275,7 @@ fn took_effect(
     }
     // Nothing else the process reports may differ either.
     let other: Vec<&'static str> = base
-        .differences(var)
+        .all_differences(var)
         .into_iter()
         .filter(|name| !declared_fields(variable).contains(name))
         .collect();

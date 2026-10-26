@@ -290,3 +290,60 @@ fn the_change_must_show_in_what_the_process_was_started_with() {
         Refusal::ChangeNotObserved("flash attention")
     );
 }
+
+#[test]
+fn a_setting_that_appears_or_vanishes_is_a_change_not_an_unknown() {
+    let (base, mut var) = follow_up(Variable::HalfContext, |_, _| {});
+    var.spec.requested.parallel = Some(1);
+    assert_eq!(
+        compare_follow_up(&base, &var).unwrap_err(),
+        Refusal::OtherSettingsChanged(vec!["parallel"])
+    );
+    let (base, mut var) = follow_up(Variable::CacheTypeQ8, |_, _| {});
+    var.spec.requested.mlock = Some(true);
+    var.spec.requested.no_mmap = Some(false);
+    let mut base = base;
+    base.spec.requested.mlock = Some(false);
+    base.spec.requested.no_mmap = Some(false);
+    assert_eq!(
+        compare_follow_up(&base, &var).unwrap_err(),
+        Refusal::OtherSettingsChanged(vec!["mlock"])
+    );
+}
+
+#[test]
+fn an_unknown_baseline_value_is_not_evidence_that_the_variable_changed() {
+    let (mut base, var) = follow_up(Variable::CacheTypeQ8, |_, _| {});
+    base.observed.as_mut().unwrap().cache_type_k = None;
+    assert_eq!(
+        compare_follow_up(&base, &var).unwrap_err(),
+        Refusal::ChangeNotObserved("K cache type")
+    );
+    let (mut base, var) = follow_up(Variable::FlashAttentionOn, |_, _| {});
+    base.observed.as_mut().unwrap().flash_attention = None;
+    assert_eq!(
+        compare_follow_up(&base, &var).unwrap_err(),
+        Refusal::ChangeNotObserved("flash attention")
+    );
+}
+
+#[test]
+fn empty_identities_are_not_matches() {
+    let blank = |f: fn(&mut NewExperiment)| {
+        let mut s = spec(None, None);
+        f(&mut s);
+        experiment(1, s, &[1.0, 2.0])
+    };
+    let a = blank(|s| s.hardware_hash = Some(String::new()));
+    let b = blank(|s| s.hardware_hash = Some(String::new()));
+    assert_eq!(
+        compare(&a, &b).unwrap_err(),
+        Refusal::Mismatch("the hardware profile")
+    );
+    let mut s = spec(None, None);
+    s.model_sha256 = Some(String::new());
+    assert!(
+        s.validate().is_err(),
+        "an empty identity cannot even be recorded"
+    );
+}
