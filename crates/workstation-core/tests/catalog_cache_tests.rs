@@ -328,3 +328,80 @@ fn oversized_page_key_is_refused() {
     );
     assert!(store.cache_catalog_page("", &body, 1).is_err());
 }
+
+#[test]
+fn release_cache_refuses_a_release_that_drops_known_facts() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    store.cache_release(&release(), 1).unwrap();
+    let mut empty = release();
+    empty.artifacts.clear();
+    assert!(store.cache_release(&empty, 2).is_err());
+    let (kept, at) = store.cached_release("o/n-GGUF", REV).unwrap().unwrap();
+    assert_eq!((kept, at), (release(), 1));
+}
+
+#[test]
+fn forged_artifacts_are_not_cached() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    for change in [
+        (|r: &mut ModelRelease| r.artifacts[0].filename = "../escape.gguf".into())
+            as fn(&mut ModelRelease),
+        |r| r.artifacts[0].sha256 = Some("../outside".into()),
+        |r| r.artifacts[0].revision = "main".into(),
+    ] {
+        let mut bad = release();
+        change(&mut bad);
+        assert!(store.cache_release(&bad, 1).is_err());
+    }
+    assert!(store.cached_release("o/n-GGUF", REV).unwrap().is_none());
+}
+
+#[test]
+fn damaged_cached_release_reads_as_absent_and_can_be_replaced() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    store.cache_release(&release(), 1).unwrap();
+    let connection = Connection::open(&path.0).unwrap();
+    connection
+        .execute("UPDATE catalog_releases SET release_json='{not json'", [])
+        .unwrap();
+    drop(connection);
+    assert!(store.cached_release("o/n-GGUF", REV).unwrap().is_none());
+    store
+        .cache_release(&release_with(Some(11), Some(OTHER_SHA)), 2)
+        .unwrap();
+    assert!(store.cached_release("o/n-GGUF", REV).unwrap().is_some());
+}
+
+#[test]
+fn another_writer_blocks_cache_writes_until_it_finishes() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    let mut other = Connection::open(&path.0).unwrap();
+    let hold = other
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    let started = std::time::Instant::now();
+    assert!(store.cache_release(&release(), 1).is_err());
+    assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    drop(hold);
+    store.cache_release(&release(), 1).unwrap();
+}
+
+#[test]
+fn table_without_its_primary_key_is_refused() {
+    let path = TempDb::new();
+    drop(HistoryStore::open(&path.0).unwrap());
+    let connection = Connection::open(&path.0).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE catalog_releases;
+             CREATE TABLE catalog_releases (repo_id TEXT NOT NULL, revision TEXT NOT NULL,
+               release_json TEXT NOT NULL, fetched_at_unix_ms INTEGER NOT NULL) STRICT;",
+        )
+        .unwrap();
+    drop(connection);
+    assert!(HistoryStore::open(&path.0).is_err());
+}
