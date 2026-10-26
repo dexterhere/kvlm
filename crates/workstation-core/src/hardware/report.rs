@@ -25,16 +25,26 @@ fn pool(pool: Option<MemoryPool>) -> String {
     }
 }
 
-/// Free text from a probe is cut and stripped so a report cannot smuggle control characters.
-fn text(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(120)
-        .collect()
+/// Free text from a probe is cut and stripped so a report cannot smuggle control characters,
+/// and every known device identifier is removed from it, because names and error messages
+/// can carry a bus address.
+fn text(value: &str, secrets: &[String]) -> String {
+    let mut clean: String = value.chars().filter(|c| !c.is_control()).collect();
+    for secret in secrets {
+        clean = clean.replace(secret.as_str(), "[redacted]");
+    }
+    clean.chars().take(120).collect()
 }
 
 pub fn redacted_report(profile: &HardwareProfile, app_version: &str) -> String {
+    let secrets: Vec<String> = profile
+        .gpus
+        .iter()
+        .filter_map(|gpu| gpu.id.clone())
+        .chain(profile.profile_hash.clone())
+        .filter(|secret| !secret.is_empty())
+        .collect();
+    let text = |value: &str| text(value, &secrets);
     let mut out = String::new();
     let _ = writeln!(out, "Local AI Workstation hardware report");
     let _ = writeln!(out, "Application version: {}", text(app_version));
@@ -44,7 +54,7 @@ pub fn redacted_report(profile: &HardwareProfile, app_version: &str) -> String {
             let _ = writeln!(
                 out,
                 "CPU: {} ({} physical, {} logical cores)",
-                cpu.model.as_deref().map_or("not measured".into(), text),
+                cpu.model.as_deref().map_or("not measured".into(), &text),
                 cpu.physical_cores
                     .map_or("unknown".to_string(), |n| n.to_string()),
                 cpu.logical_cores
@@ -136,6 +146,24 @@ mod tests {
         }
         assert!(!report.contains(&hash));
         assert!(!report.contains(&profile.captured_at_unix_ms.to_string()));
+    }
+
+    #[test]
+    fn an_identifier_inside_a_name_or_notice_is_removed() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let mut profile = HardwareProfile::detect_linux(&root.join("proc"), &root.join("drm"));
+        profile.gpus.truncate(1);
+        let mut gpu = profile.gpus.remove(0);
+        gpu.id = Some("0000:03:00.0".into());
+        gpu.name = "Some GPU 0000:03:00.0".into();
+        profile.gpus.push(gpu);
+        profile.issues.push(super::super::ProbeIssue::new(
+            "GPU",
+            "failed on 0000:03:00.0",
+        ));
+        let report = redacted_report(&profile, "0.1.0");
+        assert!(!report.contains("0000:03:00.0"), "{report}");
+        assert!(report.contains("Some GPU [redacted]"));
     }
 
     #[test]
