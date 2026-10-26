@@ -187,6 +187,7 @@ Rules stated as invariants:
   hashed, streaming in 1 MiB reads on `spawn_blocking`, checking a cancel flag between
   reads. A match requires digest equality; a filename claiming a digest is never trusted.
 - Work is bounded: one scan at a time (a new request cancels the old one), at most 100 000 entries, 256 GiB of bytes hashed, and 10 minutes per scan, with an explicit partial-scan status. Cached digests are hints; the post-hash `fstat` must match the pre-hash `fstat` (device, inode, size, mtime, ctime) and the pathname must still resolve to the same inode, or the result is discarded.
+- The report counts directories and files it could not read (`skipped`) and lists every root as scanned, missing or unreadable; the view says a copy "may exist" instead of "not found" whenever coverage was incomplete. Hub discovery is streamed and counted like any other entry. Every candidate is re-checked after its digest is known or recalled: same inode and timestamps through a fresh no-follow open, and still inside the root. A scan on a blocking thread cannot be aborted, so a replaced scan is told to stop and the next one waits for it. Digest hints are trusted only for the same local user and are never used to read, copy or delete anything.
 - Output is a list of `LocalMatch{artifact_id, path, root}`. Nothing is copied, linked,
   or removed.
 

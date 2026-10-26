@@ -13,7 +13,7 @@ use std::{
 use tokio::sync::mpsc;
 use workstation_core::models::{
     artifact::ModelArtifact,
-    dedup::{RootKind, Stop, Wanted},
+    dedup::{RootKind, RootState, Stop, Wanted},
     release::ModelRelease,
 };
 use workstation_runtimes::catalog_service::{CatalogLoad, LoadSource, ReleaseLoad};
@@ -245,12 +245,23 @@ impl Explorer {
                 }
                 match result {
                     Ok(report) => self.show_local(report),
-                    Err(message) => self
-                        .status
-                        .set_text(&text(&format!("Local file check failed: {message}"))),
+                    Err(_) => {
+                        self.note_local("local check failed; try expanding the repository again")
+                    }
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Replaces the local-copy note on every file that was checked.
+    fn note_local(&self, note: &str) {
+        for entry in self.state.borrow().artifacts.values() {
+            if wanted_of(&entry.artifact).is_some() {
+                entry
+                    .row
+                    .set_subtitle(&text(&format!("{} · {note}", entry.base_subtitle)));
+            }
         }
     }
 
@@ -277,7 +288,15 @@ impl Explorer {
             let note = if !places.is_empty() {
                 format!("already on disk, SHA-256 verified: {}", places.join("; "))
             } else {
+                let unreadable = report.skipped > 0
+                    || report
+                        .roots
+                        .iter()
+                        .any(|root| root.state == RootState::Unreadable);
                 match report.stopped {
+                    None if unreadable => {
+                        "some folders or files could not be read; a copy may exist".to_owned()
+                    }
                     None => "no identical local copy found".to_owned(),
                     Some(stop) => format!(
                         "local check stopped ({}); a copy may exist",
@@ -306,6 +325,7 @@ impl Explorer {
             state.artifacts.clear();
             state.release = None;
             state.inspect = None;
+            state.scan = 0;
         }
         for repo in &load.page.repos {
             if self.state.borrow().rows.contains_key(&repo.repo_id) {

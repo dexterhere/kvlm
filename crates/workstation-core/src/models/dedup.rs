@@ -82,6 +82,9 @@ pub struct ScanReport {
     pub stopped: Option<Stop>,
     pub entries: u64,
     pub hashed_bytes: u64,
+    /// Directories or candidate files that could not be read. Above zero means the
+    /// scan was incomplete even if `stopped` is `None`.
+    pub skipped: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -221,25 +224,61 @@ impl Run<'_> {
             }
             Err(_) => return self.report.roots.push(status(RootState::Unreadable)),
         };
-        let Some(directories) = blob_directories(root.kind, &base) else {
+        // A directory that cannot be listed (for example no read permission) is
+        // reported, not mistaken for an empty one.
+        let Ok(top) = fs::read_dir(&base) else {
             return self.report.roots.push(status(RootState::Unreadable));
         };
         self.report.roots.push(status(RootState::Scanned));
-        for directory in directories {
-            let Ok(entries) = fs::read_dir(&directory) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                if self.should_stop() {
-                    return;
-                }
-                self.report.entries += 1;
-                if self.report.entries > self.limits.entries {
-                    self.report.stopped = Some(Stop::EntryLimit);
-                    return;
-                }
-                self.consider(root.kind, &base, &entry.path());
+        if root.kind != RootKind::HuggingFace {
+            self.scan_blobs(root.kind, &base, top);
+            return;
+        }
+        // Cache layout: <hub>/models--owner--name/blobs/<hash>. Discovery is streamed and
+        // counted like any other entry, so it cannot outrun the limits.
+        for entry in top.flatten() {
+            if !self.count_entry() {
+                return;
             }
+            let is_model = entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("models--"));
+            let blobs = entry.path().join("blobs");
+            let real_dirs = entry.file_type().is_ok_and(|t| t.is_dir())
+                && fs::symlink_metadata(&blobs).is_ok_and(|m| m.file_type().is_dir());
+            if !(is_model && real_dirs) {
+                continue;
+            }
+            match fs::read_dir(&blobs) {
+                Ok(entries) => self.scan_blobs(root.kind, &base, entries),
+                Err(_) => self.report.skipped += 1,
+            }
+            if self.report.stopped.is_some() {
+                return;
+            }
+        }
+    }
+
+    /// Counts one directory entry against the limits; `false` means stop.
+    fn count_entry(&mut self) -> bool {
+        if self.should_stop() {
+            return false;
+        }
+        self.report.entries += 1;
+        if self.report.entries > self.limits.entries {
+            self.report.stopped = Some(Stop::EntryLimit);
+            return false;
+        }
+        true
+    }
+
+    fn scan_blobs(&mut self, kind: RootKind, base: &Path, entries: fs::ReadDir) {
+        for entry in entries.flatten() {
+            if !self.count_entry() {
+                return;
+            }
+            self.consider(kind, base, &entry.path());
         }
     }
 
@@ -253,25 +292,24 @@ impl Run<'_> {
         }
         // O_NOFOLLOW refuses a link swapped in after the check; O_NONBLOCK keeps a
         // pipe swapped in from hanging the open.
-        let Ok(file) = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-        else {
+        let Ok(file) = open_plain(path) else {
+            self.report.skipped += 1;
             return;
         };
         let Ok(opened) = file.metadata() else {
+            self.report.skipped += 1;
             return;
         };
         if !opened.is_file() || !same_file(&listed, &opened) {
             return;
         }
-        if !fs::canonicalize(path).is_ok_and(|resolved| resolved.starts_with(base)) {
+        if !inside(path, base) {
             return;
         }
         let stamp = stamp_of(&opened);
         let key = path.to_str();
         let cached = key.and_then(|key| self.digests?.cached_file_digest(key, &stamp));
+        let from_cache = cached.is_some();
         let digest = match cached {
             Some(digest) => digest,
             None => {
@@ -280,26 +318,31 @@ impl Run<'_> {
                     self.report.stopped = Some(Stop::ByteLimit);
                     return;
                 }
-                let Some(digest) = self.hash(file, size) else {
-                    return;
-                };
-                // The file must still be the same one, in the same state, at the same path.
-                let unchanged = fs::symlink_metadata(path)
-                    .is_ok_and(|now| now.file_type().is_file() && same_file(&now, &opened));
-                let after = OpenOptions::new()
-                    .read(true)
-                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                    .open(path)
-                    .and_then(|file| file.metadata());
-                if !unchanged || !after.is_ok_and(|after| stamp_of(&after) == stamp) {
-                    return;
+                match self.hash(file, size) {
+                    Some(digest) => digest,
+                    None => {
+                        if self.report.stopped.is_none() {
+                            self.report.skipped += 1;
+                        }
+                        return;
+                    }
                 }
-                if let (Some(store), Some(key)) = (self.digests, key) {
-                    let _ = store.cache_file_digest(key, &stamp, &digest, now_ms());
-                }
-                digest
             }
         };
+        // Whichever way the digest was obtained, the file must still be the same one, in
+        // the same state, at the same path, inside the root.
+        let unchanged = fs::symlink_metadata(path)
+            .is_ok_and(|now| now.file_type().is_file() && same_file(&now, &opened))
+            && open_plain(path)
+                .and_then(|file| file.metadata())
+                .is_ok_and(|after| stamp_of(&after) == stamp)
+            && inside(path, base);
+        if !unchanged {
+            return;
+        }
+        if !from_cache && let (Some(store), Some(key)) = (self.digests, key) {
+            let _ = store.cache_file_digest(key, &stamp, &digest, now_ms());
+        }
         for item in &self.by_size[&opened.len()] {
             if item.sha256 == digest {
                 self.report.matches.push(LocalMatch {
@@ -324,11 +367,12 @@ impl Run<'_> {
             if read == 0 {
                 break;
             }
+            // Count every byte read, including from a file that grew past its size.
+            self.report.hashed_bytes += read as u64;
             total += read as u64;
             if total > size {
                 return None;
             }
-            self.report.hashed_bytes += read as u64;
             hasher.update(&buffer[..read]);
         }
         (total == size).then(|| {
@@ -341,25 +385,16 @@ impl Run<'_> {
     }
 }
 
-/// Directories that directly hold blob files for one root.
-fn blob_directories(kind: RootKind, base: &Path) -> Option<Vec<PathBuf>> {
-    if kind != RootKind::HuggingFace {
-        return Some(vec![base.to_path_buf()]);
-    }
-    let mut directories = Vec::new();
-    for entry in fs::read_dir(base).ok()?.flatten() {
-        let is_model = entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with("models--"));
-        let blobs = entry.path().join("blobs");
-        let real_dirs = entry.file_type().is_ok_and(|t| t.is_dir())
-            && fs::symlink_metadata(&blobs).is_ok_and(|m| m.file_type().is_dir());
-        if is_model && real_dirs {
-            directories.push(blobs);
-        }
-    }
-    Some(directories)
+fn open_plain(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+/// The path still resolves to somewhere under the root (no directory was swapped for a link).
+fn inside(path: &Path, base: &Path) -> bool {
+    fs::canonicalize(path).is_ok_and(|resolved| resolved.starts_with(base))
 }
 
 fn same_file(a: &Metadata, b: &Metadata) -> bool {

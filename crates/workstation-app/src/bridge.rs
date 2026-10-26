@@ -404,6 +404,9 @@ where
         let mut scan_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         // Tells the running scan, which a blocking thread cannot be aborted from, to stop.
         let mut scan_cancel = Arc::new(AtomicBool::new(false));
+        // A replaced scan keeps running until it notices the flag; its permit travels with
+        // the blocking thread so the replacement starts only after it has stopped.
+        let scan_gate = Arc::new(tokio::sync::Semaphore::new(1));
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
@@ -489,8 +492,15 @@ where
                     scan_jobs.abort_all();
                     scan_cancel = Arc::new(AtomicBool::new(false));
                     let (catalog, cancel) = (Arc::clone(&catalog), Arc::clone(&scan_cancel));
+                    let gate = Arc::clone(&scan_gate);
                     scan_jobs.spawn(guarded(id, scan_failed, async move {
-                        let result = tokio::task::spawn_blocking(move || catalog.scan_local(wanted, &cancel))
+                        let Ok(permit) = gate.acquire_owned().await else {
+                            return scan_failed(id);
+                        };
+                        let result = tokio::task::spawn_blocking(move || {
+                            let _permit = permit;
+                            catalog.scan_local(wanted, &cancel)
+                        })
                             .await
                             .unwrap_or_else(|_| Err("Local file check failed. Retry.".into()))
                             .map(Box::new);
@@ -569,6 +579,8 @@ where
                 }
             }
         }
+        // A scan on a blocking thread cannot be aborted; tell it to stop.
+        scan_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
     });
     (commands, event_rx)
 }

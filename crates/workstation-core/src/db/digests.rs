@@ -27,8 +27,9 @@ fn unsigned(value: i64) -> u64 {
     value as u64
 }
 
-fn nanos(value: i128) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
+/// Timestamps outside the stored range make a file uncacheable, never equal to another.
+fn nanos(value: i128) -> Option<i64> {
+    i64::try_from(value).ok()
 }
 
 impl HistoryStore {
@@ -48,8 +49,8 @@ impl HistoryStore {
         (unsigned(dev) == stamp.dev
             && unsigned(inode) == stamp.inode
             && unsigned(size) == stamp.size
-            && mtime == nanos(stamp.mtime_ns)
-            && ctime == nanos(stamp.ctime_ns))
+            && nanos(stamp.mtime_ns) == Some(mtime)
+            && nanos(stamp.ctime_ns) == Some(ctime))
         .then_some(sha)
     }
 
@@ -65,6 +66,11 @@ impl HistoryStore {
             return Err("Digest cache entry is invalid.".into());
         }
         let now = i64::try_from(now_ms).map_err(|_| "Digest timestamp is out of range.")?;
+        let (Some(mtime), Some(ctime)) = (nanos(stamp.mtime_ns), nanos(stamp.ctime_ns)) else {
+            return Err(
+                "File timestamps are out of range, so the digest is not remembered.".into(),
+            );
+        };
         self.write(|c| {
             c.execute(
                 "INSERT INTO local_file_digests(path,dev,inode,size,mtime_ns,ctime_ns,sha256,verified_at_unix_ms)
@@ -77,8 +83,8 @@ impl HistoryStore {
                     signed(stamp.dev),
                     signed(stamp.inode),
                     signed(stamp.size),
-                    nanos(stamp.mtime_ns),
-                    nanos(stamp.ctime_ns),
+                    mtime,
+                    ctime,
                     sha256,
                     now
                 ],

@@ -315,3 +315,70 @@ fn default_roots_follow_the_documented_environment_order() {
             .any(|r| r.path.ends_with(".ollama/models/blobs") && r.kind == RootKind::Ollama)
     );
 }
+
+#[test]
+fn hub_discovery_is_counted_and_unreadable_blob_directories_are_reported() {
+    let dir = Dir::new();
+    for n in 0..5 {
+        fs::create_dir_all(dir.0.join(format!("hub/models--o--n{n}/blobs"))).unwrap();
+    }
+    let roots = [root(RootKind::HuggingFace, &dir.0.join("hub"))];
+    let few = Limits {
+        entries: 2,
+        ..Limits::default()
+    };
+    let report = scan(
+        &roots,
+        &[wanted("a", b"x")],
+        None,
+        &AtomicBool::new(false),
+        &few,
+    );
+    assert_eq!(report.stopped, Some(Stop::EntryLimit));
+
+    let locked = dir.0.join("hub/models--o--n0/blobs");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let report = run(&roots, &[wanted("a", b"x")]);
+    let can_read_anyway = fs::read_dir(&locked).is_ok();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+    if !can_read_anyway {
+        assert_eq!(report.skipped, 1);
+    }
+}
+
+#[test]
+fn an_unreadable_candidate_counts_as_skipped_not_absent() {
+    let dir = Dir::new();
+    let blob = b"unreadable candidate";
+    let path = dir.file("blobs/x", blob);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let report = run(
+        &[root(RootKind::Ollama, &dir.0.join("blobs"))],
+        &[wanted("a", blob)],
+    );
+    let can_read_anyway = File::open(&path).is_ok();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    if !can_read_anyway {
+        assert_eq!((report.skipped, report.matches.len()), (1, 0));
+    }
+}
+
+#[test]
+fn unrepresentable_timestamps_are_never_remembered() {
+    use workstation_core::db::digests::FileStamp;
+    let dir = Dir::new();
+    let store = HistoryStore::open(&dir.0.join("h.db")).unwrap();
+    let stamp = FileStamp {
+        dev: 1,
+        inode: 2,
+        size: 3,
+        mtime_ns: i128::from(i64::MAX) + 5,
+        ctime_ns: 0,
+    };
+    assert!(
+        store
+            .cache_file_digest("/p", &stamp, &"a".repeat(64), 1)
+            .is_err()
+    );
+    assert!(store.cached_file_digest("/p", &stamp).is_none());
+}
