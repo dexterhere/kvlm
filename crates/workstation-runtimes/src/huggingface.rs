@@ -5,6 +5,7 @@
 //! API calls never follow redirects, cap every body while streaming, and fail with typed
 //! errors that carry no URLs. Downloads and tokens are separate, later phases.
 
+use crate::secrets::TokenSlot;
 use reqwest::{Client, StatusCode, Url, header, redirect::Policy};
 use serde_json::Value;
 use std::{
@@ -55,6 +56,8 @@ pub enum HfError {
     BadResponse,
     /// The request itself was invalid and was not sent.
     InvalidRequest,
+    /// Hugging Face did not accept the access token.
+    TokenRejected,
 }
 
 impl std::fmt::Display for HfError {
@@ -63,11 +66,12 @@ impl std::fmt::Display for HfError {
             Self::Offline => "Cannot reach Hugging Face. Check the network connection and retry.",
             Self::Timeout => "Hugging Face did not answer in time. Retry shortly.",
             Self::RateLimited { .. } => "Hugging Face is rate limiting requests. Wait and retry.",
-            Self::AccessRequired => "This repository needs an access token or accepted terms.",
+            Self::AccessRequired => "This repository is gated or private. Accept its terms on huggingface.co with your account, add an access token under Hugging Face access, then retry. The application never accepts terms for you.",
             Self::NotFound => "Hugging Face has no such repository or revision.",
             Self::TooLarge => "Hugging Face sent more data than the application accepts.",
             Self::BadResponse => "Hugging Face sent a response the application cannot use.",
             Self::InvalidRequest => "The search or repository name is not valid.",
+            Self::TokenRejected => "Hugging Face did not accept the access token. Check it and try again.",
         })
     }
 }
@@ -80,23 +84,35 @@ pub struct HuggingFaceClient {
     gate: Semaphore,
     /// Production only talks https to Hugging Face hosts; test fixtures use loopback.
     strict_hosts: bool,
+    /// Attached only to the first hop of file requests and to `whoami`; see `token_origin`.
+    token: TokenSlot,
 }
 
 impl HuggingFaceClient {
-    pub fn new() -> Result<Self, HfError> {
-        Self::build(Url::parse(BASE).map_err(|_| HfError::BadResponse)?, true)
+    pub fn new(token: TokenSlot) -> Result<Self, HfError> {
+        Self::build(
+            Url::parse(BASE).map_err(|_| HfError::BadResponse)?,
+            true,
+            token,
+        )
     }
 
     #[cfg(test)]
     pub(crate) fn for_test(port: u16) -> Self {
+        Self::for_test_with(port, TokenSlot::default())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_with(port: u16, token: TokenSlot) -> Self {
         Self::build(
             Url::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
             false,
+            token,
         )
         .unwrap()
     }
 
-    fn build(base: Url, https_only: bool) -> Result<Self, HfError> {
+    fn build(base: Url, https_only: bool, token: TokenSlot) -> Result<Self, HfError> {
         let mut builder = Client::builder();
         if !https_only {
             // Loopback test fixtures must never be routed through an environment proxy.
@@ -120,7 +136,38 @@ impl HuggingFaceClient {
             base,
             gate: Semaphore::new(1),
             strict_hosts: https_only,
+            token,
         })
+    }
+
+    /// The token may be sent only to Hugging Face's own origin (the API origin in tests).
+    fn token_origin(&self, url: &Url) -> bool {
+        if !self.strict_hosts {
+            return url.host_str() == self.base.host_str()
+                && url.port_or_known_default() == self.base.port_or_known_default();
+        }
+        url.scheme() == "https"
+            && url.host_str() == Some("huggingface.co")
+            && matches!(url.port(), None | Some(443))
+            && url.username().is_empty()
+            && url.password().is_none()
+    }
+
+    /// Who the token belongs to (explicit "Check token" action only).
+    pub async fn whoami(&self) -> Result<String, HfError> {
+        if !self.token.is_set() {
+            return Err(HfError::TokenRejected);
+        }
+        let (_, body) = match self.get(&["api", "whoami-v2"], &[], true).await {
+            Err(HfError::AccessRequired) => return Err(HfError::TokenRejected),
+            other => other?,
+        };
+        let value: Value = serde_json::from_slice(&body).map_err(|_| HfError::BadResponse)?;
+        value
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(|name| short_text(name, 96))
+            .ok_or(HfError::BadResponse)
     }
 
     /// Search public GGUF repositories, most downloaded first. Returns repositories only;
@@ -145,7 +192,7 @@ impl HuggingFaceClient {
         if let Some(cursor) = cursor {
             pairs.push(("cursor", cursor.to_owned()));
         }
-        let (headers, body) = self.get(&["api", "models"], &pairs).await?;
+        let (headers, body) = self.get(&["api", "models"], &pairs, false).await?;
         let rows: Vec<Value> = serde_json::from_slice(&body).map_err(|_| HfError::BadResponse)?;
         let repos = rows
             .iter()
@@ -184,7 +231,9 @@ impl HuggingFaceClient {
         if let Some(revision) = pinned {
             path.extend(["revision", revision]);
         }
-        let (_, body) = self.get(&path, &[("blobs", "true".to_owned())]).await?;
+        let (_, body) = self
+            .get(&path, &[("blobs", "true".to_owned())], false)
+            .await?;
         let detail: Value = serde_json::from_slice(&body).map_err(|_| HfError::BadResponse)?;
         let raw = parse_detail(&detail, repo_id, pinned)?;
         normalize_release(raw).map_err(|_| HfError::BadResponse)
@@ -284,15 +333,20 @@ impl HuggingFaceClient {
     /// GET with a `Range`, following redirects by hand (at most four hops, only to allowed
     /// hosts). Returns the first non-redirect response; the caller checks its status.
     async fn follow(&self, mut url: Url, range: String) -> Result<reqwest::Response, HfError> {
-        for _ in 0..=MAX_HOPS {
-            let response = self
+        for hop in 0..=MAX_HOPS {
+            let mut request = self
                 .client
                 .get(url.clone())
                 .header(header::RANGE, &range)
-                .header(header::ACCEPT_ENCODING, "identity")
-                .send()
-                .await
-                .map_err(map_transport)?;
+                .header(header::ACCEPT_ENCODING, "identity");
+            // First hop only: redirects (signed CDN links) never see the token.
+            if hop == 0
+                && self.token_origin(&url)
+                && let Some(token) = self.token.get()
+            {
+                request = request.bearer_auth(token.expose());
+            }
+            let response = request.send().await.map_err(map_transport)?;
             if !response.status().is_redirection() {
                 return Ok(response);
             }
@@ -356,13 +410,16 @@ impl HuggingFaceClient {
         &self,
         segments: &[&str],
         pairs: &[(&str, String)],
+        auth: bool,
     ) -> Result<(header::HeaderMap, Vec<u8>), HfError> {
         let mut url = self.base.clone();
         url.path_segments_mut()
             .map_err(|()| HfError::InvalidRequest)?
             .pop_if_empty()
             .extend(segments);
-        url.query_pairs_mut().extend_pairs(pairs);
+        if !pairs.is_empty() {
+            url.query_pairs_mut().extend_pairs(pairs);
+        }
         // The deadline covers waiting for the single-flight permit as well as the request.
         tokio::time::timeout(OPERATION_DEADLINE, async {
             let _permit = self
@@ -370,13 +427,17 @@ impl HuggingFaceClient {
                 .acquire()
                 .await
                 .map_err(|_| HfError::BadResponse)?;
-            let response = self
+            let mut request = self
                 .client
-                .get(url)
-                .header(header::ACCEPT, "application/json")
-                .send()
-                .await
-                .map_err(map_transport)?;
+                .get(url.clone())
+                .header(header::ACCEPT, "application/json");
+            if auth
+                && self.token_origin(&url)
+                && let Some(token) = self.token.get()
+            {
+                request = request.bearer_auth(token.expose());
+            }
+            let response = request.send().await.map_err(map_transport)?;
             match response.status() {
                 StatusCode::OK => {}
                 StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {

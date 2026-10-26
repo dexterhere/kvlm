@@ -154,7 +154,7 @@ async fn access_and_not_found_never_use_stale_data() {
         .search("", None)
         .await
         .unwrap_err();
-    assert!(error.contains("needs an access token"), "{error}");
+    assert!(error.contains("access token"), "{error}");
 
     let missing = Server::start(|_| vec![route(SEARCH_LINE, status(404))]);
     let error = service(missing.port(), &db)

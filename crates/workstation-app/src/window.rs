@@ -175,7 +175,8 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
                 | UiEvent::LocalScanned { .. }
                 | UiEvent::DownloadProgress(_)
                 | UiEvent::DownloadFinished { .. }
-                | UiEvent::DownloadsLoaded { .. } => continue,
+                | UiEvent::DownloadsLoaded { .. }
+                | UiEvent::TokenDone { .. } => continue,
             }
             status.set_label(&format!("{hardware_status} · {runtime_status}"));
         }

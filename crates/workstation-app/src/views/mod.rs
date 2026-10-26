@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Empty-state views for the development foundation; no fabricated telemetry.
 
+pub mod access;
 pub mod bench_lab;
 pub mod benchmark_history;
 pub mod catalog;

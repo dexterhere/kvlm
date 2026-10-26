@@ -7,6 +7,7 @@ pub mod huggingface;
 pub mod llamacpp;
 pub mod lmstudio;
 pub mod ollama;
+pub mod secrets;
 pub mod supervisor;
 #[cfg(test)]
 mod test_server;

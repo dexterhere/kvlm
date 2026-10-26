@@ -18,6 +18,8 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Benchmark memory sampling](03-development/benchmark-memory-sampling.md) | Bounded background memory peaks, coverage, and attribution limits |
 | 03 | [Benchmark history](03-development/benchmark-history.md) | SQLite snapshots, outcomes, restart recovery, and storage limits |
 | 03 | [Quick Benchmark](03-development/quick-benchmark.md) | Local-only guard, one explicit streaming request, timings, cancellation, and limits |
+| 03 | [Model downloads](03-development/model-downloads.md) | Explicit download, pause, resume, discard, and what stops a transfer |
+| 03 | [Hugging Face access](03-development/huggingface-access.md) | Gated models, keyring-only token, and what is sent where |
 | 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
 | 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection, merged-file split markers, validation evidence, and limits |
 | 03 | [GGUF fit scenarios](03-development/gguf-fit.md) | Local declarations with explicit settings, assumptions, and unknown compatibility |
@@ -41,6 +43,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 05 | [Benchmark verification](05-decisions/0013-benchmark-verification.md) | Exact manifest/hardware identity and persistent verification |
 | 05 | [Hugging Face catalog](05-decisions/0014-huggingface-catalog.md) | Explicit public catalog access, pinned revisions, rustls, bounded client |
 | 05 | [Resumable downloads](05-decisions/0015-resumable-downloads.md) | Private locked store, verified publication, Range resume, explicit start |
+| 05 | [Hugging Face token](05-decisions/0016-huggingface-token.md) | Keyring-only token, encrypted transport, first-hop-only use |
 | 05 | [Open questions](05-decisions/open-questions.md) | Specification gaps to resolve before affected implementation |
 
 Also read [contributing](../CONTRIBUTING.md), [security](../SECURITY.md),
