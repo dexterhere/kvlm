@@ -40,6 +40,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 05 | [Qwen2 and GPU fit](05-decisions/0012-qwen2-gpu-fit.md) | Scoped metadata and conditional CPU/CUDA memory classes |
 | 05 | [Benchmark verification](05-decisions/0013-benchmark-verification.md) | Exact manifest/hardware identity and persistent verification |
 | 05 | [Hugging Face catalog](05-decisions/0014-huggingface-catalog.md) | Explicit public catalog access, pinned revisions, rustls, bounded client |
+| 05 | [Resumable downloads](05-decisions/0015-resumable-downloads.md) | Private locked store, verified publication, Range resume, explicit start |
 | 05 | [Open questions](05-decisions/open-questions.md) | Specification gaps to resolve before affected implementation |
 
 Also read [contributing](../CONTRIBUTING.md), [security](../SECURITY.md),
