@@ -389,32 +389,34 @@ impl LiveLab {
         let run_profile = follow_up
             .as_ref()
             .map_or_else(|| active.profile.clone(), |(_, _, derived)| derived.clone());
-        let (alias, pid, port) = if follow_up.is_some() {
-            let restarted = self
-                .managed
+        let target = if follow_up.is_some() {
+            self.managed
                 .switch(run_profile.clone(), active.install.clone(), &cancel)
-                .await?;
-            (restarted.alias, restarted.pid, restarted.port)
+                .await
+                .map(|r| (r.alias, r.pid, r.port))
         } else {
             match (status.generation, status.pid, status.port) {
-                (Some(alias), Some(pid), Some(port)) => (alias, pid, port),
-                _ => return Err("The server is not ready.".into()),
+                (Some(alias), Some(pid), Some(port)) => Ok((alias, pid, port)),
+                _ => Err("The server is not ready.".to_string()),
             }
         };
-
-        let outcome = self
-            .measure(
-                &request,
-                &active,
-                &run_profile,
-                &hardware,
-                model_sha256,
-                (alias, pid, port),
-                follow_up.as_ref().map(|(b, v, _)| (b.id, *v)),
-                cancel,
-                &progress,
-            )
-            .await;
+        let outcome = match target {
+            Ok(target) => {
+                self.measure(
+                    &request,
+                    &active,
+                    &run_profile,
+                    &hardware,
+                    model_sha256,
+                    target,
+                    follow_up.as_ref().map(|(b, v, _)| (b.id, *v)),
+                    cancel,
+                    &progress,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
 
         // A follow-up replaced the user's server; put theirs back whatever happened.
         let mut notice = None;
@@ -430,7 +432,15 @@ impl LiveLab {
                 ));
             }
         }
-        let (id, store_error) = outcome?;
+        let (id, store_error) = match outcome {
+            Ok(done) => done,
+            Err(error) => {
+                return Err(match notice {
+                    Some(restore) => format!("{error} {restore}"),
+                    None => error,
+                });
+            }
+        };
         let ctx = Context {
             offloadable_layers: layers.map(|n| n.saturating_add(1)),
             unified_memory: unified_memory(&hardware),

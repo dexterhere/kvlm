@@ -694,21 +694,23 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<Restarted, String> {
         let started = std::time::Instant::now();
-        let mut ready = {
+        let (mut ready, previous) = {
             let _ops = self.ops.lock().await;
+            let mut previous = None;
             {
                 let guard = self.up().await?;
                 if let Sup::Up(supervisor) = &*guard {
+                    previous = supervisor.status().generation;
                     supervisor.stop().await.map_err(|e| e.to_string())?;
                 }
             }
             self.begin(profile, row).await?;
             match &*self.sup.lock().await {
-                Sup::Up(supervisor) => supervisor.subscribe(),
+                Sup::Up(supervisor) => (supervisor.subscribe(), previous),
                 _ => return Err("The runtime supervisor is not available.".into()),
             }
         };
-        wait_ready(&mut ready, None, cancel, started).await
+        wait_ready(&mut ready, previous, cancel, started).await
     }
 
     /// Stop and start the running server again (a model-cold load), returning when the new
