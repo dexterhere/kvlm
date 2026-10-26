@@ -21,6 +21,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Model downloads](03-development/model-downloads.md) | Explicit download, pause, resume, discard, and what stops a transfer |
 | 03 | [Hugging Face access](03-development/huggingface-access.md) | Gated models, keyring-only token, and what is sent where |
 | 03 | [M1 acceptance evidence](03-development/m1-acceptance.md) | Live catalog, resume, dedup and gated-refusal results |
+| 03 | [Portable llama.cpp install](03-development/llamacpp-install.md) | Verified, rootless llama-server install, safe extraction, removal rules |
 | 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
 | 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection, merged-file split markers, validation evidence, and limits |
 | 03 | [GGUF fit scenarios](03-development/gguf-fit.md) | Local declarations with explicit settings, assumptions, and unknown compatibility |
