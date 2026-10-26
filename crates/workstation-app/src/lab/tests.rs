@@ -6,6 +6,7 @@ fn request() -> LabRequest {
         passes: 3,
         cold: false,
         follow_up: None,
+        server: None,
     }
 }
 
@@ -29,7 +30,7 @@ async fn check_and_list_answer_with_their_own_ids() {
         .unwrap();
     assert!(matches!(
         next(&events).await,
-        LabEvent::Checked { id: 7, result: Ok(text) } if text == "Runs 3 passes."
+        LabEvent::Checked { id: 7, result: Ok(checked) } if checked.description == "Runs 3 passes." && checked.server == "fake"
     ));
     *fake.check_error.lock().unwrap() = Some("No server.".into());
     commands
@@ -161,4 +162,46 @@ fn memory_topology_stays_unknown_without_a_report() {
     };
     assert_eq!(unified_memory(&hardware), None);
     let _ = &mut hardware;
+}
+
+#[tokio::test]
+async fn a_panicking_run_ends_with_an_error_and_frees_the_slot() {
+    let fake = Arc::new(FakeLab {
+        panic: true,
+        ..FakeLab::default()
+    });
+    let (commands, events) = start(&tokio::runtime::Handle::current(), fake);
+    for id in [1, 2] {
+        commands
+            .send(LabCommand::Run {
+                id,
+                request: request(),
+                cancel: Arc::new(AtomicBool::new(false)),
+            })
+            .await
+            .unwrap();
+        loop {
+            if let LabEvent::Finished { id: done, result } = next(&events).await {
+                assert_eq!(done, id);
+                assert!(result.unwrap_err().contains("stopped unexpectedly"));
+                break;
+            }
+        }
+    }
+}
+
+#[test]
+fn a_fifo_or_directory_is_refused_without_opening_it() {
+    let dir = std::env::temp_dir().join(format!("kvlm-lab-fifo-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fifo = dir.join("model.gguf");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .is_ok_and(|s| s.success());
+    if made {
+        // Opening a FIFO for reading would block forever; this must return at once.
+        assert!(model_facts(&fifo).is_err());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

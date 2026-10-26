@@ -35,6 +35,23 @@ server by itself: with nothing running, Check says to start one on the Runtimes 
 
 An attached Ollama is never restarted or modified; the lab does not run against it yet.
 
+## Safety rules
+
+- A Check is bound to the server it looked at (profile, build and generation). If the user
+  stops or replaces that server before pressing Run, Run is refused and asks for a new Check.
+- Every restart the lab causes is guarded: under the runtime operations lock it re-checks that
+  the server is still the expected generation and that the run was not cancelled. Restoring
+  the user's profile after a follow-up only happens if the last start was still the
+  follow-up's own profile; if the user started something else meanwhile, it is left alone.
+- A panic in a run is contained: the user's profile is still restored, the run slot is freed
+  and the page gets an error result.
+- Closing the window cancels a run in progress.
+- Experiments a previous process left running are marked interrupted once, before the first
+  list or run.
+- The model file is checked to be a regular file before it is opened (a FIFO would block).
+  The digest describes the file at the profile's path when the run starts; replacing the file
+  or retargeting a symlink under a running server is not detected.
+
 ## What it records
 
 The experiment record holds the requested settings from the profile and, for a managed server,

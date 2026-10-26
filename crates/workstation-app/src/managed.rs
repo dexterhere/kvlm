@@ -203,6 +203,16 @@ pub struct Active {
     pub install: InstallRow,
 }
 
+/// What the lab expects to find before it stops or starts anything, so it never acts on a
+/// server the user has changed in the meantime.
+#[derive(Clone, Debug)]
+pub enum Expect {
+    /// The running server is this generation.
+    Generation(String),
+    /// The last start was from exactly this profile (used to put the user's profile back).
+    Profile(Box<LaunchProfile>),
+}
+
 /// A finished restart: the new process and how long it took to answer as ready.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Restarted {
@@ -459,19 +469,26 @@ impl LiveManaged {
         self.0.running().await
     }
 
-    /// Model-cold load: stop and start the running server, timed until it is ready.
-    pub async fn cold_restart(&self, cancel: &AtomicBool) -> Result<Restarted, String> {
-        self.0.cold_restart(cancel).await
+    /// Model-cold load: stop and start the running server, timed until it is ready. Refused
+    /// when the server is no longer the expected one.
+    pub async fn cold_restart(
+        &self,
+        expect: &Expect,
+        cancel: &AtomicBool,
+    ) -> Result<Restarted, String> {
+        self.0.cold_restart(expect, cancel).await
     }
 
-    /// Replace the running server with one started from `profile`.
+    /// Replace the running server with one started from `profile`. Refused when the server
+    /// is no longer the expected one.
     pub async fn switch(
         &self,
         profile: LaunchProfile,
         install: InstallRow,
+        expect: &Expect,
         cancel: &AtomicBool,
     ) -> Result<Restarted, String> {
-        self.0.switch(profile, install, cancel).await
+        self.0.switch(profile, install, expect, cancel).await
     }
 }
 
@@ -687,15 +704,42 @@ impl Core {
 
     /// Replace the running server with one started from `profile`, then wait until it is
     /// ready. Used for a controlled follow-up and to return to the user's profile.
+    /// Refuse to act when the user cancelled or the server is no longer the expected one.
+    /// Call with `ops` held, immediately before the stop or restart.
+    async fn guard(&self, expect: &Expect, cancel: &AtomicBool) -> Result<(), String> {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("The restart was cancelled.".into());
+        }
+        let current = match expect {
+            Expect::Generation(alias) => match &*self.sup.lock().await {
+                Sup::Up(supervisor) => supervisor.status().generation.as_deref() == Some(alias),
+                _ => false,
+            },
+            Expect::Profile(profile) => self
+                .active
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_some_and(|a| a.profile == **profile),
+        };
+        if current {
+            Ok(())
+        } else {
+            Err("The managed server was changed or stopped while the lab was using it, so nothing was restarted.".into())
+        }
+    }
+
     async fn switch(
         &self,
         profile: LaunchProfile,
         row: InstallRow,
+        expect: &Expect,
         cancel: &AtomicBool,
     ) -> Result<Restarted, String> {
         let started = std::time::Instant::now();
         let (mut ready, previous) = {
             let _ops = self.ops.lock().await;
+            self.guard(expect, cancel).await?;
             let mut previous = None;
             {
                 let guard = self.up().await?;
@@ -715,10 +759,15 @@ impl Core {
 
     /// Stop and start the running server again (a model-cold load), returning when the new
     /// process answers as ready.
-    async fn cold_restart(&self, cancel: &AtomicBool) -> Result<Restarted, String> {
+    async fn cold_restart(
+        &self,
+        expect: &Expect,
+        cancel: &AtomicBool,
+    ) -> Result<Restarted, String> {
         let started = std::time::Instant::now();
         let (mut ready, previous) = {
             let _ops = self.ops.lock().await;
+            self.guard(expect, cancel).await?;
             let guard = self.up().await?;
             let Sup::Up(supervisor) = &*guard else {
                 return Err("The runtime supervisor is not available.".into());

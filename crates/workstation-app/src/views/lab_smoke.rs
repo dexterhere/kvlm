@@ -87,6 +87,13 @@ fn experiment() -> Experiment {
     }
 }
 
+fn checked(text: &str) -> crate::lab::Checked {
+    crate::lab::Checked {
+        description: text.into(),
+        server: "server-1".into(),
+    }
+}
+
 fn next(rx: &mut mpsc::Receiver<LabCommand>) -> LabCommand {
     rx.try_recv().expect("a command was sent")
 }
@@ -120,12 +127,12 @@ fn check_run_cancel_and_follow_up_flow() {
     // A stale answer is dropped.
     lab.receive(&LabEvent::Checked {
         id: check + 100,
-        result: Ok("stale".into()),
+        result: Ok(checked("stale")),
     });
     assert!(!button(&lab, "Run").is_sensitive());
     lab.receive(&LabEvent::Checked {
         id: check,
-        result: Ok("Runs 3 passes.".into()),
+        result: Ok(checked("Runs 3 passes.")),
     });
     pump();
     assert!(button(&lab, "Run").is_sensitive());
@@ -144,7 +151,7 @@ fn check_run_cancel_and_follow_up_flow() {
     };
     lab.receive(&LabEvent::Checked {
         id: check,
-        result: Ok("Runs 5 passes.".into()),
+        result: Ok(checked("Runs 5 passes.")),
     });
     button(&lab, "Run").emit_clicked();
     let (run, cancel) = match next(&mut rx) {
@@ -154,6 +161,11 @@ fn check_run_cancel_and_follow_up_flow() {
             cancel,
         } => {
             assert_eq!(request.passes, 5);
+            assert_eq!(
+                request.server.as_deref(),
+                Some("server-1"),
+                "Run is bound to the server the Check looked at"
+            );
             (id, cancel)
         }
         other => panic!("unexpected {other:?}"),

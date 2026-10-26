@@ -22,7 +22,8 @@ use workstation_core::{
 };
 
 use super::lab_text::{
-    comparison_text, finding_detail, finding_title, state_label, summary_text, variable_label,
+    baseline_label, comparison_text, finding_detail, finding_title, state_label, summary_text,
+    variable_label,
 };
 use crate::lab::{LabCommand, LabEvent, LabRequest};
 
@@ -63,6 +64,7 @@ struct Inner {
     compare_text: gtk::Label,
 }
 
+#[derive(Clone)]
 pub struct Lab {
     pub widget: gtk::Widget,
     inner: Rc<Inner>,
@@ -252,6 +254,11 @@ impl Lab {
         inner.compare.connect_clicked(move |_| go());
     }
 
+    /// Ask a run in progress to stop. Used when the window closes.
+    pub fn cancel(&self) {
+        self.inner.cancel_run();
+    }
+
     pub fn load(&self) {
         self.inner.request_list();
     }
@@ -305,6 +312,7 @@ impl Inner {
             passes: self.passes.value_as_int().max(1) as u32,
             cold: self.cold.is_active(),
             follow_up,
+            server: None,
         }
     }
 
@@ -400,9 +408,13 @@ impl Inner {
                     }
                 };
                 match result {
-                    Ok(description) => {
-                        self.check_text.set_text(&clean(description));
-                        self.state.borrow_mut().checked = Some(request);
+                    Ok(checked) => {
+                        self.check_text.set_text(&clean(&checked.description));
+                        // Run is bound to the server this Check looked at.
+                        self.state.borrow_mut().checked = Some(LabRequest {
+                            server: Some(checked.server.clone()),
+                            ..request
+                        });
                     }
                     Err(message) => self.check_text.set_text(&clean(message)),
                 }
@@ -479,9 +491,9 @@ impl Inner {
                     Err(message) => self.notice.set_text(&clean(message)),
                 }
             }
-            LabEvent::Deleted {
-                experiment, result, ..
-            } => {
+            LabEvent::Deleted { experiment, result } => {
+                // A View still in flight must not bring the deleted run back.
+                self.state.borrow_mut().load = None;
                 match result {
                     Ok(()) => {
                         if self.state.borrow().shown == Some(*experiment) {
@@ -589,8 +601,8 @@ impl Inner {
         }
         if let Some(variable) = row.variable {
             detail.push(format!(
-                "follow-up of #{}: {}",
-                row.baseline_id.unwrap_or_default(),
+                "follow-up of {}: {}",
+                baseline_label(row.baseline_id),
                 variable_label(variable)
             ));
         }
@@ -655,6 +667,7 @@ impl Inner {
                 return;
             }
             let Some(inner) = weak.upgrade() else { return };
+            inner.state.borrow_mut().load = None;
             inner.send(LabCommand::Delete { experiment: id });
         });
         action.add_prefix(&pick);

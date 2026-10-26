@@ -75,9 +75,14 @@ impl LabTarget for LlamaTarget {
     }
 
     async fn cold_load(&mut self, cancel: &Arc<AtomicBool>) -> Result<Duration, PassError> {
-        let loaded = (self.cold)(cancel.clone())
-            .await
-            .map_err(PassError::Failed)?;
+        let loaded = (self.cold)(cancel.clone()).await.map_err(|message| {
+            // A restart the user cancelled is a cancellation, not a failed load.
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                PassError::Cancelled
+            } else {
+                PassError::Failed(message)
+            }
+        })?;
         self.pgid = loaded.pgid;
         self.alias = loaded.alias;
         self.client =
@@ -202,6 +207,37 @@ mod tests {
                 })
             }),
         )
+    }
+
+    #[tokio::test]
+    async fn a_restart_the_user_cancelled_is_a_cancellation_not_a_failed_load() {
+        let mut target = LlamaTarget::new(
+            LlamaClient::new(1).unwrap(),
+            "alias".into(),
+            Some(4242),
+            Box::new(|cancel| {
+                Box::pin(async move {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    Err("The restart was cancelled.".to_string())
+                })
+            }),
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        assert!(matches!(
+            target.cold_load(&cancel).await,
+            Err(PassError::Cancelled)
+        ));
+        let mut failing = LlamaTarget::new(
+            LlamaClient::new(1).unwrap(),
+            "alias".into(),
+            None,
+            Box::new(|_| Box::pin(async { Err("boom".to_string()) })),
+        );
+        let quiet = Arc::new(AtomicBool::new(false));
+        assert!(matches!(
+            failing.cold_load(&quiet).await,
+            Err(PassError::Failed(m)) if m == "boom"
+        ));
     }
 
     #[tokio::test]

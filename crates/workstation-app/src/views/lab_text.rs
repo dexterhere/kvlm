@@ -15,6 +15,11 @@ pub(super) fn variable_label(variable: Variable) -> &'static str {
     }
 }
 
+/// A deleted baseline leaves no id behind; say so instead of showing a made-up one.
+pub(super) fn baseline_label(id: Option<i64>) -> String {
+    id.map_or_else(|| "a removed baseline".into(), |id| format!("#{id}"))
+}
+
 pub(super) fn state_label(state: State) -> &'static str {
     match state {
         State::Running => "Running",
@@ -55,8 +60,8 @@ pub(super) fn summary_text(experiment: &Experiment) -> String {
     }
     if let Some(variable) = experiment.spec.variable {
         lines.push(format!(
-            "Follow-up of #{}: {}",
-            experiment.spec.baseline_id.unwrap_or_default(),
+            "Follow-up of {}: {}",
+            baseline_label(experiment.spec.baseline_id),
             variable_label(variable)
         ));
     }
@@ -236,6 +241,15 @@ mod tests {
         assert!(text.contains("Generation speed: not measured"));
         assert!(text.contains("Inter-token latency: not measured"));
         assert!(!text.contains("0.0"));
+    }
+
+    #[test]
+    fn a_removed_baseline_is_not_shown_as_an_id() {
+        let mut e = experiment();
+        e.spec.variable = Some(Variable::HalfContext);
+        assert!(summary_text(&e).contains("Follow-up of a removed baseline"));
+        e.spec.baseline_id = Some(2);
+        assert!(summary_text(&e).contains("Follow-up of #2"));
     }
 
     #[test]
