@@ -41,7 +41,7 @@ equate static memory policy, a saved successful request, and verified runtime se
 
 | Milestone | Outcome | Status |
 | --- | --- | --- |
-| M0 | Hardware → attached Ollama → static fit → quick benchmark → persisted verification | Complete for accepted GTK/CUDA reference baseline; integration pending |
+| M0 | Hardware → attached Ollama → static fit → quick benchmark → persisted verification | Complete for accepted GTK/CUDA reference baseline; merged to `main` 2026-10-26 |
 | M1 | Live model catalog, normalized artifacts, resumable downloads, deduplication, Secret Service | Planned |
 | M2 | Managed portable llama.cpp, lifecycle/logs, ownership guards, developer exports | Planned |
 | M3 | Controlled A/B benchmarks, cold/warm separation, sampling, diagnostics | Planned |
