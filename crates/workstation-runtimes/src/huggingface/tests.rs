@@ -374,13 +374,13 @@ async fn release_with_pin_uses_revision_endpoint_and_requires_matching_sha() {
             json_reply(qwen_detail("Owner/Name", REV)),
         )]
     });
-    assert!(
-        case_only
-            .client()
-            .release("owner/name", Some(REV))
-            .await
-            .is_ok()
-    );
+    let release = case_only
+        .client()
+        .release("owner/name", Some(REV))
+        .await
+        .unwrap();
+    // The requested spelling is kept so cache lookups stay consistent.
+    assert_eq!(release.repo_id, "owner/name");
 }
 
 #[tokio::test]

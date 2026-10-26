@@ -11,7 +11,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use workstation_core::{
-    db::{self, HistoryStore, catalog_cache::page_key},
+    db::{
+        self, HistoryStore,
+        catalog_cache::{REVISION_CONFLICT, page_key},
+    },
     models::{catalog::CatalogPage, release::ModelRelease},
 };
 
@@ -100,9 +103,11 @@ impl CatalogService {
     pub async fn search(&self, query: &str, cursor: Option<&str>) -> Result<CatalogLoad, String> {
         match self.client.search(query, cursor).await {
             Ok(page) => {
-                let (key, stored) = (page_key(query, cursor), page.clone());
+                // Stamped when the fetch finished, so a late write from an abandoned
+                // request can never replace a newer page.
+                let (key, stored, fetched_at) = (page_key(query, cursor), page.clone(), now_ms());
                 let saved = self
-                    .blocking(move |store| store.cache_catalog_page(&key, &stored, now_ms()))
+                    .blocking(move |store| store.cache_catalog_page(&key, &stored, fetched_at))
                     .await;
                 Ok(CatalogLoad {
                     page,
@@ -150,10 +155,15 @@ impl CatalogService {
     ) -> Result<ReleaseLoad, String> {
         match self.client.release(repo_id, pinned).await {
             Ok(release) => {
-                let stored = release.clone();
+                let (stored, fetched_at) = (release.clone(), now_ms());
                 let saved = self
-                    .blocking(move |store| store.cache_release(&stored, now_ms()))
+                    .blocking(move |store| store.cache_release(&stored, fetched_at))
                     .await;
+                // A changed size or checksum for a saved revision is an integrity
+                // problem with the response, not a storage problem: do not show it.
+                if matches!(&saved, Err(e) if e == REVISION_CONFLICT) {
+                    return Err("Hugging Face reported different data for a revision saved earlier. The saved copy was kept and the new data was not used.".into());
+                }
                 Ok(ReleaseLoad {
                     release,
                     source: LoadSource::Live,

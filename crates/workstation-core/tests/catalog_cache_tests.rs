@@ -436,3 +436,45 @@ fn latest_cached_release_prefers_the_newest_fetch() {
     let (latest, at) = store.cached_latest_release("o/n-GGUF").unwrap().unwrap();
     assert_eq!((latest.revision.as_str(), at), (other_rev, 9));
 }
+
+#[test]
+fn an_older_fetch_never_replaces_a_newer_page_or_release() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    store
+        .cache_catalog_page("k", &page("a/new", None), 20)
+        .unwrap();
+    store
+        .cache_catalog_page("k", &page("a/old", None), 10)
+        .unwrap();
+    let (cached, at) = store.cached_catalog_page("k").unwrap().unwrap();
+    assert_eq!((cached.repos[0].repo_id.as_str(), at), ("a/new", 20));
+
+    store
+        .cache_release(&release_with(Some(10), Some(SHA)), 20)
+        .unwrap();
+    store
+        .cache_release(&release_with(Some(10), Some(SHA)), 10)
+        .unwrap();
+    assert_eq!(
+        store.cached_release("o/n-GGUF", REV).unwrap().unwrap().1,
+        20
+    );
+}
+
+#[test]
+fn conflicts_use_the_published_constant_and_long_unicode_queries_fit() {
+    use workstation_core::db::catalog_cache::{REVISION_CONFLICT, page_key};
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    store.cache_release(&release(), 1).unwrap();
+    let error = store
+        .cache_release(&release_with(Some(11), Some(SHA)), 2)
+        .unwrap_err();
+    assert_eq!(error, REVISION_CONFLICT);
+    let key = page_key(&"é".repeat(128), Some(&"a".repeat(1024)));
+    assert!(key.len() <= 512, "{}", key.len());
+    store
+        .cache_catalog_page(&key, &page("a/b", None), 1)
+        .unwrap();
+}

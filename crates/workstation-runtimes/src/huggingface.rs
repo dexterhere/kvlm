@@ -372,7 +372,8 @@ fn parse_detail(
         })
         .collect();
     Ok(RawRepoDetail {
-        repo_id: id.to_owned(),
+        // The caller's spelling keeps cache keys and offline lookups consistent.
+        repo_id: requested.to_owned(),
         revision: revision.to_owned(),
         license,
         gated: detail

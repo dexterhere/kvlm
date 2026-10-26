@@ -15,17 +15,26 @@ const MAX_RELEASE_ROWS: i64 = 2_000;
 const MAX_RELEASE_BYTES: i64 = 64 * 1024 * 1024;
 const MAX_KEY: usize = 512;
 
-/// Stable cache key for a search page: lowercased trimmed query plus a digest of the
-/// cursor, so any permitted cursor length fits the key limit.
+/// Returned when a revision would be stored with a size or checksum that differs from
+/// what is already saved. Callers must reject the new data, not the cache.
+pub const REVISION_CONFLICT: &str =
+    "Cached revision conflicts with newly fetched data. Keep the cache and retry later.";
+
+/// Stable cache key for a search page: digests of the lowercased trimmed query and of
+/// the cursor, so any permitted query and cursor length fits the key limit.
 pub fn page_key(query: &str, cursor: Option<&str>) -> String {
     use sha2::{Digest, Sha256};
-    let cursor = cursor.map_or(String::new(), |c| {
-        Sha256::digest(c.as_bytes())
+    let hex = |text: &str| -> String {
+        Sha256::digest(text.as_bytes())
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect()
-    });
-    format!("search:v1:{}:{cursor}", query.trim().to_lowercase())
+    };
+    format!(
+        "search:v2:{}:{}",
+        hex(&query.trim().to_lowercase()),
+        cursor.map_or(String::new(), hex)
+    )
 }
 
 fn timestamp(ms: u64) -> Result<i64, String> {
@@ -59,7 +68,8 @@ impl HistoryStore {
         self.write(|c| {
             c.execute(
                 "INSERT INTO catalog_queries(query_key,result_json,fetched_at_unix_ms) VALUES (?1,?2,?3)
-                 ON CONFLICT(query_key) DO UPDATE SET result_json=excluded.result_json, fetched_at_unix_ms=excluded.fetched_at_unix_ms",
+                 ON CONFLICT(query_key) DO UPDATE SET result_json=excluded.result_json, fetched_at_unix_ms=excluded.fetched_at_unix_ms
+                 WHERE excluded.fetched_at_unix_ms >= catalog_queries.fetched_at_unix_ms",
                 params![key, json, at],
             )
             .map_err(|_| "Cannot cache catalog page. The page may be too large or the disk full.")?;
@@ -106,13 +116,14 @@ impl HistoryStore {
                         }
                     };
                     if conflict {
-                        return Err("Cached revision conflicts with newly fetched data. Keep the cache and retry later.".into());
+                        return Err(REVISION_CONFLICT.into());
                     }
                 }
             }
             c.execute(
                 "INSERT INTO catalog_releases(repo_id,revision,release_json,fetched_at_unix_ms) VALUES (?1,?2,?3,?4)
-                 ON CONFLICT(repo_id,revision) DO UPDATE SET release_json=excluded.release_json, fetched_at_unix_ms=excluded.fetched_at_unix_ms",
+                 ON CONFLICT(repo_id,revision) DO UPDATE SET release_json=excluded.release_json, fetched_at_unix_ms=excluded.fetched_at_unix_ms
+                 WHERE excluded.fetched_at_unix_ms >= catalog_releases.fetched_at_unix_ms",
                 params![release.repo_id, release.revision, json, at],
             )
             .map_err(|_| "Cannot cache release. It may be too large or the disk full.")?;

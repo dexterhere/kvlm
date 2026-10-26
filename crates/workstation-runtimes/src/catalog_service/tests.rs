@@ -5,7 +5,6 @@ use crate::test_server::*;
 use serde_json::{Value, json};
 use std::{
     fs,
-    net::TcpListener,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -126,10 +125,9 @@ async fn rate_limit_notice_mentions_retry_time() {
 
 #[tokio::test]
 async fn refused_connection_is_offline_and_uses_cache() {
-    let closed = {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    };
+    // Nothing listens on loopback port 1, so the connection is always refused;
+    // a released ephemeral port could be rebound by a parallel test.
+    let closed = 1;
 
     let db = TempDb::new();
     let ok = Server::start(|_| vec![route(SEARCH_LINE, json_reply(search_body()))]);
