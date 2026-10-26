@@ -1,8 +1,20 @@
 # M0 reference acceptance
 
-Date: 2026-10-26. Feature implementation and the reference GTK/CUDA workflows pass.
-Strict milestone sign-off remains open pending the GNOME-session/reference-criterion
-decision described below. Integration and promotion are separate from this evidence.
+Date: 2026-10-26. Status: M0 accepted for the measured reference baseline.
+Feature implementation and the reference GTK/CUDA workflows pass. Integration,
+required PR checks, and promotion remain separate from this milestone acceptance.
+
+## Acceptance decision
+
+Explicit project instruction on 2026-10-26 accepted this evidence and its limits:
+“Accept the measured GTK/CUDA results and documented limits”. This closes M0 sign-off
+using the native GTK/CUDA results on Hyprland. The measured Constrained-at-8K and
+Not-recommended-at-32K classifications are accepted rather than the blueprint's
+illustrative labels. The implementation and memory policy are unchanged.
+
+GNOME-session validation, native file-chooser interaction, and manual accessibility
+remain follow-ups. Acceptance does not claim those checks passed, establish runtime
+compatibility for every scenario, or authorize merging or promoting any branch.
 
 ## Reference machine and model
 
@@ -101,7 +113,7 @@ The first benchmark check requires a fresh database. The restart check requires 
 saved run and must use the same XDG directory. The acceptance file is under
 `$m0_data_dir/local-ai-workstation/workstation.db`; retain it only as long as needed.
 
-## Validation and remaining sign-off
+## Validation and follow-ups
 
 Formatting, workspace Clippy with warnings denied, all 160 normal Rust tests, the
 repository validator and 9 Python tests passed. All 9 opt-in GTK tests also passed:
@@ -111,9 +123,11 @@ also passed independently. Independent identity/query review found no concrete i
 
 Local Meson is unavailable; packaging files did not change. Hosted CI validates the
 native build separately. Native file-chooser interaction, manual accessibility,
-GNOME-session behavior and the original illustrative fit classifications have not
-been accepted by these checks. AMD/CPU physical matrices, process attribution and
-controlled cold/warm comparisons remain later milestone work.
+and GNOME-session behavior were not checked. The measured fit classifications
+above were accepted explicitly; the original illustrative labels are not claimed.
+AMD/CPU physical matrices, process attribution and controlled cold/warm comparisons
+remain later milestone work.
 
-The implemented features may be reviewed and integrated now. Keep strict M0 sign-off
-open unless the reference-machine evidence and documented limits are accepted.
+M0 is complete under the accepted reference baseline. Review and integrate the
+feature PR through `develop → staging → main`; milestone acceptance does not skip
+CI, merge review, or release validation.

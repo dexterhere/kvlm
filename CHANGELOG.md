@@ -41,4 +41,4 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 Verified runtime settings, model catalog/downloads, configuration exports, managed
 runtime control, process attribution, and controlled benchmark comparisons remain planned.
-Strict M0 acceptance is tracked in [the reference record](docs/03-development/m0-acceptance.md).
+M0 acceptance for the measured GTK/CUDA baseline is recorded in [the reference record](docs/03-development/m0-acceptance.md).

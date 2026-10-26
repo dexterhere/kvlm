@@ -3,8 +3,8 @@
 A community-built GNOME desktop application for understanding what local AI models
 your hardware can run, managing inference runtimes safely, and measuring performance.
 
-**Status: M0 features implemented; final acceptance open.** The four-crate GNOME
-application provides hardware discovery, attached-Ollama discovery and inspection,
+**Status: M0 complete for the accepted reference baseline; integration pending.**
+The four-crate GNOME application provides hardware discovery, attached-Ollama discovery and inspection,
 conditional CPU/CUDA memory estimates for local LLaMA/Qwen2 GGUFs, a local-only
 Quick Benchmark, SQLite history, and a saved `Benchmark Verified` indicator for an
 exact Ollama manifest and hardware configuration. Real Qwen CUDA inference and
@@ -14,8 +14,9 @@ verification after a separate-process restart passed. See the
 Fit estimates remain conditional on the supplied scenario and attention-layout
 assumption. A saved benchmark proves a prior request, not every future context or
 placement. Downloads, managed runtimes, process attribution, and controlled benchmark
-comparisons remain later milestones. Native GTK checks ran on Hyprland; the stricter
-GNOME-session acceptance and reference-fit criterion remain open.
+comparisons remain later milestones. The measured native GTK/CUDA results on Hyprland
+and their documented limits were explicitly accepted for M0 on 2026-10-26.
+GNOME-session validation remains a follow-up; it is not claimed as tested.
 This is an independent community project;
 it is not an official GNOME application or a GNOME Circle member.
 

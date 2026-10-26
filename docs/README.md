@@ -10,7 +10,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Getting started](03-development/getting-started.md) | Dependencies, build, run, validation, installation |
 | 03 | [Repository layout](03-development/repository-layout.md) | Where code, fixtures, metadata, and documentation belong |
 | 03 | [Git workflow](03-development/git-workflow.md) | Small commits, authorship, review, publication |
-| 03 | [M0 acceptance](03-development/m0-acceptance.md) | Real Qwen CPU/CUDA estimates, native benchmark, restart badge, and sign-off limits |
+| 03 | [M0 acceptance](03-development/m0-acceptance.md) | Real Qwen CPU/CUDA estimates, native benchmark, restart badge, accepted scope, and follow-ups |
 | 03 | [Foundation validation](03-development/validation.md) | Checks performed and practical limits |
 | 03 | [Hardware validation](03-development/hardware-validation.md) | Hardware feature checks and live reference evidence |
 | 03 | [Ollama discovery validation](03-development/ollama-validation.md) | Read-only attached-runtime discovery and validation limits |
