@@ -16,10 +16,14 @@ Requested and observed settings are stored separately. `Settings::differences` n
 
 - One experiment may be running at a time. A stale running row blocks a new one until `recover_interrupted` marks it and its open passes as interrupted at the next start.
 - Finished experiments and passes are final. A second finish, or a new pass on a finished experiment, is an error.
+- Row ids are never reused, so a late result for a deleted run cannot land on a newer one.
+- A run reports completed, failed or cancelled. Interrupted is set only by start-up recovery. Finishing an experiment closes any pass still open as interrupted.
 - Pass ordinals are unique per kind within an experiment.
-- Only the newest 200 experiments are kept. Pruning removes their passes and findings, and a baseline link pointing at a pruned row is emptied rather than cascaded.
+- Only the newest 200 experiments are kept. Pruning never removes the baseline a new run names. It removes passes and findings with their experiment, and a baseline link pointing at a pruned row is emptied rather than cascaded.
 - A running experiment cannot be deleted.
 - A row that fails to decode is counted in `Listing::unreadable` and skipped, so one damaged record never hides the rest of the history.
+- A value that would not read back (a NaN or infinite float) is refused at write time. A stored number outside its range makes the row unreadable instead of silently becoming zero.
+- A load reads the experiment, passes and findings in one read transaction.
 - Metrics that were not measured stay `None`. They are never stored as zero.
 
 ## Summaries

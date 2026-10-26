@@ -367,3 +367,109 @@ fn schema_checks_reject_bad_values() {
             .is_err()
     );
 }
+
+#[test]
+fn ids_are_never_reused_after_a_delete() {
+    let dir = Dir::new();
+    let store = HistoryStore::open(&dir.db()).unwrap();
+    let first = finished(&store, 1);
+    store.delete_experiment(first).unwrap();
+    let second = store.begin_experiment(&spec(), 5).unwrap();
+    assert_ne!(first, second);
+    assert!(
+        store
+            .finish_experiment(first, State::Completed, None, None, None, 6)
+            .is_err(),
+        "a late result for the deleted run must not land on the new one"
+    );
+}
+
+#[test]
+fn finishing_an_experiment_closes_its_open_passes_and_only_runs_report_final_states() {
+    let dir = Dir::new();
+    let store = HistoryStore::open(&dir.db()).unwrap();
+    let id = store.begin_experiment(&spec(), 1).unwrap();
+    let pass = store.begin_pass(id, PassKind::Measured, 0, 2).unwrap();
+    assert!(
+        store
+            .finish_pass(pass, State::Interrupted, None, None, 3)
+            .is_err()
+    );
+    assert!(
+        store
+            .finish_experiment(id, State::Interrupted, None, None, None, 3)
+            .is_err()
+    );
+    store
+        .finish_experiment(id, State::Cancelled, None, None, None, 4)
+        .unwrap();
+    let loaded = store.load_experiment(id).unwrap().unwrap();
+    assert_eq!(loaded.passes[0].state, State::Interrupted);
+    assert!(
+        store
+            .finish_pass(pass, State::Completed, None, None, 5)
+            .is_err()
+    );
+}
+
+#[test]
+fn pruning_never_removes_the_baseline_a_new_run_names() {
+    let dir = Dir::new();
+    let store = HistoryStore::open(&dir.db()).unwrap();
+    let oldest = finished(&store, 1);
+    for i in 0..199u64 {
+        finished(&store, 10 + i * 10);
+    }
+    let follow_up = store
+        .begin_experiment(
+            &NewExperiment {
+                variable: Some(Variable::HalfContext),
+                baseline_id: Some(oldest),
+                ..spec()
+            },
+            100_000,
+        )
+        .unwrap();
+    let loaded = store.load_experiment(follow_up).unwrap().unwrap();
+    assert_eq!(loaded.spec.baseline_id, Some(oldest));
+}
+
+#[test]
+fn values_that_could_not_be_read_back_are_refused() {
+    let dir = Dir::new();
+    let store = HistoryStore::open(&dir.db()).unwrap();
+    let id = store.begin_experiment(&spec(), 1).unwrap();
+    let pass = store.begin_pass(id, PassKind::Measured, 0, 2).unwrap();
+    let bad = PassMetrics {
+        itl: Some(workstation_core::experiments::Itl {
+            intervals: 3,
+            median_ms: 10.0,
+            p95_ms: f64::INFINITY,
+        }),
+        ..PassMetrics::default()
+    };
+    assert!(
+        store
+            .finish_pass(pass, State::Completed, Some(&bad), None, 3)
+            .is_err()
+    );
+    store
+        .finish_pass(pass, State::Completed, Some(&metrics(1.0)), None, 3)
+        .unwrap();
+}
+
+#[test]
+fn out_of_range_stored_numbers_make_the_row_unreadable() {
+    let dir = Dir::new();
+    let store = HistoryStore::open(&dir.db()).unwrap();
+    let id = finished(&store, 1);
+    drop(store);
+    let connection = Connection::open(dir.db()).unwrap();
+    connection
+        .execute("UPDATE experiments SET seed=-1 WHERE id=?1", [id])
+        .unwrap();
+    drop(connection);
+    let store = HistoryStore::open(&dir.db()).unwrap();
+    assert_eq!(store.list_experiments(10).unwrap().unreadable, 1);
+    assert!(store.load_experiment(id).is_err());
+}

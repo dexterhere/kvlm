@@ -87,7 +87,7 @@ CREATE TABLE runtime_installs (
 /// pruned (the link becomes empty).
 const STEP_3_TO_4: &str = "
 CREATE TABLE experiments (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     state TEXT NOT NULL CHECK(state IN ('running','completed','failed','cancelled','interrupted')),
     started_at_unix_ms INTEGER NOT NULL,
     finished_at_unix_ms INTEGER,
@@ -113,7 +113,7 @@ CREATE TABLE experiments (
 ) STRICT;
 CREATE INDEX experiments_started ON experiments(started_at_unix_ms DESC);
 CREATE TABLE experiment_passes (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
     kind TEXT NOT NULL CHECK(kind IN ('cold_load','warmup','measured')),
     ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 40),
@@ -125,7 +125,7 @@ CREATE TABLE experiment_passes (
     UNIQUE (experiment_id, kind, ordinal)
 ) STRICT;
 CREATE TABLE diagnostic_findings (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
     rule_id TEXT NOT NULL CHECK(rule_id IN ('DIAG-01','DIAG-02','DIAG-03','DIAG-04')),
     status TEXT NOT NULL CHECK(status IN ('triggered','clear','not_evaluated','not_applicable')),

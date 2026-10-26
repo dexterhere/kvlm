@@ -18,16 +18,32 @@ fn ms(value: u64) -> Result<i64, String> {
     i64::try_from(value).map_err(|_| "Timestamp is out of range.".to_string())
 }
 
-fn to_ms(value: i64) -> u64 {
-    u64::try_from(value).unwrap_or(0)
+const UNREADABLE: &str = "A stored experiment is unreadable.";
+
+fn to_ms(value: i64) -> Result<u64, String> {
+    u64::try_from(value).map_err(|_| UNREADABLE.to_string())
 }
 
-fn encode<T: Serialize>(value: &T, what: &str) -> Result<String, String> {
-    serde_json::to_string(value).map_err(|_| format!("Cannot encode the {what}."))
+fn to_u32(value: i64) -> Result<u32, String> {
+    u32::try_from(value).map_err(|_| UNREADABLE.to_string())
+}
+
+/// Encode, then prove the text reads back. A NaN or infinite float serializes as `null`,
+/// which would store a record that can never be loaded.
+fn encode<T: Serialize + DeserializeOwned>(value: &T, what: &str) -> Result<String, String> {
+    let json = serde_json::to_string(value).map_err(|_| format!("Cannot encode the {what}."))?;
+    serde_json::from_str::<T>(&json)
+        .map_err(|_| format!("The {what} holds a value that cannot be stored."))?;
+    Ok(json)
 }
 
 fn decode<T: DeserializeOwned>(json: &str) -> Result<T, String> {
     serde_json::from_str(json).map_err(|_| "A stored experiment is unreadable.".to_string())
+}
+
+/// States a run may report. Interrupted is set only by recovery.
+fn reported(state: State) -> bool {
+    matches!(state, State::Completed | State::Failed | State::Cancelled)
 }
 
 fn bounded(text: Option<&str>) -> Option<String> {
@@ -80,12 +96,11 @@ fn experiment_from(row: &Row) -> rusqlite::Result<Result<Experiment, String>> {
             ownership: Ownership::parse(&row.get::<_, String>(5).map_err(|_| "bad row")?)
                 .ok_or("A stored experiment is unreadable.")?,
             cold: row.get::<_, i64>(6).map_err(|_| "bad row")? != 0,
-            passes_requested: u32::try_from(row.get::<_, i64>(7).map_err(|_| "bad row")?)
-                .unwrap_or(0),
+            passes_requested: to_u32(row.get(7).map_err(|_| "bad row")?)?,
             workload_id: row.get(8).map_err(|_| "bad row")?,
             prompt_sha256: row.get(9).map_err(|_| "bad row")?,
-            seed: u32::try_from(row.get::<_, i64>(10).map_err(|_| "bad row")?).unwrap_or(0),
-            max_tokens: u32::try_from(row.get::<_, i64>(11).map_err(|_| "bad row")?).unwrap_or(0),
+            seed: to_u32(row.get(10).map_err(|_| "bad row")?)?,
+            max_tokens: to_u32(row.get(11).map_err(|_| "bad row")?)?,
             model_name: row.get(12).map_err(|_| "bad row")?,
             model_sha256: text(13)?,
             runtime_version: text(14)?,
@@ -98,11 +113,12 @@ fn experiment_from(row: &Row) -> rusqlite::Result<Result<Experiment, String>> {
         Ok(Experiment {
             id,
             state,
-            started_at_unix_ms: to_ms(row.get(2).map_err(|_| "bad row")?),
+            started_at_unix_ms: to_ms(row.get(2).map_err(|_| "bad row")?)?,
             finished_at_unix_ms: row
                 .get::<_, Option<i64>>(3)
                 .map_err(|_| "bad row")?
-                .map(to_ms),
+                .map(to_ms)
+                .transpose()?,
             spec,
             observed: text(18)?.map(|j| decode::<Settings>(&j)).transpose()?,
             summary: text(19)?.map(|j| decode::<Summary>(&j)).transpose()?,
@@ -134,8 +150,8 @@ impl HistoryStore {
             }
             c.execute(
                 "DELETE FROM experiments WHERE state<>'running' AND id NOT IN
-                 (SELECT id FROM experiments ORDER BY id DESC LIMIT ?1)",
-                [MAX_EXPERIMENTS - 1],
+                 (SELECT id FROM experiments ORDER BY id DESC LIMIT ?1) AND id IS NOT ?2",
+                params![MAX_EXPERIMENTS - 1, spec.baseline_id],
             )
             .map_err(|_| "Cannot prune old experiments.")?;
             c.execute(
@@ -208,7 +224,7 @@ impl HistoryStore {
         failure: Option<&str>,
         now_ms: u64,
     ) -> Result<(), String> {
-        if !state.is_terminal() {
+        if !reported(state) {
             return Err("A finished pass needs a final state.".into());
         }
         let json = metrics.map(|m| encode(m, "metrics")).transpose()?;
@@ -217,7 +233,8 @@ impl HistoryStore {
             let changed = c
                 .execute(
                     "UPDATE experiment_passes SET state=?1, finished_at_unix_ms=?2, metrics_json=?3, failure=?4
-                     WHERE id=?5 AND state IN ('running','interrupted')",
+                     WHERE id=?5 AND state IN ('running','interrupted')
+                       AND experiment_id IN (SELECT id FROM experiments WHERE state IN ('running','interrupted'))",
                     params![state.as_str(), now, json, bounded(failure), pass_id],
                 )
                 .map_err(|_| "Cannot record the pass result.")?;
@@ -239,7 +256,7 @@ impl HistoryStore {
         failure: Option<&str>,
         now_ms: u64,
     ) -> Result<(), String> {
-        if !state.is_terminal() {
+        if !reported(state) {
             return Err("A finished experiment needs a final state.".into());
         }
         let observed = observed.map(|o| encode(o, "settings")).transpose()?;
@@ -256,6 +273,12 @@ impl HistoryStore {
             if changed == 0 {
                 return Err("That experiment is already finished.".into());
             }
+            c.execute(
+                "UPDATE experiment_passes SET state='interrupted', finished_at_unix_ms=?1
+                 WHERE experiment_id=?2 AND state='running'",
+                params![now, id],
+            )
+            .map_err(|_| "Cannot close the open passes.")?;
             Ok(())
         })
     }
@@ -351,6 +374,11 @@ impl HistoryStore {
 
     /// One experiment with its passes and findings.
     pub fn load_experiment(&self, id: i64) -> Result<Option<Experiment>, String> {
+        // One read transaction so the parent and its children come from the same commit.
+        let _snapshot = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| "Cannot read the experiment.")?;
         let found = self
             .connection
             .query_row(
@@ -391,10 +419,10 @@ impl HistoryStore {
             experiment.passes.push(Pass {
                 id: pass_id,
                 kind: PassKind::parse(&kind).ok_or("A stored pass is unreadable.")?,
-                ordinal: u32::try_from(ordinal).unwrap_or(0),
+                ordinal: to_u32(ordinal)?,
                 state: State::parse(&state).ok_or("A stored pass is unreadable.")?,
-                started_at_unix_ms: to_ms(started),
-                finished_at_unix_ms: finished.map(to_ms),
+                started_at_unix_ms: to_ms(started)?,
+                finished_at_unix_ms: finished.map(to_ms).transpose()?,
                 metrics: metrics.map(|j| decode::<PassMetrics>(&j)).transpose()?,
                 failure,
             });
