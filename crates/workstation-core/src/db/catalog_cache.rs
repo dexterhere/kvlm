@@ -15,6 +15,19 @@ const MAX_RELEASE_ROWS: i64 = 2_000;
 const MAX_RELEASE_BYTES: i64 = 64 * 1024 * 1024;
 const MAX_KEY: usize = 512;
 
+/// Stable cache key for a search page: lowercased trimmed query plus a digest of the
+/// cursor, so any permitted cursor length fits the key limit.
+pub fn page_key(query: &str, cursor: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    let cursor = cursor.map_or(String::new(), |c| {
+        Sha256::digest(c.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    });
+    format!("search:v1:{}:{cursor}", query.trim().to_lowercase())
+}
+
 fn timestamp(ms: u64) -> Result<i64, String> {
     i64::try_from(ms).map_err(|_| "Catalog timestamp exceeds the supported range.".into())
 }
@@ -105,6 +118,27 @@ impl HistoryStore {
             .map_err(|_| "Cannot cache release. It may be too large or the disk full.")?;
             evict(c, "catalog_releases", MAX_RELEASE_ROWS, MAX_RELEASE_BYTES, "release_json")
         })
+    }
+
+    /// The most recently cached release of a repository, whatever its revision. Used when
+    /// the network is unavailable and no commit has been learned yet.
+    pub fn cached_latest_release(
+        &self,
+        repo_id: &str,
+    ) -> Result<Option<(ModelRelease, u64)>, String> {
+        let revision: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT revision FROM catalog_releases WHERE repo_id=?1 ORDER BY fetched_at_unix_ms DESC, rowid DESC LIMIT 1",
+                [repo_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|_| "Cannot read cached release.")?;
+        match revision {
+            Some(revision) => read_release(&self.connection, repo_id, &revision),
+            None => Ok(None),
+        }
     }
 
     pub fn cached_release(

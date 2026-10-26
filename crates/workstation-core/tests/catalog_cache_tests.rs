@@ -405,3 +405,34 @@ fn table_without_its_primary_key_is_refused() {
     drop(connection);
     assert!(HistoryStore::open(&path.0).is_err());
 }
+
+#[test]
+fn page_keys_normalize_the_query_and_bound_long_cursors() {
+    use workstation_core::db::catalog_cache::page_key;
+    assert_eq!(
+        page_key("  Qwen Coder ", None),
+        page_key("qwen coder", None)
+    );
+    assert_ne!(page_key("q", None), page_key("q", Some("abc")));
+    assert_ne!(page_key("q", Some("abc")), page_key("q", Some("abd")));
+    let long = "a".repeat(1024);
+    assert!(page_key(&"q".repeat(128), Some(&long)).len() <= 512);
+}
+
+#[test]
+fn latest_cached_release_prefers_the_newest_fetch() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    assert!(store.cached_latest_release("o/n-GGUF").unwrap().is_none());
+    store.cache_release(&release(), 5).unwrap();
+    let mut newer = release();
+    let other_rev = "fedcba9876543210fedcba9876543210fedcba98";
+    newer.revision = other_rev.into();
+    for a in &mut newer.artifacts {
+        a.revision = other_rev.into();
+        a.artifact_id = format!("hf:o/n-GGUF@{other_rev}:{}", a.filename);
+    }
+    store.cache_release(&newer, 9).unwrap();
+    let (latest, at) = store.cached_latest_release("o/n-GGUF").unwrap().unwrap();
+    assert_eq!((latest.revision.as_str(), at), (other_rev, 9));
+}
