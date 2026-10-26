@@ -196,7 +196,24 @@ enum Sup {
     Closed,
 }
 
+/// What the running server was started from, kept so the Benchmark Lab can describe it.
+#[derive(Clone, Debug)]
+pub struct Active {
+    pub profile: LaunchProfile,
+    pub install: InstallRow,
+}
+
+/// A finished restart: the new process and how long it took to answer as ready.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Restarted {
+    pub ready_in: Duration,
+    pub pid: u32,
+    pub alias: String,
+    pub port: u16,
+}
+
 struct Core {
+    active: Mutex<Option<Active>>,
     sup: tokio::sync::Mutex<Sup>,
     logs: Mutex<Option<workstation_runtimes::supervisor::log::LogBuffer>>,
     live_tx: watch::Sender<Option<Live>>,
@@ -238,7 +255,7 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     tokio::task::spawn_blocking(work)
@@ -246,7 +263,7 @@ async fn blocking<T: Send + 'static>(
         .map_err(|_| "A background task failed. Retry.".to_string())?
 }
 
-fn open_store() -> Result<HistoryStore, String> {
+pub(crate) fn open_store() -> Result<HistoryStore, String> {
     HistoryStore::open(&default_database_path()?)
 }
 
@@ -265,6 +282,7 @@ impl Core {
     fn new() -> Self {
         let (live_tx, live_rx) = watch::channel(None);
         Self {
+            active: Mutex::new(None),
             sup: tokio::sync::Mutex::new(Sup::Unstarted),
             logs: Mutex::new(None),
             live_tx,
@@ -372,6 +390,56 @@ async fn forward(mut status: watch::Receiver<Status>, out: watch::Sender<Option<
     }
 }
 
+/// Waits for a server that is ready under a new generation. Gives up on a failure, on
+/// cancellation, or after the supervisor's own start timeout plus a margin.
+async fn wait_ready(
+    status: &mut watch::Receiver<Status>,
+    previous: Option<String>,
+    cancel: &AtomicBool,
+    started: std::time::Instant,
+) -> Result<Restarted, String> {
+    let deadline = tokio::time::Instant::now()
+        + workstation_runtimes::supervisor::DEFAULT_START_TIMEOUT
+        + Duration::from_secs(10);
+    loop {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("The restart was cancelled.".into());
+        }
+        let now = status.borrow_and_update().clone();
+        match (now.state, &now.generation, now.pid, now.port) {
+            (
+                RuntimeLifecycleState::Ready | RuntimeLifecycleState::Busy,
+                Some(alias),
+                Some(pid),
+                Some(port),
+            ) if previous.as_ref() != Some(alias) => {
+                return Ok(Restarted {
+                    ready_in: started.elapsed(),
+                    pid,
+                    alias: alias.clone(),
+                    port,
+                });
+            }
+            (RuntimeLifecycleState::Failed | RuntimeLifecycleState::Stopped, ..) => {
+                let why = now
+                    .failure
+                    .map_or("The runtime stopped.", |f| f.kind.describe());
+                return Err(why.to_string());
+            }
+            _ => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("The runtime did not become ready in time.".into());
+        }
+        tokio::select! {
+            changed = status.changed() => if changed.is_err() {
+                return Err("The runtime supervisor ended.".into());
+            },
+            () = tokio::time::sleep(Duration::from_millis(100)) => {}
+        }
+    }
+}
+
 /// The production backend. Cheap to clone; all state is shared.
 pub struct LiveManaged(Arc<Core>);
 
@@ -384,6 +452,26 @@ impl Default for LiveManaged {
 impl LiveManaged {
     pub fn new() -> Self {
         Self(Arc::new(Core::new()))
+    }
+
+    /// The server that is ready now and the profile and build it was started from.
+    pub async fn running(&self) -> Option<(Active, Status)> {
+        self.0.running().await
+    }
+
+    /// Model-cold load: stop and start the running server, timed until it is ready.
+    pub async fn cold_restart(&self, cancel: &AtomicBool) -> Result<Restarted, String> {
+        self.0.cold_restart(cancel).await
+    }
+
+    /// Replace the running server with one started from `profile`.
+    pub async fn switch(
+        &self,
+        profile: LaunchProfile,
+        install: InstallRow,
+        cancel: &AtomicBool,
+    ) -> Result<Restarted, String> {
+        self.0.switch(profile, install, cancel).await
     }
 }
 
@@ -558,15 +646,86 @@ impl Core {
             Ok((profile, row))
         })
         .await?;
+        self.begin(profile, row).await
+    }
+
+    /// Start `profile` from `row`. Call with `ops` held.
+    async fn begin(&self, profile: LaunchProfile, row: InstallRow) -> Result<(), String> {
         let paths = blocking(paths).await?;
         let guard = self.up().await?;
         let Sup::Up(supervisor) = &*guard else {
             return Err("The runtime supervisor is not available.".into());
         };
-        let mut spec = StartSpec::new(paths.install_root, row.dir_name.clone(), profile);
+        let mut spec = StartSpec::new(paths.install_root, row.dir_name.clone(), profile.clone());
         spec.auto_restart = true;
         supervisor.start(spec).await.map_err(|e| e.to_string())?;
+        *self.active.lock().unwrap_or_else(|e| e.into_inner()) = Some(Active {
+            profile,
+            install: row,
+        });
         Ok(())
+    }
+
+    /// The server that is ready right now and what it was started from.
+    async fn running(&self) -> Option<(Active, Status)> {
+        let status = match &*self.sup.lock().await {
+            Sup::Up(supervisor) => supervisor.status(),
+            _ => return None,
+        };
+        let ready = matches!(
+            status.state,
+            RuntimeLifecycleState::Ready | RuntimeLifecycleState::Busy
+        );
+        let active = self
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()?;
+        (ready && status.port.is_some() && status.pid.is_some() && status.generation.is_some())
+            .then_some((active, status))
+    }
+
+    /// Replace the running server with one started from `profile`, then wait until it is
+    /// ready. Used for a controlled follow-up and to return to the user's profile.
+    async fn switch(
+        &self,
+        profile: LaunchProfile,
+        row: InstallRow,
+        cancel: &AtomicBool,
+    ) -> Result<Restarted, String> {
+        let started = std::time::Instant::now();
+        let mut ready = {
+            let _ops = self.ops.lock().await;
+            {
+                let guard = self.up().await?;
+                if let Sup::Up(supervisor) = &*guard {
+                    supervisor.stop().await.map_err(|e| e.to_string())?;
+                }
+            }
+            self.begin(profile, row).await?;
+            match &*self.sup.lock().await {
+                Sup::Up(supervisor) => supervisor.subscribe(),
+                _ => return Err("The runtime supervisor is not available.".into()),
+            }
+        };
+        wait_ready(&mut ready, None, cancel, started).await
+    }
+
+    /// Stop and start the running server again (a model-cold load), returning when the new
+    /// process answers as ready.
+    async fn cold_restart(&self, cancel: &AtomicBool) -> Result<Restarted, String> {
+        let started = std::time::Instant::now();
+        let (mut ready, previous) = {
+            let _ops = self.ops.lock().await;
+            let guard = self.up().await?;
+            let Sup::Up(supervisor) = &*guard else {
+                return Err("The runtime supervisor is not available.".into());
+            };
+            let previous = supervisor.status().generation;
+            supervisor.restart().await.map_err(|e| e.to_string())?;
+            (supervisor.subscribe(), previous)
+        };
+        wait_ready(&mut ready, previous, cancel, started).await
     }
 
     async fn stop(&self) -> Result<(), String> {
