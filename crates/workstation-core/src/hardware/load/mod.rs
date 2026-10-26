@@ -5,7 +5,7 @@
 
 use super::{
     GpuVendor, HardwareProfile,
-    resources::{Target, targets},
+    resources::{MAX_GPUS, Target, targets},
 };
 use crate::experiments::{Coverage, PassMetrics, Sampled, Scope};
 use nvml_wrapper::Nvml;
@@ -245,6 +245,7 @@ pub struct LoadAggregate {
     cpu: Series,
     rss: Series,
     gpus: Vec<(String, Series)>,
+    gpu_memory: Vec<(String, Series)>,
     seen: u32,
     capped: bool,
 }
@@ -289,6 +290,28 @@ impl LoadAggregate {
         self.previous = Some(sample);
     }
 
+    /// Dedicated video memory in use on one device, from the memory probe.
+    pub fn add_gpu_memory(&mut self, at: Instant, id: &str, used_bytes: Option<u64>) {
+        let Some(used) = used_bytes else { return };
+        if self.capped
+            || self.gpu_memory.len() >= MAX_GPUS && !self.gpu_memory.iter().any(|(k, _)| k == id)
+        {
+            return;
+        }
+        let index = match self.gpu_memory.iter().position(|(known, _)| known == id) {
+            Some(i) => i,
+            None => {
+                self.gpu_memory.push((id.to_string(), Series::default()));
+                self.gpu_memory.len() - 1
+            }
+        };
+        if self.gpu_memory[index].1.count < MAX_LOAD_SAMPLES {
+            self.gpu_memory[index].1.add(at, used as f64);
+        } else {
+            self.capped = true;
+        }
+    }
+
     /// Write what was measured into `metrics`; anything not measured is left as it was.
     pub fn apply(&self, metrics: &mut PassMetrics) {
         metrics.cpu_utilization_percent = self.cpu.finish(Scope::System, self.capped);
@@ -297,6 +320,11 @@ impl LoadAggregate {
         // rule must not be fooled by on a multi-GPU machine.
         metrics.gpu_utilization_percent = self
             .gpus
+            .iter()
+            .filter_map(|(_, s)| s.finish(Scope::Device, self.capped))
+            .max_by(|a, b| a.peak.total_cmp(&b.peak));
+        metrics.gpu_memory_bytes = self
+            .gpu_memory
             .iter()
             .filter_map(|(_, s)| s.finish(Scope::Device, self.capped))
             .max_by(|a, b| a.peak.total_cmp(&b.peak));
