@@ -25,6 +25,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Managed runtime supervisor](03-development/runtime-supervisor.md) | Lifecycle, identity-checked readiness, bounded logs, process groups, crash reclaim |
 | 03 | [llama.cpp HTTP client](03-development/llamacpp-client.md) | Loopback-only readiness, props/slots/metrics, bounded streaming chat |
 | 03 | [Developer exports](03-development/developer-exports.md) | Continue.dev, Zed, OpenCode and systemd --user text generators |
+| 03 | [Managed runtime in the interface](03-development/managed-runtime-ui.md) | Runtimes card: install, profiles, start/stop, logs, shutdown |
 | 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
 | 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection, merged-file split markers, validation evidence, and limits |
 | 03 | [GGUF fit scenarios](03-development/gguf-fit.md) | Local declarations with explicit settings, assumptions, and unknown compatibility |
