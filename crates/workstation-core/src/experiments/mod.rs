@@ -180,6 +180,9 @@ pub struct PassMetrics {
     /// CPU time of the owned process group during the pass.
     pub process_cpu_ms: Option<u64>,
     pub offloaded_layers: Option<u32>,
+    /// Model memory the runtime reports as held in system RAM (not the process's resident
+    /// size, which also counts mapped files and the runtime itself), in bytes.
+    pub model_ram_bytes: Option<u64>,
     /// Time from unload to ready, for cold-load passes.
     pub load_ms: Option<f64>,
 }

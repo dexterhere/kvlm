@@ -2,6 +2,7 @@
 //! GTK-independent domain and services. Planned modules contain no operational stubs.
 
 pub mod db;
+pub mod diagnostics;
 pub mod experiments;
 pub mod export;
 pub mod fit;
