@@ -57,7 +57,17 @@ pub fn start(
         while let Some(AttachedCommand::Check { id, engine, port }) = inbox.recv().await {
             let events = events.clone();
             tokio::spawn(async move {
-                let found = check(engine, port).await;
+                // The window closing closes the events channel; stop asking then.
+                let closed = async {
+                    // ponytail: poll the flag; a notifier is not worth a dependency for a card.
+                    while !events.is_closed() {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                };
+                let found = tokio::select! {
+                    found = check(engine, port) => found,
+                    () = closed => return,
+                };
                 let _ = events
                     .send(AttachedEvent::Checked { id, engine, found })
                     .await;

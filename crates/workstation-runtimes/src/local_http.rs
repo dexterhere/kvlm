@@ -114,12 +114,35 @@ impl LoopbackClient {
     }
 }
 
-/// Strip control characters and cut a server-supplied label to a displayable length.
+/// Characters that must never reach the screen from a server-supplied label: controls plus
+/// the Unicode line separators and bidirectional controls, which can start a new line or
+/// reorder the text around them.
+pub fn display_unsafe(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+        )
+}
+
+/// Strip unsafe characters and cut a server-supplied label to a displayable length.
 pub(crate) fn clean(text: &str, max_chars: usize) -> String {
     text.chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !display_unsafe(*c))
         .take(max_chars)
         .collect::<String>()
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_separators_and_bidi_controls_are_removed_from_labels() {
+        assert_eq!(clean("a\u{2028}b\u{202E}c\u{1b}d\u{2066}e", 50), "abcde");
+        assert_eq!(clean("  spaced  ", 50), "spaced");
+        assert_eq!(clean("abcdef", 3), "abc");
+    }
 }

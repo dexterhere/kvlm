@@ -75,20 +75,45 @@ const KNOWN: [(&str, Field); 6] = [
     ("vllm:generation_tokens_total", Field::Generation),
 ];
 
+/// Split one exposition line into its series name and the text after the labels. Labels may
+/// contain spaces, braces and escaped quotes inside quoted values.
+fn split_series(line: &str) -> Option<(&str, &str)> {
+    let name_end = line.find(|c: char| c == '{' || c.is_whitespace())?;
+    let (name, rest) = line.split_at(name_end);
+    if !rest.starts_with('{') {
+        return Some((name, rest));
+    }
+    let (mut quoted, mut escaped) = (false, false);
+    for (index, c) in rest.char_indices() {
+        match (quoted, escaped, c) {
+            (_, true, _) => escaped = false,
+            (true, false, '\\') => escaped = true,
+            (_, false, '"') => quoted = !quoted,
+            (false, false, '}') => return Some((name, &rest[index + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Parse the exposition text. Only the names above are read; series that differ by label
 /// (one per model or engine) are summed, except the cache gauge, where the highest wins.
-/// Non-finite and negative values are ignored.
-pub fn parse_metrics(text: &str) -> Metrics {
+/// Non-finite and negative values are ignored, a cache fraction outside 0 to 1 is ignored,
+/// and a sum that overflows is not reported. A body with more lines than the cap is refused
+/// rather than read partly, because a partial sum would pass for a total.
+pub fn parse_metrics(text: &str) -> Result<Metrics, LocalError> {
+    if text.lines().take(MAX_METRIC_LINES + 1).count() > MAX_METRIC_LINES {
+        return Err(LocalError::TooLarge);
+    }
     let mut sums: HashMap<&'static str, f64> = HashMap::new();
     let mut seen: HashMap<&'static str, Field> = HashMap::new();
-    for line in text.lines().take(MAX_METRIC_LINES) {
+    for line in text.lines() {
         if line.starts_with('#') {
             continue;
         }
-        let Some((series, rest)) = line.split_once(char::is_whitespace) else {
+        let Some((name, rest)) = split_series(line) else {
             continue;
         };
-        let name = series.split('{').next().unwrap_or(series);
         let Some((known, field)) = KNOWN.iter().find(|(n, _)| *n == name) else {
             continue;
         };
@@ -97,6 +122,7 @@ pub fn parse_metrics(text: &str) -> Metrics {
             .next()
             .and_then(|v| v.parse::<f64>().ok())
             .filter(|v| v.is_finite() && *v >= 0.0)
+            .filter(|v| !matches!(field, Field::Kv) || *v <= 1.0)
         else {
             continue;
         };
@@ -109,22 +135,22 @@ pub fn parse_metrics(text: &str) -> Metrics {
     }
     let mut metrics = Metrics::default();
     for (name, field) in seen {
-        let value = sums.get(name).copied();
+        let Some(value) = sums.get(name).copied().filter(|v| v.is_finite()) else {
+            continue;
+        };
         match field {
-            Field::Running => metrics.requests_running = value,
-            Field::Waiting => metrics.requests_waiting = value,
+            Field::Running => metrics.requests_running = Some(value),
+            Field::Waiting => metrics.requests_waiting = Some(value),
             // Two names can feed one field; keep the highest.
             Field::Kv => {
-                metrics.kv_cache_usage = match (metrics.kv_cache_usage, value) {
-                    (Some(a), Some(b)) => Some(a.max(b)),
-                    (a, b) => a.or(b),
-                }
+                metrics.kv_cache_usage =
+                    Some(metrics.kv_cache_usage.map_or(value, |a| a.max(value)))
             }
-            Field::Prompt => metrics.prompt_tokens_total = value,
-            Field::Generation => metrics.generation_tokens_total = value,
+            Field::Prompt => metrics.prompt_tokens_total = Some(value),
+            Field::Generation => metrics.generation_tokens_total = Some(value),
         }
     }
-    metrics
+    Ok(metrics)
 }
 
 pub struct VllmAdapter {
@@ -164,7 +190,7 @@ impl VllmAdapter {
         Discovery {
             healthy: health.map(|_| ()),
             models,
-            metrics: metrics.map(|body| parse_metrics(&String::from_utf8_lossy(&body))),
+            metrics: metrics.and_then(|body| parse_metrics(&String::from_utf8_lossy(&body))),
             truncated,
         }
     }

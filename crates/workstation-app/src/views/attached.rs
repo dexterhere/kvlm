@@ -9,6 +9,7 @@ use adw::prelude::*;
 use tokio::sync::mpsc;
 use workstation_runtimes::{
     lmstudio::{self, ModelState},
+    local_http::display_unsafe,
     vllm,
 };
 
@@ -29,11 +30,25 @@ pub struct Attached {
     cards: Vec<Rc<Card>>,
 }
 
+/// Longest text a card shows. Model lines are budgeted separately (`MAX_SHOWN`), so the
+/// status lines that follow them always fit.
+const MAX_TEXT: usize = 8000;
+/// Models listed on a card; the rest are counted, not dropped silently.
+const MAX_SHOWN: usize = 20;
+
 fn clean(text: &str) -> String {
     text.chars()
-        .filter(|c| !c.is_control() || *c == '\n')
-        .take(2000)
+        .filter(|c| *c == '\n' || !display_unsafe(*c))
+        .take(MAX_TEXT)
         .collect()
+}
+
+/// The first `MAX_SHOWN` lines, then how many were left out.
+fn shown<T>(items: &[T], line: impl Fn(&T) -> String, out: &mut Vec<String>) {
+    out.extend(items.iter().take(MAX_SHOWN).map(line));
+    if items.len() > MAX_SHOWN {
+        out.push(format!("…and {} more.", items.len() - MAX_SHOWN));
+    }
 }
 
 /// What an LM Studio check found, in plain words.
@@ -55,25 +70,25 @@ pub(super) fn lmstudio_text(found: &Result<lmstudio::Discovery, String>) -> Stri
             ""
         }
     )];
-    for model in &discovery.models {
-        let state = match model.state {
-            ModelState::Loaded => "loaded",
-            ModelState::NotLoaded => "not loaded",
-            ModelState::Unknown => "load state unknown",
-        };
-        let mut facts = vec![state.to_string()];
-        facts.extend(model.quantization.clone());
-        if let Some(ctx) = model.loaded_context_length {
-            facts.push(format!("{ctx} tokens loaded context"));
-        } else if let Some(max) = model.max_context_length {
-            facts.push(format!("up to {max} tokens context"));
-        }
-        lines.push(format!(
-            "\u{2022} {} \u{b7} {}",
-            model.id,
-            facts.join(" \u{b7} ")
-        ));
-    }
+    shown(
+        &discovery.models,
+        |model| {
+            let state = match model.state {
+                ModelState::Loaded => "loaded",
+                ModelState::NotLoaded => "not loaded",
+                ModelState::Unknown => "load state unknown",
+            };
+            let mut facts = vec![state.to_string()];
+            facts.extend(model.quantization.clone());
+            if let Some(ctx) = model.loaded_context_length {
+                facts.push(format!("{ctx} tokens loaded context"));
+            } else if let Some(max) = model.max_context_length {
+                facts.push(format!("up to {max} tokens context"));
+            }
+            format!("\u{2022} {} \u{b7} {}", model.id, facts.join(" \u{b7} "))
+        },
+        &mut lines,
+    );
     if discovery.truncated {
         lines.push(format!(
             "Only the first {} are shown.",
@@ -96,16 +111,20 @@ pub(super) fn vllm_text(found: &vllm::Discovery) -> String {
     match &found.models {
         Ok(models) if models.is_empty() => lines.push("Models: none listed".into()),
         Ok(models) => {
-            for model in models {
-                lines.push(format!(
-                    "\u{2022} {}{}",
-                    model.id,
-                    model
-                        .max_model_len
-                        .map(|n| format!(" \u{b7} up to {n} tokens"))
-                        .unwrap_or_default()
-                ));
-            }
+            shown(
+                models,
+                |model| {
+                    format!(
+                        "\u{2022} {}{}",
+                        model.id,
+                        model
+                            .max_model_len
+                            .map(|n| format!(" \u{b7} up to {n} tokens"))
+                            .unwrap_or_default()
+                    )
+                },
+                &mut lines,
+            );
             if found.truncated {
                 lines.push(format!("Only the first {} are shown.", vllm::MAX_MODELS));
             }
@@ -226,6 +245,14 @@ impl Attached {
                 card.check.set_sensitive(false);
                 card.result.set_text("Checking…");
             });
+            let weak = Rc::downgrade(&card);
+            card.port.connect_value_changed(move |_| {
+                // An answer for the old port must not appear under the new one.
+                let Some(card) = weak.upgrade() else { return };
+                *card.pending.borrow_mut() = None;
+                card.check.set_sensitive(true);
+                card.result.set_text("Not checked yet.");
+            });
             cards.push(card);
         }
         Self { widget, cards }
@@ -278,6 +305,27 @@ mod tests {
             lmstudio_text(&Err("Nothing answered on that port.".into())),
             "Nothing answered on that port."
         );
+    }
+
+    #[test]
+    fn many_models_do_not_push_status_lines_off_the_card() {
+        let models = (0..30)
+            .map(|i| vllm::Model {
+                id: format!("{i}-{}", "x".repeat(190)),
+                max_model_len: None,
+            })
+            .collect();
+        let text = clean(&vllm_text(&vllm::Discovery {
+            healthy: Ok(()),
+            models: Ok(models),
+            metrics: Err(LocalError::Status(404)),
+            truncated: true,
+        }));
+        assert!(text.contains("…and 10 more."));
+        assert!(text.contains("Metrics: The runtime answered with status 404."));
+        assert!(text.contains("Only the first 100 are shown."));
+        assert!(!text.contains('\u{2028}'));
+        assert_eq!(clean("a\u{2028}b\u{202E}c"), "abc");
     }
 
     #[test]

@@ -26,10 +26,13 @@ server did not report reads "not reported".
   oversize body is refused.
 - Errors are typed and carry no response text. A 401 or 403 reads "asks for an API key"; keys are not stored for these
   runtimes.
-- Only known JSON fields and known metric names are read. Model ids and labels are stripped of control characters and cut
-  to 200 characters; lists are capped (1000 for LM Studio, 100 for vLLM) and reported as truncated.
+- Only known JSON fields and known metric names are read. Model ids and labels lose control characters, Unicode line
+  separators and bidirectional controls and are cut to 200 characters; lists are capped (1000 for LM Studio, 100 for
+  vLLM) and reported as truncated; a card shows the first 20 models and counts the rest, so status lines always fit.
 - A metric series that differs only by label is summed (counters, request gauges) or its highest value is used (cache
-  use). Non-finite and negative values are ignored.
+  use). Non-finite and negative values are ignored, as is a cache fraction outside 0 to 1 and a sum that overflows. Label values may
+  contain spaces, braces and escaped quotes. A metrics body with more than 20,000 lines is refused instead of read partly,
+  because a partial sum would pass for a total.
 
 ## What is not done
 
@@ -37,6 +40,7 @@ server did not report reads "not reported".
   loopback port does not prove local execution (the runtime may route a request elsewhere, and an unauthenticated port
   trusts every local user), so a benchmark would first need an explicit "local execution cannot be proven" confirmation
   in the interface. That flow is not built yet.
+- Changing the port discards any pending answer for the old port, and closing the window stops checks in flight.
 - **No periodic metrics scraping.** A user presses Check again to refresh; this keeps "never in the background" true.
 - Neither runtime was available on the reference machine, so the adapters are covered by tests against local mock
   servers shaped like the documented responses, not by a live run. Response shapes can differ between releases; unknown

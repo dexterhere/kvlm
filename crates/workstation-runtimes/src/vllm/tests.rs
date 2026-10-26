@@ -30,7 +30,7 @@ vllm:num_requests_waiting{engine=\"2\"} -4
 
 #[test]
 fn only_known_names_are_read_labels_are_summed_and_bad_values_ignored() {
-    let m = parse_metrics(SAMPLE);
+    let m = parse_metrics(SAMPLE).unwrap();
     assert_eq!(m.requests_running, Some(2.0));
     assert_eq!(
         m.requests_waiting,
@@ -42,14 +42,14 @@ fn only_known_names_are_read_labels_are_summed_and_bad_values_ignored() {
     assert_eq!(m.generation_tokens_total, Some(77.0));
     assert_eq!(
         parse_metrics("vllm:num_requests_running abc\n"),
-        Metrics::default()
+        Ok(Metrics::default())
     );
-    assert_eq!(parse_metrics(""), Metrics::default());
+    assert_eq!(parse_metrics(""), Ok(Metrics::default()));
 }
 
 #[test]
 fn the_older_cache_gauge_name_is_read_and_the_highest_value_wins() {
-    let m = parse_metrics("vllm:gpu_cache_usage_perc 0.4\nvllm:kv_cache_usage_perc 0.1\n");
+    let m = parse_metrics("vllm:gpu_cache_usage_perc 0.4\nvllm:kv_cache_usage_perc 0.1\n").unwrap();
     assert_eq!(m.kv_cache_usage, Some(0.4));
 }
 
@@ -108,4 +108,39 @@ async fn a_server_without_metrics_still_lists_models() {
     let found = VllmAdapter::new(server.port()).unwrap().discover().await;
     assert_eq!(found.metrics, Err(LocalError::Status(404)));
     assert_eq!(found.models.unwrap().len(), 1);
+}
+
+#[test]
+fn labels_with_spaces_braces_and_escaped_quotes_do_not_shift_the_value() {
+    let text = concat!(
+        "vllm:num_requests_running{model_name=\"my 0 model\"} 7\n",
+        "vllm:num_requests_waiting{model_name=\"a}b \\\" 9\"} 3 1700000000\n",
+        "vllm:prompt_tokens_total 1e3\n",
+    );
+    let m = parse_metrics(text).unwrap();
+    assert_eq!(m.requests_running, Some(7.0));
+    assert_eq!(m.requests_waiting, Some(3.0));
+    assert_eq!(m.prompt_tokens_total, Some(1000.0));
+    assert_eq!(
+        parse_metrics("vllm:num_requests_running{unterminated 5\n"),
+        Ok(Metrics::default())
+    );
+}
+
+#[test]
+fn a_body_over_the_line_cap_is_refused_not_read_partly() {
+    let mut text = String::from("vllm:num_requests_running 0\n");
+    text.push_str(&"# filler\n".repeat(MAX_METRIC_LINES));
+    text.push_str("vllm:num_requests_running 7\n");
+    assert_eq!(parse_metrics(&text), Err(LocalError::TooLarge));
+}
+
+#[test]
+fn overflowing_sums_and_impossible_cache_fractions_are_not_reported() {
+    let m = parse_metrics(
+        "vllm:prompt_tokens_total{e=\"0\"} 1e308\nvllm:prompt_tokens_total{e=\"1\"} 1e308\nvllm:kv_cache_usage_perc 1e308\nvllm:gpu_cache_usage_perc 1.5\n",
+    )
+    .unwrap();
+    assert_eq!(m.prompt_tokens_total, None);
+    assert_eq!(m.kv_cache_usage, None);
 }

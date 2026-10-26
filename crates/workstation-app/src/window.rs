@@ -148,20 +148,24 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     catalog.load_downloads();
     let closing_events = events.clone();
     let closing_lab = lab_events.clone();
+    let closing_attached = attached_events.clone();
     let closing_page = lab_page.clone();
     window.connect_close_request(move |_| {
         closing_page.cancel();
         closing_events.close();
         closing_lab.close();
+        closing_attached.close();
         glib::Propagation::Proceed
     });
     let shutdown_events = events.clone();
     let shutdown_lab = lab_events.clone();
+    let shutdown_attached = attached_events.clone();
     let shutdown_page = lab_page.clone();
     app.connect_shutdown(move |_| {
         shutdown_page.cancel();
         shutdown_events.close();
         shutdown_lab.close();
+        shutdown_attached.close();
     });
     glib::MainContext::default().spawn_local(async move {
         while let Ok(event) = attached_events.recv().await {
