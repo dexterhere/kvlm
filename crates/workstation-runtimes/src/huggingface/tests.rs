@@ -767,6 +767,14 @@ async fn api_listing_calls_never_carry_the_token_and_no_token_means_no_header() 
     with.search("", None).await.unwrap();
     assert_eq!(authorization(&server.last()), None);
 
+    // A repository listing is a different API call and carries no token either.
+    server
+        .client_with(slot_with("hf_secret123"))
+        .release("owner/name", None)
+        .await
+        .ok();
+    assert_eq!(authorization(&server.last()), None);
+
     let without = server.client();
     without
         .fetch_prefix("owner/name", REV, FILE, 64)

@@ -72,7 +72,10 @@ fn saving_clears_the_box_and_answers_update_the_row() {
             name: "some\nbody".into(),
         }),
     });
-    assert!(access.row.subtitle().contains("some\nbody") || access.row.subtitle().contains("some"));
+    assert!(
+        access.row.subtitle().contains("some?body"),
+        "control characters are replaced"
+    );
     access.buttons[3].emit_clicked();
     assert!(matches!(
         pump(&mut rx),

@@ -54,6 +54,16 @@ copies while a call is in flight; this is a known limit of those libraries.
   header.
 - Token checks run only when the user presses Check. Saving does not validate.
 
+## Known limits
+
+- A request already on the wire when the token is removed still carries it. It goes to
+  huggingface.co only. Removing the token pauses a running download so it does not keep going
+  on that authorisation.
+- A keyring write that times out may still have been committed. The message says saving did
+  not finish rather than that nothing was stored.
+- The HTTP library and GTK hold ordinary copies of the token while a request or entry is
+  active; only the application's own `Token` is zeroized.
+
 ## Consequences
 
 - Without a keyring, gated downloads still work for a session if the user pastes a token

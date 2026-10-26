@@ -358,7 +358,7 @@ impl CatalogBackend for LiveCatalog {
                 .await
                 .map(|()| TokenOutcome::Saved)
                 .map_err(|error| {
-                    format!("The token is in use for this session but was not saved. {error}")
+                    format!("The token is in use for this session, but saving it to the keyring did not finish. {error} Press Use saved later to see whether it was stored.")
                 })
         })
     }
@@ -755,6 +755,12 @@ where
                     if let Some(sender) = &download_stop { let _ = sender.send(Some(stop)); }
                 }
                 CoreCommand::SaveToken { .. } | CoreCommand::LoadToken { .. } | CoreCommand::ClearToken { .. } | CoreCommand::CheckToken { .. } => {
+                    // A running transfer was authorised by the token being removed: pause it.
+                    if matches!(command, CoreCommand::ClearToken { .. })
+                        && let Some(sender) = &download_stop
+                    {
+                        let _ = sender.send(Some(DownloadStop::Pause));
+                    }
                     if let Some((id, work)) = token_job(&catalog, command) {
                         if token_jobs.is_empty() {
                             token_jobs.spawn(guarded(id, token_failed, async move {
