@@ -30,6 +30,12 @@ pub(crate) enum Reply {
         headers: Vec<(String, String)>,
     },
     Redirect(String),
+    /// Raw bytes with explicit status and headers (ranged file replies).
+    Bytes {
+        code: u16,
+        body: Vec<u8>,
+        headers: Vec<(String, String)>,
+    },
     /// Declares 5 MiB, sends a few bytes, then closes.
     DeclaredOversize,
     /// No length header; streams more than the 4 MiB cap, then closes.
@@ -57,6 +63,17 @@ pub(crate) fn with_header(code: u16, name: &str, value: &str) -> Reply {
     }
 }
 
+pub(crate) fn ranged(first: u64, body: &[u8], total: u64) -> Reply {
+    Reply::Bytes {
+        code: 206,
+        body: body.to_vec(),
+        headers: vec![(
+            "Content-Range".to_owned(),
+            format!("bytes {first}-{}/{total}", first + body.len() as u64 - 1),
+        )],
+    }
+}
+
 pub(crate) fn route(line: &str, reply: Reply) -> (String, Reply) {
     (line.to_owned(), reply)
 }
@@ -64,6 +81,7 @@ pub(crate) fn route(line: &str, reply: Reply) -> (String, Reply) {
 fn reason(code: u16) -> &'static str {
     match code {
         200 => "OK",
+        206 => "Partial Content",
         302 => "Found",
         401 => "Unauthorized",
         403 => "Forbidden",
@@ -97,6 +115,14 @@ impl Reply {
             }
             Self::Status { code, headers } => {
                 stream.write_all(head(*code, headers, Some(0)).as_bytes())
+            }
+            Self::Bytes {
+                code,
+                body,
+                headers,
+            } => {
+                stream.write_all(head(*code, headers, Some(body.len())).as_bytes())?;
+                stream.write_all(body)
             }
             Self::Redirect(location) => {
                 let headers = [("Location".to_owned(), location.clone())];

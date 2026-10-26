@@ -466,3 +466,223 @@ async fn release_with_hostile_filenames_drops_them() {
 fn production_client_builds_with_tls_roots() {
     assert!(HuggingFaceClient::new().is_ok());
 }
+
+const FILE_LINE: &str =
+    "GET /owner/name/resolve/0123456789abcdef0123456789abcdef01234567/dir/m-Q4_K_M.gguf HTTP/1.1";
+const FILE: &str = "dir/m-Q4_K_M.gguf";
+
+fn header_bytes(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i % 251) as u8).collect()
+}
+
+#[tokio::test]
+async fn prefix_is_one_ranged_request_for_the_expected_file() {
+    let body = header_bytes(1000);
+    let reply = ranged(0, &body, 1000);
+    let server = Server::start(|_| vec![route(FILE_LINE, reply)]);
+    let got = server
+        .client()
+        .fetch_prefix("owner/name", REV, FILE, 1000)
+        .await
+        .unwrap();
+    assert_eq!(got, body);
+    let sent = server.last();
+    assert!(
+        sent.headers.iter().any(|h| h == "range: bytes=0-999"),
+        "{:?}",
+        sent.headers
+    );
+    assert!(
+        sent.headers
+            .iter()
+            .any(|h| h == "accept-encoding: identity")
+    );
+    assert!(!sent.headers.iter().any(|h| h.starts_with("authorization")));
+}
+
+#[tokio::test]
+async fn prefix_of_a_huge_file_is_capped_and_checked_against_the_total() {
+    let total = 5_000_000_000u64;
+    let body = header_bytes(HEADER_LIMIT as usize);
+    let reply = ranged(0, &body, total);
+    let server = Server::start(|_| vec![route(FILE_LINE, reply)]);
+    let got = server
+        .client()
+        .fetch_prefix("owner/name", REV, FILE, total)
+        .await
+        .unwrap();
+    assert_eq!(got.len() as u64, HEADER_LIMIT);
+    assert!(
+        server
+            .last()
+            .headers
+            .iter()
+            .any(|h| h == "range: bytes=0-16777215")
+    );
+}
+
+#[tokio::test]
+async fn prefix_rejects_a_different_total_or_range_or_a_short_body() {
+    let body = header_bytes(1000);
+    for reply in [
+        ranged(0, &body, 1001),
+        ranged(10, &body, 1010),
+        ranged(0, &body[..500], 1000),
+        Reply::Bytes {
+            code: 206,
+            body: body.clone(),
+            headers: vec![],
+        },
+    ] {
+        let server = Server::start(|_| vec![route(FILE_LINE, reply)]);
+        let error = server
+            .client()
+            .fetch_prefix("owner/name", REV, FILE, 1000)
+            .await;
+        assert_eq!(error, Err(HfError::BadResponse));
+    }
+}
+
+#[tokio::test]
+async fn prefix_accepts_a_full_reply_only_for_the_right_length() {
+    let body = header_bytes(1000);
+    let ok = Reply::Bytes {
+        code: 200,
+        body: body.clone(),
+        headers: vec![],
+    };
+    let server = Server::start(|_| vec![route(FILE_LINE, ok)]);
+    assert_eq!(
+        server
+            .client()
+            .fetch_prefix("owner/name", REV, FILE, 1000)
+            .await
+            .unwrap(),
+        body
+    );
+    let server = Server::start(|_| {
+        vec![route(
+            FILE_LINE,
+            Reply::Bytes {
+                code: 200,
+                body: body.clone(),
+                headers: vec![],
+            },
+        )]
+    });
+    assert_eq!(
+        server
+            .client()
+            .fetch_prefix("owner/name", REV, FILE, 999)
+            .await,
+        Err(HfError::BadResponse)
+    );
+}
+
+#[tokio::test]
+async fn prefix_follows_same_origin_redirects_but_not_to_other_origins_or_loops() {
+    let body = header_bytes(64);
+    let reply = ranged(0, &body, 64);
+    let server = Server::start(|_| {
+        vec![
+            route(FILE_LINE, Reply::Redirect("/cdn/blob?sig=secret".into())),
+            route("GET /cdn/blob?sig=secret HTTP/1.1", reply),
+        ]
+    });
+    assert_eq!(
+        server
+            .client()
+            .fetch_prefix("owner/name", REV, FILE, 64)
+            .await
+            .unwrap(),
+        body
+    );
+
+    let elsewhere = Server::start(|_| vec![route("GET /x HTTP/1.1", ranged(0, &body, 64))]);
+    let target = format!("http://127.0.0.1:{}/x", elsewhere.port());
+    let server = Server::start(|_| vec![route(FILE_LINE, Reply::Redirect(target))]);
+    assert_eq!(
+        server
+            .client()
+            .fetch_prefix("owner/name", REV, FILE, 64)
+            .await,
+        Err(HfError::BadResponse)
+    );
+    assert!(
+        elsewhere.lines().is_empty(),
+        "the foreign origin was contacted"
+    );
+
+    let server = Server::start(|_| {
+        vec![route(
+            FILE_LINE,
+            Reply::Redirect(FILE_LINE.split(' ').nth(1).unwrap().into()),
+        )]
+    });
+    assert_eq!(
+        server
+            .client()
+            .fetch_prefix("owner/name", REV, FILE, 64)
+            .await,
+        Err(HfError::BadResponse)
+    );
+    assert_eq!(server.lines().len(), MAX_HOPS + 1);
+}
+
+#[tokio::test]
+async fn prefix_maps_statuses_and_rejects_invalid_identities_unsent() {
+    for (code, expected) in [
+        (401, HfError::AccessRequired),
+        (404, HfError::NotFound),
+        (500, HfError::BadResponse),
+    ] {
+        let server = Server::start(|_| vec![route(FILE_LINE, status(code))]);
+        assert_eq!(
+            server
+                .client()
+                .fetch_prefix("owner/name", REV, FILE, 64)
+                .await,
+            Err(expected)
+        );
+    }
+    let server = Server::start(|_| vec![]);
+    let client = server.client();
+    for (repo, rev, name, size) in [
+        ("bad", REV, FILE, 64),
+        ("owner/name", "main", FILE, 64),
+        ("owner/name", REV, "../x.gguf", 64),
+        ("owner/name", REV, FILE, 0),
+    ] {
+        assert_eq!(
+            client.fetch_prefix(repo, rev, name, size).await,
+            Err(HfError::InvalidRequest)
+        );
+    }
+    assert!(server.lines().is_empty());
+}
+
+#[test]
+fn production_redirects_stay_on_https_hugging_face_hosts() {
+    let client = HuggingFaceClient::new().unwrap();
+    for ok in [
+        "https://cdn-lfs.hf.co/repos/x?sig=1",
+        "https://cas-bridge.xethub.hf.co/a",
+        "https://huggingface.co/a",
+        "https://cdn-lfs-us-1.huggingface.co:443/a",
+    ] {
+        assert!(client.redirect_allowed(&Url::parse(ok).unwrap()), "{ok}");
+    }
+    for bad in [
+        "http://hf.co/a",
+        "https://evil.com/a",
+        "https://huggingface.co.evil.com/a",
+        "https://nothf.co/a",
+        "https://127.0.0.1/a",
+        "https://[::1]/a",
+        "https://hf.co:8443/a",
+        "https://user:pass@hf.co/a",
+        "https://localhost/a",
+    ] {
+        assert!(!client.redirect_allowed(&Url::parse(bad).unwrap()), "{bad}");
+    }
+}
