@@ -23,6 +23,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [GGUF fit scenarios](03-development/gguf-fit.md) | Local declarations with explicit settings, assumptions, and unknown compatibility |
 | 03 | [Desktop CPU/CUDA fit workflow](03-development/desktop-cpu-fit.md) | File selection, explicit inputs, fresh RAM, asynchronous estimates, and validation limits |
 | 04 | [Milestones](04-roadmap/milestones.md) | Current state and M0–M4 delivery order |
+| 04 | [M1 plan](04-roadmap/m1/Planned.md) | Model Explorer, Hugging Face catalog, deduplication, downloads: [implementation](04-roadmap/m1/Implementation.md) and [diagrams](04-roadmap/m1/Diagrams.md) |
 | 04 | [Next feature: hardware discovery](04-roadmap/next-feature-hardware-discovery.md) | Implementation sequence, scope, and acceptance checks for M0 Step 2 |
 | 05 | [Decisions](05-decisions/README.md) | How to record architecture decisions |
 | 05 | [Foundation decision](05-decisions/0001-workspace-foundation.md) | Accepted setup choices |
