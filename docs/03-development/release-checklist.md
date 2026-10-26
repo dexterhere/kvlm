@@ -15,7 +15,7 @@ Releases are cut by the owner. Nothing here is automated, and no step may be mar
 4. The application ID decision in [ADR 0019](../05-decisions/0019-application-id.md) is made and applied
    with `scripts/rename_app_id.py`. A store or Flathub submission needs a namespace the owner controls.
 5. Hardware validation records exist for the machines listed in
-   [Hardware validation](hardware-validation.md), or the release notes say which are missing.
+   [Hardware validation procedures](hardware-validation-procedures.md), or the release notes say which are missing.
 6. Manual passes are recorded: GNOME session, screen reader, large text, reduced motion
    ([accessibility](accessibility.md)).
 7. Security and conduct contact addresses in `SECURITY.md` and `CODE_OF_CONDUCT.md` are real and monitored.

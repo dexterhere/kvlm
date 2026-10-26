@@ -11,6 +11,18 @@ mod views;
 mod window;
 
 fn main() -> gtk::glib::ExitCode {
+    // Headless: print what the probes found, without device identifiers, then exit.
+    if std::env::args().nth(1).as_deref() == Some("--report-hardware") {
+        let profile = workstation_core::hardware::HardwareProfile::detect();
+        print!(
+            "{}",
+            workstation_core::hardware::report::redacted_report(
+                &profile,
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+        return gtk::glib::ExitCode::SUCCESS;
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

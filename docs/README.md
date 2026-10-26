@@ -29,6 +29,8 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [M3 acceptance evidence](03-development/m3-acceptance.md) | Live cold run, controlled follow-up and comparison through the production lab path; what is not claimed |
 | 03 | [Attached runtimes](03-development/attached-runtimes.md) | LM Studio and vLLM read-only discovery, limits, what is not done |
 | 03 | [Keyboard and accessibility](03-development/accessibility.md) | Shortcuts, labels, minimum width, the opt-in audit, manual passes |
+| 03 | [Hardware validation procedures](03-development/hardware-validation-procedures.md) | Machines still needed, exact commands and the evidence record |
+| 03 | [Beta status](03-development/beta-status.md) | Implemented versus validated, owner-only items, known limits |
 | 03 | [Release checklist](03-development/release-checklist.md) | Owner-run steps before tagging, and how the opt-in update check behaves |
 | 03 | [Managed runtime in the interface](03-development/managed-runtime-ui.md) | Runtimes card: install, profiles, start/stop, logs, shutdown |
 | 03 | [Benchmark Lab store](03-development/benchmark-lab-store.md) | Experiment, pass and finding records, one-running rule, pruning, summaries |
