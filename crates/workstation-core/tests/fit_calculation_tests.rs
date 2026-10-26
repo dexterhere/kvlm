@@ -47,6 +47,34 @@ fn supported(
 }
 
 #[test]
+fn conditional_memory_policy_never_promotes_runtime_compatibility() {
+    let mut scenario = config();
+    for (context, expected) in [
+        (8192, FitClass::Comfortable),
+        (32768, FitClass::Constrained),
+        (131072, FitClass::NotRecommended),
+    ] {
+        scenario.context_tokens = context;
+        let result =
+            assess_fit(&model(), &scenario, &gpu(), RuntimeCompatibility::Unknown).unwrap();
+        assert_eq!(result.memory_class(), Some(expected));
+        assert_ne!(result.class, FitClass::Comfortable);
+        assert_ne!(result.class, FitClass::Constrained);
+    }
+    let result = assess_fit(
+        &ModelInput {
+            artifact_bytes: None,
+            transformer: None,
+        },
+        &scenario,
+        &gpu(),
+        RuntimeCompatibility::Unknown,
+    )
+    .unwrap();
+    assert_eq!(result.memory_class(), None);
+}
+
+#[test]
 fn gqa_four_part_estimate_changes_class_at_longer_context() {
     let mut config = config();
     let short = supported(&model(), &config, &gpu());

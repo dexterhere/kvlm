@@ -23,13 +23,13 @@ pub struct GgufMetadata {
     pub tensor_bytes: u64,
     pub alignment: u32,
     pub architecture: Option<String>,
-    pub llama: Option<LlamaMetadata>,
+    pub attention: Option<AttentionMetadata>,
     pub warnings: Vec<LayoutWarning>,
 }
 
 /// Typed declarations only. Missing fields are not derived from other values.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct LlamaMetadata {
+pub struct AttentionMetadata {
     pub context_length: Option<u32>,
     pub block_count: Option<u32>,
     pub embedding_length: Option<u32>,
@@ -100,7 +100,7 @@ pub fn inspect_file(path: &Path) -> Result<GgufMetadata, GgufError> {
 
 /// Reset a seekable reader to its start and inspect only header/metadata/directory.
 /// The reader must report its real length. Gaps and trailing data are permitted;
-/// explicit split metadata, nested arrays and unrecognized tensor types are rejected.
+/// Shards, inconsistent split markers, nested arrays and unknown tensor types fail.
 pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, GgufError> {
     let file_bytes = reader.seek(SeekFrom::End(0))?;
     reader.seek(SeekFrom::Start(0))?;
@@ -125,20 +125,51 @@ pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, Gg
     let mut keys = HashSet::new();
     let mut architecture = None;
     let mut alignment = 32;
-    let mut llama = LlamaMetadata::default();
+    let mut llama = AttentionMetadata::default();
+    let mut qwen2 = AttentionMetadata::default();
     let mut warnings = Vec::new();
+    let (mut split_no, mut split_count, mut split_tensors) = (None, None, None);
     for _ in 0..entry_count {
         let key = input.string(256)?;
         if key.is_empty() || !keys.insert(key.clone()) {
             return Err(GgufError::Invalid("empty or duplicate metadata key"));
         }
-        if key.starts_with("split.") {
-            return Err(GgufError::Unsupported("split metadata"));
+        if key.starts_with("split.")
+            && !matches!(
+                key.as_str(),
+                "split.no" | "split.count" | "split.tensors.count"
+            )
+        {
+            return Err(GgufError::Unsupported("unknown split metadata"));
         }
         let value_type = input.u32()?;
         let value = input.value(value_type)?;
-        match key.as_str() {
-            "general.architecture" => {
+        let architecture_key = key
+            .strip_prefix("llama.")
+            .or_else(|| key.strip_prefix("qwen2."));
+        let declarations = if key.starts_with("qwen2.") {
+            &mut qwen2
+        } else {
+            &mut llama
+        };
+        match (architecture_key, key.as_str()) {
+            (_, "split.no" | "split.count") => {
+                let Value::U16(number) = value else {
+                    return Err(GgufError::Invalid("split index or count type"));
+                };
+                if key == "split.no" {
+                    split_no = Some(number);
+                } else {
+                    split_count = Some(number);
+                }
+            }
+            (_, "split.tensors.count") => {
+                let Value::I32(number) = value else {
+                    return Err(GgufError::Invalid("split tensor count type"));
+                };
+                split_tensors = Some(number);
+            }
+            (_, "general.architecture") => {
                 let Value::Text(name) = value else {
                     return Err(GgufError::Invalid("architecture type"));
                 };
@@ -147,7 +178,7 @@ pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, Gg
                 }
                 architecture = Some(name);
             }
-            "general.alignment" => {
+            (_, "general.alignment") => {
                 let Value::U32(bytes) = value else {
                     return Err(GgufError::Invalid("alignment type"));
                 };
@@ -156,14 +187,18 @@ pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, Gg
                 }
                 alignment = bytes;
             }
-            "llama.context_length" => llama.context_length = Some(positive(value)?),
-            "llama.block_count" => llama.block_count = Some(positive(value)?),
-            "llama.embedding_length" => llama.embedding_length = Some(positive(value)?),
-            "llama.attention.head_count" => llama.attention_heads = Some(positive(value)?),
-            "llama.attention.head_count_kv" => llama.kv_heads = Some(positive(value)?),
-            "llama.attention.key_length" => llama.key_length = Some(positive(value)?),
-            "llama.attention.value_length" => llama.value_length = Some(positive(value)?),
-            "general.type" => {
+            (Some("context_length"), _) => declarations.context_length = Some(positive(value)?),
+            (Some("block_count"), _) => declarations.block_count = Some(positive(value)?),
+            (Some("embedding_length"), _) => declarations.embedding_length = Some(positive(value)?),
+            (Some("attention.head_count"), _) => {
+                declarations.attention_heads = Some(positive(value)?)
+            }
+            (Some("attention.head_count_kv"), _) => declarations.kv_heads = Some(positive(value)?),
+            (Some("attention.key_length"), _) => declarations.key_length = Some(positive(value)?),
+            (Some("attention.value_length"), _) => {
+                declarations.value_length = Some(positive(value)?)
+            }
+            (_, "general.type") => {
                 let Value::Text(kind) = value else {
                     return Err(GgufError::Invalid("model type"));
                 };
@@ -171,7 +206,7 @@ pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, Gg
                     warn(&mut warnings, LayoutWarning::NonModelType);
                 }
             }
-            "llama.attention.causal" => {
+            (Some("attention.causal"), _) => {
                 let Value::Bool(causal) = value else {
                     return Err(GgufError::Invalid("causal attention type"));
                 };
@@ -181,33 +216,46 @@ pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, Gg
             }
             _ => {}
         }
-        if key.starts_with("llama.expert")
-            || key.starts_with("llama.moe_")
-            || key.starts_with("llama.attention.value_expert")
-            || key == "llama.interleave_moe_layer_step"
+        let marker = architecture_key.unwrap_or("");
+        if marker.starts_with("expert")
+            || marker.starts_with("moe_")
+            || marker.starts_with("attention.value_expert")
+            || marker == "interleave_moe_layer_step"
         {
             warn(&mut warnings, LayoutWarning::ExpertMetadata);
         }
-        if key.starts_with("llama.attention.sliding_window") {
+        if marker.starts_with("attention.sliding_window") {
             warn(&mut warnings, LayoutWarning::SlidingWindowMetadata);
         }
-        if key.starts_with("llama.ssm.")
-            || key.starts_with("llama.recurrent.")
-            || key == "llama.attention.recurrent_layers"
+        if marker.starts_with("ssm.")
+            || marker.starts_with("recurrent.")
+            || marker == "attention.recurrent_layers"
         {
             warn(&mut warnings, LayoutWarning::RecurrentMetadata);
         }
-        if key == "llama.full_attention_interval" {
+        if marker == "full_attention_interval" {
             warn(&mut warnings, LayoutWarning::HybridMetadata);
         }
-        if key.starts_with("llama.adapters.") || key.starts_with("adapter.") {
+        if marker.starts_with("adapters.") || key.starts_with("adapter.") {
             warn(&mut warnings, LayoutWarning::AdapterMetadata);
         }
-        if key == "llama.tensor_data_layout" {
+        if marker == "tensor_data_layout" {
             warn(&mut warnings, LayoutWarning::TensorLayoutMetadata);
         }
         if key.starts_with("clip.") || key.starts_with("vision.") || key.starts_with("mtp.") {
             warn(&mut warnings, LayoutWarning::AuxiliaryMetadata);
+        }
+    }
+
+    match (split_no, split_count, split_tensors) {
+        (None, None, None) => {}
+        (_, Some(2..), _) => return Err(GgufError::Unsupported("split files")),
+        // llama.cpp's merge tool retains the first shard's keys and sets count to zero.
+        (Some(0), Some(0 | 1), Some(total)) if u64::try_from(total).ok() == Some(tensor_count) => {}
+        _ => {
+            return Err(GgufError::Invalid(
+                "inconsistent or incomplete split metadata",
+            ));
         }
     }
 
@@ -274,14 +322,18 @@ pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, Gg
         }
         previous_end = end;
     }
-    let llama = (architecture.as_deref() == Some("llama")).then_some(llama);
+    let attention = match architecture.as_deref() {
+        Some("llama") => Some(llama),
+        Some("qwen2") => Some(qwen2),
+        _ => None,
+    };
     Ok(GgufMetadata {
         file_bytes,
         tensor_count,
         tensor_bytes,
         alignment,
         architecture,
-        llama,
+        attention,
         warnings,
     })
 }
@@ -319,7 +371,9 @@ fn tensor_type(kind: u32) -> Result<(u64, u64), GgufError> {
 }
 
 enum Value {
+    U16(u16),
     U32(u32),
+    I32(i32),
     Bool(bool),
     Text(String),
     Other,
@@ -380,7 +434,9 @@ impl<R: Read + Seek> Input<'_, R> {
 
     fn value(&mut self, kind: u32) -> Result<Value, GgufError> {
         match kind {
+            2 => Ok(Value::U16(u16::from_le_bytes(self.fixed()?))),
             4 => Ok(Value::U32(self.u32()?)),
+            5 => Ok(Value::I32(i32::from_le_bytes(self.fixed()?))),
             7 => match self.fixed::<1>()?[0] {
                 0 => Ok(Value::Bool(false)),
                 1 => Ok(Value::Bool(true)),

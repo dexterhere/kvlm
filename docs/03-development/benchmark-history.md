@@ -73,3 +73,17 @@ Meson is unavailable in the local PATH; native build/install validation is deleg
 to the PR's required foundation CI job. No real inference or hardware calibration
 was run. Portal display warnings in the isolated GTK session are not native GNOME
 or screen-reader acceptance.
+
+## Exact benchmark verification, 2026-10-26
+
+Benchmark Lab checks the current installed model against fresh Ollama inventory and
+hardware, then looks for a successful saved request with matching manifest digests
+and versioned hardware identity. It searches all matching history, including records
+older than the newest 100 visible entries. The UI names the matching run and restores
+the indicator after restart. Failed, cancelled, unfinished, malformed or mismatched
+records cannot grant it. Old hardware hashes remain readable but unverified.
+
+This is prior-request evidence for an Ollama manifest, not a GGUF file identity or a
+guarantee for a future context, cache, backend or placement. See
+[decision 0013](../05-decisions/0013-benchmark-verification.md) and the
+[actual benchmark/restart evidence](m0-acceptance.md#real-benchmark-and-restart).

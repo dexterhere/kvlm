@@ -175,40 +175,76 @@ impl HardwareProfile {
         self.cpu.is_some() || self.system_ram.is_some() || !self.gpus.is_empty()
     }
 
-    fn update_hash(&mut self) {
-        self.profile_hash = None;
+    /// Recompute the versioned configuration identity without probing or using live free memory.
+    pub fn identity_hash(&self) -> Option<String> {
         if self
             .issues
             .iter()
             .any(|issue| issue.component == "GPU inventory")
         {
-            return;
+            return None;
         }
-        let Some(model) = self.cpu.as_ref().and_then(|cpu| cpu.model.as_ref()) else {
-            return;
-        };
-        let Some(ram) = self.system_ram else {
-            return;
-        };
-        let Some(mut gpu_ids) = self
-            .gpus
-            .iter()
-            .map(|gpu| gpu.id.as_deref())
-            .collect::<Option<Vec<_>>>()
-        else {
-            return;
-        };
-        gpu_ids.sort_unstable();
+        let cpu = self.cpu.as_ref()?;
+        let model = cpu
+            .model
+            .as_deref()
+            .filter(|model| !model.trim().is_empty())?;
+        let cores = cpu.physical_cores.filter(|cores| *cores > 0)?;
+        let features = cpu.features?;
+        if cpu.logical_cores == 0 {
+            return None;
+        }
+        let ram = self.system_ram?;
+        if ram.total_bytes == 0 {
+            return None;
+        }
+        let mut devices = Vec::new();
+        for gpu in &self.gpus {
+            let id = gpu.id.as_deref().filter(|id| !id.trim().is_empty())?;
+            if gpu.name.trim().is_empty() {
+                return None;
+            }
+            let capabilities: Vec<_> = gpu
+                .supported_backends
+                .iter()
+                .map(|backend| match backend {
+                    ComputeBackend::Cuda {
+                        compute_capability, ..
+                    } => *compute_capability,
+                })
+                .collect();
+            devices.push((
+                id,
+                gpu.name.as_str(),
+                gpu.vendor,
+                gpu.dedicated_vram.map(|pool| pool.total_bytes),
+                gpu.shared_gtt.map(|pool| pool.total_bytes),
+                gpu.unified_memory,
+                capabilities,
+            ));
+        }
+        devices.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        if devices.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return None;
+        }
+        let identity = serde_json::to_vec(&(
+            std::env::consts::ARCH,
+            model,
+            cores,
+            cpu.logical_cores,
+            features,
+            ram.total_bytes,
+            devices,
+        ))
+        .ok()?;
         let mut hash = Sha256::new();
-        for field in std::iter::once(std::env::consts::ARCH)
-            .chain(std::iter::once(model.as_str()))
-            .chain(gpu_ids)
-        {
-            hash.update((field.len() as u64).to_le_bytes());
-            hash.update(field.as_bytes());
-        }
-        hash.update(ram.total_bytes.to_le_bytes());
-        self.profile_hash = Some(format!("{:x}", hash.finalize()));
+        hash.update(b"hardware-v2\0");
+        hash.update(identity);
+        Some(format!("hardware-v2:{:x}", hash.finalize()))
+    }
+
+    fn update_hash(&mut self) {
+        self.profile_hash = self.identity_hash();
     }
 }
 
@@ -231,6 +267,31 @@ mod tests {
         profile.system_ram.as_mut().unwrap().total_bytes += 1024;
         profile.update_hash();
         assert_ne!(profile.profile_hash, original);
+    }
+
+    #[test]
+    fn versioned_identity_distinguishes_gpu_configuration_at_the_same_pci_address() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let profile = HardwareProfile::detect_linux(&root.join("proc"), &root.join("drm"));
+        let original = profile.identity_hash().unwrap();
+        assert!(original.starts_with("hardware-v2:"));
+        let mut changed = profile.clone();
+        changed.gpus[0].name.push_str(" replacement");
+        assert_ne!(changed.identity_hash(), Some(original.clone()));
+        changed = profile.clone();
+        changed
+            .gpus
+            .iter_mut()
+            .find_map(|gpu| gpu.dedicated_vram.as_mut())
+            .unwrap()
+            .total_bytes += 1024;
+        assert_ne!(changed.identity_hash(), Some(original.clone()));
+        changed = profile.clone();
+        changed.gpus[0].id = None;
+        assert_eq!(changed.identity_hash(), None);
+        changed = profile;
+        changed.cpu.as_mut().unwrap().features = None;
+        assert_eq!(changed.identity_hash(), None);
     }
 
     #[test]
