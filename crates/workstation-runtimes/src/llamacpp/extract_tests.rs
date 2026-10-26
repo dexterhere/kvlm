@@ -293,3 +293,24 @@ fn cancellation_stops_extraction_and_usage_is_reported_for_shared_caps() {
     let used = extract_tar_gz(archive.as_slice(), &dest, LIMITS, NO).unwrap();
     assert!(used.bytes >= 100_000 && used.entries == 1);
 }
+
+#[test]
+fn a_base256_size_field_is_refused_so_the_scanner_cannot_lose_alignment() {
+    let mut archive = Vec::new();
+    let mut h = header("llama-b1/a", EntryType::Regular, 0, 0o644);
+    h.as_old_mut().size[0] = 0x80; // base-256 marker
+    h.as_old_mut().size[11] = 5;
+    h.set_cksum();
+    archive.extend_from_slice(h.as_bytes());
+    archive.extend_from_slice(&[0u8; 1024]);
+    let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+    gz.write_all(&archive).unwrap();
+    let archive = gz.finish().unwrap();
+    let dir = Dir::new();
+    let dest = dir.0.join("out");
+    fs::create_dir(&dest).unwrap();
+    assert_eq!(
+        extract_tar_gz(archive.as_slice(), &dest, LIMITS, NO),
+        Err(ExtractError::Unsafe("unsupported tar size field"))
+    );
+}

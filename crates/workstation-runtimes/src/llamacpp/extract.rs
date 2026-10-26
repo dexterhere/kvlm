@@ -106,16 +106,18 @@ impl<R: Read> Guarded<'_, R> {
                 continue;
             }
             self.filled = 0;
-            let size = octal(&self.header[124..136]);
+            // A size this scanner cannot read (the base-256 form, garbage) would let the tar
+            // reader and the scanner disagree about where the next header starts.
+            let size = octal(&self.header[124..136])
+                .ok_or(ExtractError::Unsafe("unsupported tar size field"))?;
             match self.header[156] {
                 b'x' | b'g' | b'S' => return Err(ExtractError::Unsafe("extended tar headers")),
-                b'L' | b'K' if size.is_none_or(|n| n > MAX_LONG_NAME) => {
+                b'L' | b'K' if size > MAX_LONG_NAME => {
                     return Err(ExtractError::Unsafe("oversized long name"));
                 }
                 _ => {}
             }
-            // An unparsable size is the `tar` crate's error to report; skip nothing here.
-            self.skip = size.unwrap_or(0).div_ceil(512) * 512;
+            self.skip = size.div_ceil(512) * 512;
         }
         Ok(())
     }

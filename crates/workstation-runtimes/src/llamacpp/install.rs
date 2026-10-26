@@ -279,8 +279,9 @@ impl Installer {
         let server = content.join("llama-server");
         let (back, ran) = tokio::task::spawn_blocking({
             let content = content.clone();
+            let stop = Arc::clone(&stop);
             move || {
-                let ran = verify_runs(&server, &content);
+                let ran = verify_runs(&server, &content, &*stop);
                 (held, ran)
             }
         })
@@ -512,7 +513,14 @@ fn remove_stale_stages(root: &Path) {
 }
 
 /// `llama-server` must be a regular executable file that runs and exits cleanly.
-fn verify_runs(server: &Path, libs: &Path) -> Result<(), InstallError> {
+fn verify_runs(
+    server: &Path,
+    libs: &Path,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<(), InstallError> {
+    if stop() {
+        return Err(InstallError::Cancelled);
+    }
     let meta = fs::symlink_metadata(server).map_err(|_| InstallError::WontRun)?;
     if !meta.is_file() || meta.permissions().mode() & 0o100 == 0 {
         return Err(InstallError::WontRun);
@@ -532,6 +540,11 @@ fn verify_runs(server: &Path, libs: &Path) -> Result<(), InstallError> {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
             Ok(Some(_)) | Err(_) => return Err(InstallError::WontRun),
+            Ok(None) if stop() => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(InstallError::Cancelled);
+            }
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
