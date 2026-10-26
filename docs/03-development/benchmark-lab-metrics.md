@@ -14,14 +14,16 @@ Milestone 3 phase 3b. Pure building blocks for the per-pass figures; the protoco
 
 Otherwise ITL is unknown and the record carries the reason in plain words, which the interface shows. Percentiles are nearest-rank over the sorted intervals (median is the 50th, the tail figure the 95th). Network chunks are never counted as tokens.
 
+The count check is strong evidence, not a proof about the inside of each event: it cannot see a stream where one token was split over two events while another event held two tokens. llama.cpp emits at most one event per generated token, which is why an exact match is treated as one token per event; an engine that can split or batch tokens must not reuse this check without its own evidence.
+
 Time to first token is the arrival of the first content event. Decode and prompt speed come from the server's own token count and time (`tokens_per_second`); a zero count, a zero or negative time or a non-finite value gives unknown, never a speed.
 
 ## Resource load
 
 `workstation-core::hardware::load` reads, from procfs, sysfs and NVML:
 
-- system CPU busy percentage from `/proc/stat` differences, excluding idle and iowait;
-- for a Managed runtime only, resident memory and CPU time summed over every live process in the owned process group (a scan of `/proc/<pid>/stat`, capped at 16,384 entries);
+- system CPU busy percentage from `/proc/stat` differences, excluding idle and iowait; an interval where idle time went backwards (the kernel allows that for iowait) is skipped;
+- for a Managed runtime only, resident memory and CPU time summed over every live process in the owned process group (a scan of `/proc/<pid>/stat`; a system with more than 16,384 entries gives unknown instead of a partial total);
 - GPU busy percentage from `gpu_busy_percent` on AMD and NVML utilization on NVIDIA.
 
 An Attached runtime gets no process measurements: its process is not ours to inspect. A reading that cannot be taken is `None`. A group with no live member reads as unknown rather than idle.

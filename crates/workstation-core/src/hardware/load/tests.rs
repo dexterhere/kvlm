@@ -242,3 +242,38 @@ fn an_attached_runtime_is_never_given_process_measurements() {
     );
     assert!(LoadProbe::new(&profile, Some(-3)).pgid.is_none());
 }
+
+#[test]
+fn an_interval_where_idle_time_shrank_is_not_reported_as_load() {
+    let t0 = Instant::now();
+    let mut load = LoadAggregate::default();
+    // busy, total: idle (incl. iowait) goes 100 -> 99 while busy rises by 10.
+    load.add(sample(t0, Some((100, 200)), None, &[]));
+    load.add(sample(
+        t0 + Duration::from_millis(100),
+        Some((110, 209)),
+        None,
+        &[],
+    ));
+    let mut metrics = PassMetrics::default();
+    load.apply(&mut metrics);
+    assert!(metrics.cpu_utilization_percent.is_none());
+}
+
+#[test]
+fn a_command_name_with_invalid_utf8_still_counts_and_a_huge_proc_is_refused() {
+    let dir = Dir::new();
+    let mut bytes = stat_line("worker", 100, 5, 5, 10).into_bytes();
+    let at = bytes.iter().position(|b| *b == b'(').unwrap() + 7;
+    bytes.insert(at, 0xff);
+    fs::create_dir_all(dir.0.join("100")).unwrap();
+    fs::write(dir.0.join("100").join("stat"), bytes).unwrap();
+    assert_eq!(read_group(&dir.0, 100, 4096).unwrap().processes, 1);
+    for pid in 1000..(1000 + MAX_SCAN as u64 + 1) {
+        fs::create_dir_all(dir.0.join(pid.to_string())).unwrap();
+    }
+    assert!(
+        read_group(&dir.0, 100, 4096).is_none(),
+        "partial scan is not a total"
+    );
+}

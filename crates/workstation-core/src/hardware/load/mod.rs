@@ -87,7 +87,13 @@ pub fn read_cpu(proc_root: &Path) -> Option<CpuTicks> {
 /// stopped runtime reads as unknown rather than as an idle zero.
 pub fn read_group(proc_root: &Path, pgid: i32, page_size: u64) -> Option<GroupUsage> {
     let mut usage = GroupUsage::default();
-    for entry in fs::read_dir(proc_root).ok()?.take(MAX_SCAN).flatten() {
+    let mut scanned = 0usize;
+    for entry in fs::read_dir(proc_root).ok()?.flatten() {
+        scanned += 1;
+        if scanned > MAX_SCAN {
+            // Members may have been missed, so any total would be a silent undercount.
+            return None;
+        }
         let name = entry.file_name();
         let Some(pid) = name
             .to_str()
@@ -96,9 +102,11 @@ pub fn read_group(proc_root: &Path, pgid: i32, page_size: u64) -> Option<GroupUs
             continue;
         };
         // A process may exit between listing and reading; that is not an error.
-        let Ok(text) = fs::read_to_string(proc_root.join(pid).join("stat")) else {
+        let Ok(bytes) = fs::read(proc_root.join(pid).join("stat")) else {
             continue;
         };
+        // A command name may hold arbitrary bytes; only the numeric fields matter.
+        let text = String::from_utf8_lossy(&bytes);
         let Some(stat) = parse_pid_stat(&text).filter(|s| s.pgrp == pgid) else {
             continue;
         };
@@ -253,6 +261,9 @@ impl LoadAggregate {
                 now.total.checked_sub(before.total).filter(|t| *t > 0),
                 now.busy.checked_sub(before.busy),
             )
+            // iowait may legitimately go backwards, which shrinks idle time; such an interval
+            // is skipped instead of being turned into a utilization figure.
+            && now.total - now.busy >= before.total - before.busy
         {
             self.cpu.add(
                 sample.at,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Per-pass latency and speed figures from a token stream. Nothing here invents a token:
-//! inter-token latency exists only when the stream proves one token per event, and speeds
+//! inter-token latency exists only when the event count matches the server's token count exactly, and speeds
 //! come from the server's own counters.
 
 use std::time::Duration;
@@ -8,7 +8,7 @@ use workstation_core::experiments::Itl;
 
 /// Fewest intervals for a percentile to mean anything.
 pub const MIN_INTERVALS: usize = 8;
-/// Arrival times kept per pass; a longer stream cannot be proven token by token.
+/// Arrival times kept per pass; a longer stream cannot be checked event by event.
 pub const MAX_EVENTS: usize = 8_192;
 
 /// Everything the adapter saw of one streamed answer.
