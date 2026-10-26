@@ -78,7 +78,7 @@ impl HuggingFaceClient {
     }
 
     #[cfg(test)]
-    fn for_test(port: u16) -> Self {
+    pub(crate) fn for_test(port: u16) -> Self {
         Self::build(
             Url::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
             false,
