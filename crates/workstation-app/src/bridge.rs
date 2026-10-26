@@ -178,17 +178,37 @@ impl CatalogBackend for LiveCatalog {
     }
 }
 
-/// A finished catalog job's event; a panic becomes a failure for the last request id,
-/// and a job aborted by a newer request produces nothing.
-fn finished_job(
-    result: Option<Result<UiEvent, tokio::task::JoinError>>,
+/// Aborts the wrapped task when the guarding job is dropped or aborted.
+struct AbortOnDrop(tokio::task::AbortHandle);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Runs a catalog job so a panic is reported for its own request id; aborting the
+/// guarding job (a newer request) aborts the work too and produces no event.
+async fn guarded(
     id: u64,
     failed: fn(u64) -> UiEvent,
-) -> Option<UiEvent> {
-    match result {
-        Some(Ok(event)) => Some(event),
-        Some(Err(error)) if error.is_panic() => Some(failed(id)),
-        _ => None,
+    work: impl std::future::Future<Output = UiEvent> + Send + 'static,
+) -> UiEvent {
+    let task = tokio::spawn(work);
+    let _abort = AbortOnDrop(task.abort_handle());
+    task.await.unwrap_or_else(|_| failed(id))
+}
+
+fn catalog_failed(id: u64) -> UiEvent {
+    UiEvent::CatalogLoaded {
+        id,
+        result: Err("Catalog worker failed. Retry.".into()),
+    }
+}
+
+fn release_failed(id: u64) -> UiEvent {
+    UiEvent::ReleaseLoaded {
+        id,
+        result: Err("Catalog worker failed. Retry.".into()),
     }
 }
 
@@ -294,11 +314,11 @@ where
         let mut pending = None;
         let mut benchmark_jobs = tokio::task::JoinSet::new();
         let mut benchmark_id = 0;
-        // One search and one release fetch at a time; a newer request aborts the older.
+        // One live search, one saved-page read and one release fetch at a time; a newer
+        // request of the same kind aborts the older. Saved-page reads never cancel a search.
         let mut search_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
-        let mut search_id = 0;
+        let mut cached_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         let mut release_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
-        let mut release_id = 0;
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
@@ -313,14 +333,17 @@ where
                     continue;
                 }
                 result = search_jobs.join_next(), if !search_jobs.is_empty() => {
-                    let failed = |id| UiEvent::CatalogLoaded { id, result: Err("Catalog worker failed. Retry.".into()) };
-                    if let Some(event) = finished_job(result, search_id, failed)
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = cached_jobs.join_next(), if !cached_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
                         && events.send(event).await.is_err() { break; }
                     continue;
                 }
                 result = release_jobs.join_next(), if !release_jobs.is_empty() => {
-                    let failed = |id| UiEvent::ReleaseLoaded { id, result: Err("Catalog worker failed. Retry.".into()) };
-                    if let Some(event) = finished_job(result, release_id, failed)
+                    if let Some(Ok(event)) = result
                         && events.send(event).await.is_err() { break; }
                     continue;
                 }
@@ -344,30 +367,27 @@ where
                 }
                 CoreCommand::SearchCatalog { id, query, cursor } => {
                     search_jobs.abort_all();
-                    search_id = id;
                     let catalog = Arc::clone(&catalog);
-                    search_jobs.spawn(async move {
+                    search_jobs.spawn(guarded(id, catalog_failed, async move {
                         let result = catalog.search(query, cursor).await.map(|load| Some(Box::new(load)));
                         UiEvent::CatalogLoaded { id, result }
-                    });
+                    }));
                 }
                 CoreCommand::LoadCachedCatalog { id, query } => {
-                    search_jobs.abort_all();
-                    search_id = id;
+                    cached_jobs.abort_all();
                     let catalog = Arc::clone(&catalog);
-                    search_jobs.spawn(async move {
+                    cached_jobs.spawn(guarded(id, catalog_failed, async move {
                         let result = catalog.cached_search(query).await.map(|load| load.map(Box::new));
                         UiEvent::CatalogLoaded { id, result }
-                    });
+                    }));
                 }
                 CoreCommand::ExpandRelease { id, repo_id, pinned } => {
                     release_jobs.abort_all();
-                    release_id = id;
                     let catalog = Arc::clone(&catalog);
-                    release_jobs.spawn(async move {
+                    release_jobs.spawn(guarded(id, release_failed, async move {
                         let result = catalog.release(repo_id, pinned).await.map(Box::new);
                         UiEvent::ReleaseLoaded { id, result }
-                    });
+                    }));
                 }
                 CoreCommand::RunQuickBenchmark { id, model, cancel } => {
                     if benchmark_jobs.is_empty() {
@@ -815,6 +835,34 @@ mod tests {
             .unwrap();
         assert!(matches!(receive(&events).await,
             UiEvent::CatalogLoaded { id: 9, result: Err(message) } if message.contains("Catalog worker failed")));
+    }
+
+    #[tokio::test]
+    async fn a_saved_page_read_does_not_cancel_a_live_search() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 1,
+                query: "fail".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        commands
+            .send(CoreCommand::LoadCachedCatalog {
+                id: 2,
+                query: "".into(),
+            })
+            .await
+            .unwrap();
+        let mut seen = vec![];
+        for _ in 0..2 {
+            if let UiEvent::CatalogLoaded { id, .. } = receive(&events).await {
+                seen.push(id);
+            }
+        }
+        seen.sort();
+        assert_eq!(seen, [1, 2]);
     }
 
     fn fit_request(id: u64) -> CoreCommand {
