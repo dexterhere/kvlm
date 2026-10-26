@@ -33,38 +33,17 @@ pub enum CoreCommand {
     },
     EstimateFit(FitRequest),
     /// Explicit network search; falls back to saved results when offline.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "constructed by the catalog view in the next change"
-        )
-    )]
     SearchCatalog {
         id: u64,
         query: String,
         cursor: Option<String>,
     },
     /// Saved first page only; never touches the network.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "constructed by the catalog view in the next change"
-        )
-    )]
     LoadCachedCatalog {
         id: u64,
         query: String,
     },
     /// Explicit network fetch of one repository's files; `pinned` is a commit id.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "constructed by the catalog view in the next change"
-        )
-    )]
     ExpandRelease {
         id: u64,
         repo_id: String,
@@ -109,18 +88,10 @@ pub enum UiEvent {
         result: Result<Box<FitReport>, String>,
     },
     /// `Ok(None)` means a cache-only request found nothing saved.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the catalog view in the next change")
-    )]
     CatalogLoaded {
         id: u64,
         result: Result<Option<Box<CatalogLoad>>, String>,
     },
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the catalog view in the next change")
-    )]
     ReleaseLoaded {
         id: u64,
         result: Result<Box<ReleaseLoad>, String>,

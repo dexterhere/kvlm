@@ -11,6 +11,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     let (commands, events) = bridge::start(runtime);
     let overview = views::overview::Overview::new(commands.clone());
     let runtimes = views::runtimes::Runtimes::new(commands.clone());
+    let catalog = views::catalog::Explorer::new(commands.clone());
     let benchmarks = views::bench_lab::Benchmarks::new(commands);
     let stack = adw::ViewStack::new();
     stack.set_vexpand(true);
@@ -21,7 +22,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         "utilities-system-monitor-symbolic",
     );
     stack.add_titled_with_icon(
-        &views::catalog::build(),
+        &catalog.widget,
         Some("catalog"),
         "Models",
         "system-search-symbolic",
@@ -126,6 +127,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     app.set_accels_for_action("win.refresh", &["<Primary>r"]);
     overview.request();
     benchmarks.request_history();
+    catalog.load_saved();
     let closing_events = events.clone();
     window.connect_close_request(move |_| {
         closing_events.close();
@@ -146,6 +148,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
             overview.receive(&event);
             runtimes.receive(&event);
             benchmarks.receive(&event);
+            catalog.receive(&event);
             match event {
                 UiEvent::HardwareDetected(_) => hardware_status = "Hardware snapshot ready",
                 UiEvent::HardwareFailed(_) => hardware_status = "Hardware detection failed",
