@@ -9,15 +9,18 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
-use workstation_core::experiments::Settings;
+use workstation_core::experiments::{Settings, follow_up::observed_from_arguments};
 use workstation_runtimes::llamacpp::client::{ChatRequest, LlamaClient, LlamaError, StreamEvent};
 
 /// What a cold load reports: the time to Ready and the new process group, because a restart
 /// replaces the process the load sampler has to watch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ColdLoaded {
     pub ready_in: Duration,
     pub pgid: Option<i32>,
+    /// The restarted server answers to a new alias and may listen on a new port.
+    pub alias: String,
+    pub port: u16,
 }
 
 pub type ColdFuture = Pin<Box<dyn Future<Output = Result<ColdLoaded, String>> + Send>>;
@@ -47,6 +50,18 @@ impl LlamaTarget {
     }
 }
 
+/// Arguments (without the program) of the process whose id is the group leader's.
+fn read_arguments(pgid: i32) -> Option<Vec<String>> {
+    let raw = std::fs::read(format!("/proc/{pgid}/cmdline")).ok()?;
+    let args: Vec<String> = raw
+        .split(|b| *b == 0)
+        .skip(1)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect();
+    (!args.is_empty()).then_some(args)
+}
+
 fn map(error: LlamaError) -> PassError {
     match error {
         LlamaError::Cancelled => PassError::Cancelled,
@@ -64,6 +79,9 @@ impl LabTarget for LlamaTarget {
             .await
             .map_err(PassError::Failed)?;
         self.pgid = loaded.pgid;
+        self.alias = loaded.alias;
+        self.client =
+            LlamaClient::new(loaded.port).map_err(|error| PassError::Failed(error.to_string()))?;
         Ok(loaded.ready_in)
     }
 
@@ -112,14 +130,19 @@ impl LabTarget for LlamaTarget {
         Ok(output)
     }
 
+    /// What the owned process was started with, read from its own command line. llama-server
+    /// does not report cache types or flash attention, so this is the evidence that a
+    /// setting reached the process. Anything unreadable stays unknown.
     async fn observed(&mut self) -> Settings {
-        let props = self.client.props().await.ok();
-        Settings {
-            context_length: props
-                .and_then(|p| p.n_ctx)
-                .and_then(|n| u32::try_from(n).ok()),
-            ..Settings::default()
-        }
+        let Some(pgid) = self.pgid else {
+            return Settings::default();
+        };
+        let args = tokio::task::spawn_blocking(move || read_arguments(pgid))
+            .await
+            .ok()
+            .flatten();
+        args.map(|args| observed_from_arguments(&args))
+            .unwrap_or_default()
     }
 }
 
@@ -173,6 +196,8 @@ mod tests {
                     Ok(ColdLoaded {
                         ready_in: Duration::from_millis(900),
                         pgid: Some(777),
+                        alias: "newalias".into(),
+                        port: 18999,
                     })
                 })
             }),
@@ -236,5 +261,13 @@ mod tests {
             .await;
         assert_eq!(cancelled.unwrap_err(), PassError::Cancelled);
         assert_eq!(target.observed().await, Settings::default());
+    }
+
+    #[test]
+    fn arguments_are_read_from_a_real_process_command_line() {
+        let own = std::process::id() as i32;
+        let args = read_arguments(own).expect("this test process has arguments");
+        assert!(!args.iter().any(|a| a.contains('\0')));
+        assert!(read_arguments(i32::MAX).is_none());
     }
 }
