@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod catalog_cache;
 pub mod queries;
 pub mod schema;
 pub use queries::HistoryStore;
