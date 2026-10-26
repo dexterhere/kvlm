@@ -68,7 +68,7 @@ on 2026-10-26. GNOME-session validation remains a follow-up and is not claimed a
 **Next, M1:** a Hugging Face model explorer (Family → Release → Artifact), artifact
 details with fit estimates, detection of files you already have in Ollama or the Hugging
 Face cache, resumable verified downloads, and keyring-stored tokens for gated models. See
-the [specification](docs/01-product/gnome_local_ai_workstation_master_specification.md#milestone-m1-model-explorer-hugging-face-catalog--deduplicator). Managed runtimes, controlled benchmark
+the [M1 plan](docs/04-roadmap/m1/Planned.md). Managed runtimes, controlled benchmark
 comparisons, and more hardware matrices come in M2 to M4; the
 [roadmap](docs/04-roadmap/milestones.md) tracks them.
 
