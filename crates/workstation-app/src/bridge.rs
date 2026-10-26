@@ -31,6 +31,7 @@ use workstation_runtimes::downloader::{
 use workstation_runtimes::ollama::{
     Discovery, GenerationProgress, InstalledModel, ModelInspection, OllamaAdapter,
 };
+use workstation_runtimes::secrets::{Token, TokenService, TokenSlot};
 
 #[derive(Debug)]
 pub enum CoreCommand {
@@ -94,11 +95,37 @@ pub enum CoreCommand {
     LoadDownloads {
         id: u64,
     },
+    /// Save the token to the desktop keyring and use it. Explicit action only.
+    SaveToken {
+        id: u64,
+        token: Token,
+    },
+    /// Read the saved token from the keyring into this session.
+    LoadToken {
+        id: u64,
+    },
+    /// Forget the token now and remove the saved copy.
+    ClearToken {
+        id: u64,
+    },
+    /// Ask Hugging Face whose token this is.
+    CheckToken {
+        id: u64,
+    },
     RunQuickBenchmark {
         id: u64,
         model: InstalledModel,
         cancel: tokio::sync::watch::Receiver<bool>,
     },
+}
+
+/// What a finished token action achieved. Never carries the token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TokenOutcome {
+    Saved,
+    Loaded { found: bool },
+    Cleared,
+    Valid { name: String },
 }
 
 #[derive(Debug)]
@@ -148,6 +175,10 @@ pub enum UiEvent {
     LocalScanned {
         id: u64,
         result: Result<Box<ScanReport>, String>,
+    },
+    TokenDone {
+        id: u64,
+        result: Result<TokenOutcome, String>,
     },
     /// Latest progress only; older readings are dropped, never queued.
     DownloadProgress(Progress),
@@ -231,11 +262,17 @@ pub trait CatalogBackend: Send + Sync + 'static {
     ) -> BoxFuture<DownloadOutcome>;
     fn list_downloads(&self) -> BoxFuture<Result<Vec<DownloadRow>, String>>;
     fn discard_download(&self, download_id: i64) -> BoxFuture<Result<(), String>>;
+    fn save_token(&self, token: Token) -> BoxFuture<Result<TokenOutcome, String>>;
+    fn load_token(&self) -> BoxFuture<Result<TokenOutcome, String>>;
+    fn clear_token(&self) -> BoxFuture<Result<TokenOutcome, String>>;
+    fn check_token(&self) -> BoxFuture<Result<TokenOutcome, String>>;
 }
 
 /// Builds the real service on first use, so startup does no catalog work.
 #[derive(Default)]
 struct LiveCatalog {
+    /// The token every client of this application reads; empty until the user adds one.
+    slot: TokenSlot,
     service: std::sync::OnceLock<Result<Arc<CatalogService>, String>>,
     downloader: std::sync::OnceLock<Result<Arc<Downloader>, String>>,
 }
@@ -243,12 +280,12 @@ struct LiveCatalog {
 impl LiveCatalog {
     fn service(&self) -> Result<Arc<CatalogService>, String> {
         self.service
-            .get_or_init(|| CatalogService::new().map(Arc::new))
+            .get_or_init(|| CatalogService::new(self.slot.clone()).map(Arc::new))
             .clone()
     }
     fn downloader(&self) -> Result<Arc<Downloader>, String> {
         self.downloader
-            .get_or_init(|| Downloader::new().map(Arc::new))
+            .get_or_init(|| Downloader::new(self.slot.clone()).map(Arc::new))
             .clone()
     }
 }
@@ -312,6 +349,47 @@ impl CatalogBackend for LiveCatalog {
     fn discard_download(&self, download_id: i64) -> BoxFuture<Result<(), String>> {
         let downloader = self.downloader();
         Box::pin(async move { downloader?.discard(download_id).await })
+    }
+    fn save_token(&self, token: Token) -> BoxFuture<Result<TokenOutcome, String>> {
+        let tokens = TokenService::keyring(self.slot.clone());
+        Box::pin(async move {
+            tokens
+                .save(token)
+                .await
+                .map(|()| TokenOutcome::Saved)
+                .map_err(|error| {
+                    format!("The token is in use for this session but was not saved. {error}")
+                })
+        })
+    }
+    fn load_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+        let tokens = TokenService::keyring(self.slot.clone());
+        Box::pin(async move {
+            tokens
+                .load()
+                .await
+                .map(|found| TokenOutcome::Loaded { found })
+                .map_err(|error| error.to_string())
+        })
+    }
+    fn clear_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+        let tokens = TokenService::keyring(self.slot.clone());
+        Box::pin(async move {
+            tokens
+                .clear()
+                .await
+                .map(|()| TokenOutcome::Cleared)
+                .map_err(|error| format!("The token was forgotten for this session, but the saved copy may remain. {error}"))
+        })
+    }
+    fn check_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+        let service = self.service();
+        Box::pin(async move {
+            service?
+                .validate_token()
+                .await
+                .map(|name| TokenOutcome::Valid { name })
+        })
     }
 }
 
@@ -378,6 +456,27 @@ fn downloads_failed(id: u64) -> UiEvent {
         id,
         result: Err("Downloads worker failed. Retry.".into()),
     }
+}
+
+fn token_failed(id: u64) -> UiEvent {
+    UiEvent::TokenDone {
+        id,
+        result: Err("The token action failed. Retry.".into()),
+    }
+}
+
+/// The request id and the work for one token command.
+fn token_job(
+    catalog: &Arc<dyn CatalogBackend>,
+    command: CoreCommand,
+) -> Option<(u64, BoxFuture<Result<TokenOutcome, String>>)> {
+    Some(match command {
+        CoreCommand::SaveToken { id, token } => (id, catalog.save_token(token)),
+        CoreCommand::LoadToken { id } => (id, catalog.load_token()),
+        CoreCommand::ClearToken { id } => (id, catalog.clear_token()),
+        CoreCommand::CheckToken { id } => (id, catalog.check_token()),
+        _ => return None,
+    })
 }
 
 fn release_failed(id: u64) -> UiEvent {
@@ -509,6 +608,9 @@ where
         let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<Progress>();
         // Short bookkeeping reads and discards; never aborted, so a discard always finishes.
         let mut download_list_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        // Keyring calls run on their own task, one at a time, so a hung prompt never blocks
+        // download control or browsing.
+        let mut token_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
@@ -551,6 +653,11 @@ where
                     download_stop = None;
                     // Readings queued before the end would only be stale.
                     while progress_rx.try_recv().is_ok() {}
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = token_jobs.join_next(), if !token_jobs.is_empty() => {
                     if let Some(Ok(event)) = result
                         && events.send(event).await.is_err() { break; }
                     continue;
@@ -646,6 +753,18 @@ where
                 CoreCommand::PauseDownload | CoreCommand::CancelDownload => {
                     let stop = if matches!(command, CoreCommand::PauseDownload) { DownloadStop::Pause } else { DownloadStop::Cancel };
                     if let Some(sender) = &download_stop { let _ = sender.send(Some(stop)); }
+                }
+                CoreCommand::SaveToken { .. } | CoreCommand::LoadToken { .. } | CoreCommand::ClearToken { .. } | CoreCommand::CheckToken { .. } => {
+                    if let Some((id, work)) = token_job(&catalog, command) {
+                        if token_jobs.is_empty() {
+                            token_jobs.spawn(guarded(id, token_failed, async move {
+                                UiEvent::TokenDone { id, result: work.await }
+                            }));
+                        } else {
+                            let result = Err("Another token action is still running. Wait for it to finish.".to_owned());
+                            if events.send(UiEvent::TokenDone { id, result }).await.is_err() { break; }
+                        }
+                    }
                 }
                 CoreCommand::DiscardDownload { id, download_id } => {
                     let catalog = Arc::clone(&catalog);
@@ -1009,6 +1128,23 @@ mod tests {
         }
         fn list_downloads(&self) -> BoxFuture<Result<Vec<DownloadRow>, String>> {
             Box::pin(async { Ok(Vec::new()) })
+        }
+        fn save_token(&self, _token: Token) -> BoxFuture<Result<TokenOutcome, String>> {
+            Box::pin(async { Ok(TokenOutcome::Saved) })
+        }
+        fn load_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+            Box::pin(async { Ok(TokenOutcome::Loaded { found: true }) })
+        }
+        fn clear_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+            Box::pin(async { panic!("fixture token panic") })
+        }
+        fn check_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+            Box::pin(async {
+                std::future::pending::<()>().await;
+                Ok(TokenOutcome::Valid {
+                    name: "never".into(),
+                })
+            })
         }
         fn discard_download(&self, download_id: i64) -> BoxFuture<Result<(), String>> {
             Box::pin(async move {
@@ -1381,6 +1517,72 @@ mod tests {
                 result: Ok(_)
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn token_actions_run_one_at_a_time_and_report_panics_without_the_token() {
+        let (commands, events) = start_catalog();
+        let token = Token::parse("hf_secretvalue").unwrap();
+        commands
+            .send(CoreCommand::SaveToken { id: 1, token })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::TokenDone {
+                id: 1,
+                result: Ok(TokenOutcome::Saved)
+            }
+        ));
+        commands
+            .send(CoreCommand::LoadToken { id: 2 })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::TokenDone {
+                id: 2,
+                result: Ok(TokenOutcome::Loaded { found: true })
+            }
+        ));
+        commands
+            .send(CoreCommand::ClearToken { id: 3 })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::TokenDone { id: 3, result: Err(message) } if message.contains("failed")));
+        // A hung keyring call occupies the single token slot; the next action is refused,
+        // and downloads and browsing still work.
+        commands
+            .send(CoreCommand::CheckToken { id: 4 })
+            .await
+            .unwrap();
+        commands
+            .send(CoreCommand::LoadToken { id: 5 })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::TokenDone { id: 5, result: Err(message) } if message.contains("still running")));
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 6,
+                query: "ok".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::CatalogLoaded { id: 6, .. }
+        ));
+        let debug = format!(
+            "{:?}",
+            CoreCommand::SaveToken {
+                id: 9,
+                token: Token::parse("hf_secretvalue").unwrap()
+            }
+        );
+        assert!(!debug.contains("secretvalue"), "{debug}");
     }
 
     #[tokio::test]
