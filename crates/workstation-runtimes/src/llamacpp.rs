@@ -2,6 +2,7 @@
 //! Managed portable llama.cpp: release selection, verified installation and safe extraction.
 //! Process supervision lives in `supervisor`; the HTTP adapter arrives in a later phase.
 
+pub mod client;
 pub mod extract;
 pub mod install;
 pub mod release;

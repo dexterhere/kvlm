@@ -12,9 +12,11 @@
 pub mod log;
 pub mod record;
 
-use crate::llamacpp::install::prepare_root;
+use crate::llamacpp::{
+    client::{Health, LlamaClient},
+    install::prepare_root,
+};
 use log::LogBuffer;
-use reqwest::Client;
 use rustix::process::{Pid, Signal, WaitIdOptions, kill_process_group, waitid};
 use std::{
     fs::{self, File},
@@ -40,13 +42,11 @@ pub const DEFAULT_START_TIMEOUT: Duration = Duration::from_secs(180);
 pub const DEFAULT_STOP_GRACE: Duration = Duration::from_secs(5);
 const STARTING_POLL: Duration = Duration::from_millis(500);
 const READY_POLL: Duration = Duration::from_secs(5);
-const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const REAP_TIMEOUT: Duration = Duration::from_secs(5);
 const UNRESPONSIVE_AFTER: u32 = 6;
 const MAX_RESTARTS: usize = 3;
 const RESTART_WINDOW: Duration = Duration::from_secs(600);
 const FAILURE_LINES: usize = 50;
-const MAX_PROBE_BODY: usize = 64 * 1024;
 /// Environment passed to the child. Everything else, including `LLAMA_ARG_*` overrides and
 /// Hugging Face tokens, is dropped.
 const ENV_ALLOW: [&str; 8] = [
@@ -313,18 +313,11 @@ fn exited(pid: Pid) -> bool {
     )
 }
 
-enum Health {
-    Ready,
-    Loading,
-    Down,
-}
-
 struct State {
     _lock: std::sync::Arc<record::ProcessLock>,
     status_tx: watch::Sender<Status>,
     logs: LogBuffer,
     record_path: PathBuf,
-    client: Client,
     run: Option<Run>,
     last_spec: Option<StartSpec>,
     restarts: Vec<Instant>,
@@ -376,18 +369,11 @@ async fn actor(
     record_path: PathBuf,
     lock: std::sync::Arc<record::ProcessLock>,
 ) {
-    let client = Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(PROBE_TIMEOUT)
-        .build()
-        .expect("static client configuration");
     let mut state = State {
         _lock: lock,
         status_tx,
         logs,
         record_path,
-        client,
         run: None,
         last_spec: None,
         restarts: Vec::new(),
@@ -641,52 +627,14 @@ fn schedule_probe(state: &mut State, probe_tx: &mpsc::Sender<(String, Health)>) 
     if run.probe.as_ref().is_some_and(|p| !p.is_finished()) {
         return;
     }
-    let (client, port, alias, tx) = (
-        state.client.clone(),
-        run.port,
-        run.alias.clone(),
-        probe_tx.clone(),
-    );
+    let (port, alias, tx) = (run.port, run.alias.clone(), probe_tx.clone());
     run.probe = Some(tokio::spawn(async move {
-        let health = probe(&client, port, &alias).await;
+        let health = match LlamaClient::new(port) {
+            Ok(client) => client.identity(&alias).await,
+            Err(_) => Health::Down,
+        };
         let _ = tx.send((alias, health)).await;
     }));
-}
-
-async fn probe(client: &Client, port: u16, alias: &str) -> Health {
-    let base = format!("http://127.0.0.1:{port}");
-    match client.get(format!("{base}/health")).send().await {
-        Ok(r) if r.status().as_u16() == 200 => {}
-        Ok(r) if r.status().as_u16() == 503 => return Health::Loading,
-        _ => return Health::Down,
-    }
-    let Ok(mut response) = client.get(format!("{base}/v1/models")).send().await else {
-        return Health::Down;
-    };
-    if response.status().as_u16() != 200 {
-        return Health::Loading;
-    }
-    let mut body = Vec::new();
-    while let Ok(Some(chunk)) = response.chunk().await {
-        if body.len() + chunk.len() > MAX_PROBE_BODY {
-            return Health::Down;
-        }
-        body.extend_from_slice(&chunk);
-    }
-    let listed = serde_json::from_slice::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|v| {
-            v.get("data")?
-                .as_array()?
-                .iter()
-                .any(|m| m.get("id").and_then(|i| i.as_str()) == Some(alias))
-                .then_some(())
-        });
-    if listed.is_some() {
-        Health::Ready
-    } else {
-        Health::Down
-    }
 }
 
 async fn on_probe(state: &mut State, alias: String, health: Health) {
