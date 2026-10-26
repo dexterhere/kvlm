@@ -87,7 +87,12 @@ impl HuggingFaceClient {
     }
 
     fn build(base: Url, https_only: bool) -> Result<Self, HfError> {
-        let client = Client::builder()
+        let mut builder = Client::builder();
+        if !https_only {
+            // Loopback test fixtures must never be routed through an environment proxy.
+            builder = builder.no_proxy();
+        }
+        let client = builder
             .use_rustls_tls()
             .https_only(https_only)
             .redirect(Policy::none())
@@ -204,12 +209,13 @@ impl HuggingFaceClient {
             .pop_if_empty()
             .extend(segments);
         url.query_pairs_mut().extend_pairs(pairs);
-        let _permit = self
-            .gate
-            .acquire()
-            .await
-            .map_err(|_| HfError::BadResponse)?;
+        // The deadline covers waiting for the single-flight permit as well as the request.
         tokio::time::timeout(OPERATION_DEADLINE, async {
+            let _permit = self
+                .gate
+                .acquire()
+                .await
+                .map_err(|_| HfError::BadResponse)?;
             let response = self
                 .client
                 .get(url)

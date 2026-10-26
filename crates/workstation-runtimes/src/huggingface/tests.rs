@@ -168,7 +168,7 @@ impl Server {
                     .set_read_timeout(Some(Duration::from_millis(200)))
                     .unwrap();
                 stream
-                    .set_write_timeout(Some(Duration::from_millis(200)))
+                    .set_write_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
                 let mut raw = Vec::new();
                 let mut byte = [0];
