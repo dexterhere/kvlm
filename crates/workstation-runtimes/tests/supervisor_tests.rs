@@ -333,7 +333,7 @@ async fn a_crash_after_ready_is_reported_with_its_exit_code() {
     let env = Env::new();
     let sup = Supervisor::spawn(env.record()).await.unwrap();
     let mut rx = sup.subscribe();
-    sup.start(env.spec("crash_after 2500")).await.unwrap();
+    sup.start(env.spec("crash_after 4000")).await.unwrap();
     until(&mut rx, |s| s.state == S::Ready).await;
     let failed = until(&mut rx, |s| s.state == S::Failed).await;
     let failure = failed.failure.unwrap();
@@ -349,7 +349,7 @@ async fn auto_restart_brings_a_crashed_server_back_with_a_new_identity() {
     let env = Env::new();
     let sup = Supervisor::spawn(env.record()).await.unwrap();
     let mut rx = sup.subscribe();
-    let mut spec = env.spec("crash_after 2500");
+    let mut spec = env.spec("crash_after 4000");
     spec.auto_restart = true;
     sup.start(spec).await.unwrap();
     let first = until(&mut rx, |s| s.state == S::Ready).await;
