@@ -126,6 +126,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     window.add_action(&refresh);
     app.set_accels_for_action("win.refresh", &["<Primary>r"]);
     overview.request();
+    runtimes.load_managed();
     benchmarks.request_history();
     catalog.load_saved();
     catalog.load_downloads();
@@ -176,7 +177,8 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
                 | UiEvent::DownloadProgress(_)
                 | UiEvent::DownloadFinished { .. }
                 | UiEvent::DownloadsLoaded { .. }
-                | UiEvent::TokenDone { .. } => continue,
+                | UiEvent::TokenDone { .. }
+                | UiEvent::Managed(_) => continue,
             }
             status.set_label(&format!("{hardware_status} · {runtime_status}"));
         }

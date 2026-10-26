@@ -4,6 +4,7 @@ mod application;
 mod bridge;
 mod fit_state;
 mod fit_workflow;
+mod managed;
 mod views;
 mod window;
 
@@ -20,6 +21,7 @@ fn main() -> gtk::glib::ExitCode {
     };
 
     let result = application::run(runtime.handle());
+    managed::shutdown_blocking(runtime.handle());
     runtime.shutdown_timeout(std::time::Duration::from_secs(2));
     result
 }

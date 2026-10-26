@@ -53,6 +53,7 @@ pub struct Runtimes {
     state: Rc<RefCell<LoadState>>,
     inspection: Rc<RefCell<InspectionState>>,
     commands: tokio::sync::mpsc::Sender<CoreCommand>,
+    managed: super::managed::ManagedCard,
 }
 
 impl Runtimes {
@@ -87,6 +88,8 @@ impl Runtimes {
         layout.append(&heading);
         layout.append(&controls);
         layout.append(&readings);
+        let managed = super::managed::ManagedCard::new(commands.clone());
+        layout.append(&managed.widget);
         let clamp = adw::Clamp::builder()
             .maximum_size(900)
             .child(&layout)
@@ -106,6 +109,7 @@ impl Runtimes {
             state: Rc::new(RefCell::new(LoadState::default())),
             inspection: Rc::new(RefCell::new(InspectionState::default())),
             commands,
+            managed,
         };
         let state = Rc::clone(&runtimes.state);
         let spinner = runtimes.spinner.clone();
@@ -121,7 +125,13 @@ impl Runtimes {
         runtimes
     }
 
+    /// Reads the saved managed-runtime state (local files only) and starts supervision.
+    pub fn load_managed(&self) {
+        self.managed.load();
+    }
+
     pub fn receive(&self, event: &UiEvent) {
+        self.managed.receive(event);
         match event {
             UiEvent::OllamaDiscovered(discovery) => {
                 self.state.borrow_mut().finish(true);
