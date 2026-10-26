@@ -121,6 +121,19 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         );
     }
 
+    // Ctrl+K: jump to Models and focus the search field. It never starts a search.
+    let search = gio::SimpleAction::new("search", None);
+    let weak_stack = stack.downgrade();
+    let search_entry = catalog.search_entry().downgrade();
+    search.connect_activate(move |_, _| {
+        if let (Some(stack), Some(entry)) = (weak_stack.upgrade(), search_entry.upgrade()) {
+            stack.set_visible_child_name("catalog");
+            entry.grab_focus();
+        }
+    });
+    window.add_action(&search);
+    app.set_accels_for_action("win.search", &["<Primary>k"]);
+
     let refresh = gio::SimpleAction::new("refresh", None);
     let weak_stack = stack.downgrade();
     let weak_hardware = overview.refresh.downgrade();
