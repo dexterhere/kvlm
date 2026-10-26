@@ -91,7 +91,9 @@ pub fn redacted_report(profile: &HardwareProfile, app_version: &str) -> String {
             let _ = writeln!(
                 out,
                 "CPU: {} ({} physical, {} logical cores)",
-                cpu.model.as_deref().map_or("not measured".into(), &text),
+                cpu.model
+                    .as_deref()
+                    .map_or_else(|| "not measured".to_string(), text),
                 cpu.physical_cores
                     .map_or("unknown".to_string(), |n| n.to_string()),
                 cpu.logical_cores
