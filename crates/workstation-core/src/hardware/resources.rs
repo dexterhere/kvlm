@@ -42,11 +42,35 @@ use super::{GpuVendor, HardwareProfile, MemoryPool, amd_sysfs, cpu, nvml};
 use nvml_wrapper::Nvml;
 use std::{collections::BTreeSet, path::PathBuf};
 
-struct Target {
-    id: String,
-    name: String,
-    vendor: GpuVendor,
-    bus: String,
+pub(super) struct Target {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) vendor: GpuVendor,
+    pub(super) bus: String,
+}
+
+/// GPUs with a stable PCI identity, de-duplicated and capped. Shared by every sampler so
+/// they all watch the same devices.
+pub(super) fn targets(profile: &HardwareProfile) -> Vec<Target> {
+    let mut seen = BTreeSet::new();
+    profile
+        .gpus
+        .iter()
+        .filter_map(|gpu| {
+            let id = gpu.id.as_deref()?;
+            let bus = id.strip_prefix("pci:")?;
+            if amd_sysfs::pci_id(bus).as_deref() != Some(id) || !seen.insert(id) {
+                return None;
+            }
+            Some(Target {
+                id: id.into(),
+                name: gpu.name.chars().take(256).collect(),
+                vendor: gpu.vendor,
+                bus: bus.into(),
+            })
+        })
+        .take(MAX_GPUS)
+        .collect()
 }
 /// Inventory is fixed to the run snapshot; NVML initializes lazily once per run.
 /// Call `sample` only from a blocking worker.
@@ -57,27 +81,8 @@ pub struct MemoryProbe {
 }
 impl MemoryProbe {
     pub fn new(profile: &HardwareProfile) -> Self {
-        let mut seen = BTreeSet::new();
-        let targets = profile
-            .gpus
-            .iter()
-            .filter_map(|gpu| {
-                let id = gpu.id.as_deref()?;
-                let bus = id.strip_prefix("pci:")?;
-                if amd_sysfs::pci_id(bus).as_deref() != Some(id) || !seen.insert(id) {
-                    return None;
-                }
-                Some(Target {
-                    id: id.into(),
-                    name: gpu.name.chars().take(256).collect(),
-                    vendor: gpu.vendor,
-                    bus: bus.into(),
-                })
-            })
-            .take(MAX_GPUS)
-            .collect();
         Self {
-            targets,
+            targets: targets(profile),
             nvml: None,
             pci_root: PathBuf::from("/sys/bus/pci/devices"),
         }
