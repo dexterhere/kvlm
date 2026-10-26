@@ -504,8 +504,14 @@ fn artifact_metadata_round_trips_and_rejects_bad_identities() {
     store
         .cache_artifact_metadata("o/n", REV, "m.gguf", &gguf_facts(5), 10)
         .unwrap();
+    // Different facts for the same revision are a conflict, never a replacement.
+    assert_eq!(
+        store.cache_artifact_metadata("o/n", REV, "m.gguf", &gguf_facts(6), 20),
+        Err(workstation_core::db::catalog_cache::REVISION_CONFLICT.to_owned())
+    );
+    // The same facts again are accepted, and an older stamp never moves the time back.
     store
-        .cache_artifact_metadata("o/n", REV, "m.gguf", &gguf_facts(6), 5)
+        .cache_artifact_metadata("o/n", REV, "m.gguf", &gguf_facts(5), 5)
         .unwrap();
     let (facts, at) = store
         .cached_artifact_metadata("o/n", REV, "m.gguf")
@@ -522,5 +528,27 @@ fn artifact_metadata_round_trips_and_rejects_bad_identities() {
                 .cache_artifact_metadata(repo, revision, name, &gguf_facts(1), 1)
                 .is_err()
         );
+    }
+}
+
+#[test]
+fn saved_header_facts_that_break_parser_invariants_read_as_absent() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    for (alignment, tensor_bytes) in [(3, 5), (32, 5000)] {
+        let mut facts = gguf_facts(tensor_bytes);
+        facts.alignment = alignment;
+        store
+            .cache_artifact_metadata("o/n", REV, "bad.gguf", &facts, 1)
+            .unwrap();
+        assert!(
+            store
+                .cached_artifact_metadata("o/n", REV, "bad.gguf")
+                .unwrap()
+                .is_none()
+        );
+        // Remove it so the next fixture can be stored under the same name.
+        let conn = Connection::open(&path.0).unwrap();
+        conn.execute("DELETE FROM artifact_metadata", []).unwrap();
     }
 }

@@ -188,7 +188,14 @@ fn saved_page_search_expand_and_stale_answers() {
     }
     artifact_row.set_expanded(false);
     artifact_row.set_expanded(true);
-    assert!(rx.try_recv().is_err(), "a loaded file is not fetched again");
+    // Expanding again asks again: the header is saved, but memory budgets are fresh.
+    let CoreCommand::InspectArtifact { id, .. } = pump(&mut rx) else {
+        panic!("re-inspect")
+    };
+    explorer.receive(&UiEvent::ArtifactInspected {
+        id,
+        result: Ok(details()),
+    });
 
     // A failed search keeps the list and offers a retry.
     explorer.entry.set_text("qwen");

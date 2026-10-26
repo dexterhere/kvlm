@@ -453,7 +453,8 @@ impl Handle {
             let Some(entry) = state.artifacts.get_mut(artifact_id) else {
                 return;
             };
-            if entry.loading || entry.loaded {
+            // Expanding again re-reads the saved header and refreshes the memory budgets.
+            if entry.loading {
                 return;
             }
             entry.loading = true;
@@ -462,7 +463,7 @@ impl Handle {
                 &mut entry.children,
                 vec![info_row(
                     "Reading file header…",
-                    "Downloads at most the first 16 MiB of this file.",
+                    "Downloads at most the first 16 MiB of this file, once; then it is saved.",
                 )],
             );
             let artifact = entry.artifact.clone();

@@ -7,7 +7,11 @@
 
 use reqwest::{Client, StatusCode, Url, header, redirect::Policy};
 use serde_json::Value;
-use std::time::Duration;
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::Semaphore;
 use workstation_core::models::{
     artifact::valid_remote_filename,
@@ -97,6 +101,9 @@ impl HuggingFaceClient {
         if !https_only {
             // Loopback test fixtures must never be routed through an environment proxy.
             builder = builder.no_proxy();
+        }
+        if https_only {
+            builder = builder.dns_resolver(Arc::new(PublicOnly));
         }
         let client = builder
             .use_rustls_tls()
@@ -362,6 +369,61 @@ impl HuggingFaceClient {
         .await
         .map_err(|_| HfError::Timeout)?
     }
+}
+
+/// Resolver that refuses to hand out loopback, private, link-local or otherwise
+/// non-public addresses, so an allowed host name cannot be pointed at the local network.
+struct PublicOnly;
+
+impl reqwest::dns::Resolve for PublicOnly {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((name.as_str(), 0))
+                .await?
+                .filter(|addr| is_public(addr.ip()))
+                .collect();
+            if addrs.is_empty() {
+                return Err("no public address".into());
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+fn is_public(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => public_v4(ip),
+        IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
+            Some(mapped) => public_v4(mapped),
+            None => public_v6(ip),
+        },
+    }
+}
+
+fn public_v4(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    !(ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_multicast()
+        || ip.is_documentation()
+        || a == 0
+        || (a == 100 && (64..128).contains(&b)) // carrier-grade NAT
+        || (a == 192 && b == 0) // IETF protocol assignments
+        || (a == 198 && (b == 18 || b == 19)) // benchmarking
+        || a >= 240) // reserved
+}
+
+fn public_v6(ip: Ipv6Addr) -> bool {
+    let first = ip.segments()[0];
+    !(ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_multicast()
+        || (first & 0xfe00) == 0xfc00 // unique local
+        || (first & 0xffc0) == 0xfe80 // link local
+        || (first == 0x2001 && ip.segments()[1] == 0x0db8)) // documentation
 }
 
 fn map_transport(error: reqwest::Error) -> HfError {

@@ -686,3 +686,35 @@ fn production_redirects_stay_on_https_hugging_face_hosts() {
         assert!(!client.redirect_allowed(&Url::parse(bad).unwrap()), "{bad}");
     }
 }
+
+#[test]
+fn only_public_addresses_are_allowed_for_hugging_face_hosts() {
+    for public in ["8.8.8.8", "104.18.2.2", "2606:4700::1", "::ffff:8.8.8.8"] {
+        assert!(is_public(public.parse().unwrap()), "{public}");
+    }
+    for private in [
+        "127.0.0.1",
+        "0.0.0.0",
+        "10.1.2.3",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.169.254",
+        "100.64.0.1",
+        "192.0.0.1",
+        "198.18.0.1",
+        "224.0.0.1",
+        "255.255.255.255",
+        "240.0.0.1",
+        "::1",
+        "::",
+        "fc00::1",
+        "fd12::1",
+        "fe80::1",
+        "ff02::1",
+        "2001:db8::1",
+        "::ffff:127.0.0.1",
+        "::ffff:10.0.0.1",
+    ] {
+        assert!(!is_public(private.parse().unwrap()), "{private}");
+    }
+}

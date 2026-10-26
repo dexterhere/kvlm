@@ -243,6 +243,9 @@ impl CatalogService {
                 store.cache_artifact_metadata(&repo_id, &revision, &filename, &stored, fetched_at)
             })
             .await;
+        if matches!(&saved, Err(e) if e == REVISION_CONFLICT) {
+            return Err("Hugging Face reported a different header for a file saved earlier. The saved copy was kept and the new data was not used.".into());
+        }
         Ok(InspectLoad {
             metadata,
             source: LoadSource::Live,

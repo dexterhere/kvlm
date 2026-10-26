@@ -29,6 +29,17 @@ pub struct GgufMetadata {
     pub warnings: Vec<LayoutWarning>,
 }
 
+impl GgufMetadata {
+    /// Invariants the parser guarantees; a saved row that breaks them is not trusted.
+    pub fn plausible(&self) -> bool {
+        self.alignment >= 8
+            && self.alignment.is_power_of_two()
+            && self.tensor_count <= 65_536
+            && self.tensor_bytes <= self.file_bytes
+            && self.file_bytes >= 24
+    }
+}
+
 /// Typed declarations only. Missing fields are not derived from other values.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttentionMetadata {

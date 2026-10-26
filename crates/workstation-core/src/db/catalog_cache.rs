@@ -173,6 +173,21 @@ impl HistoryStore {
         let json = serde_json::to_string(metadata).map_err(|_| "Cannot encode file metadata.")?;
         let at = timestamp(now_ms)?;
         self.write(|c| {
+            // A revision's header never changes: differing facts are an integrity
+            // problem with the response, never a replacement.
+            let saved: Option<String> = c
+                .query_row(
+                    "SELECT gguf_json FROM artifact_metadata WHERE repo_id=?1 AND revision=?2 AND filename=?3",
+                    params![repo_id, revision, filename],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|_| "Cannot read cached file metadata.")?;
+            if let Some(saved) = saved
+                && serde_json::from_str::<GgufMetadata>(&saved).is_ok_and(|old| old != *metadata)
+            {
+                return Err(REVISION_CONFLICT.into());
+            }
             c.execute(
                 "INSERT INTO artifact_metadata(repo_id,revision,filename,gguf_json,fetched_at_unix_ms) VALUES (?1,?2,?3,?4,?5)
                  ON CONFLICT(repo_id,revision,filename) DO UPDATE SET gguf_json=excluded.gguf_json, fetched_at_unix_ms=excluded.fetched_at_unix_ms
@@ -201,10 +216,10 @@ impl HistoryStore {
             .optional()
             .map_err(|_| "Cannot read cached file metadata.")?;
         Ok(row.and_then(|(json, at)| {
-            Some((
-                serde_json::from_str(&json).ok()?,
-                u64::try_from(at).unwrap_or(0),
-            ))
+            let metadata: GgufMetadata = serde_json::from_str(&json).ok()?;
+            metadata
+                .plausible()
+                .then(|| (metadata, u64::try_from(at).unwrap_or(0)))
         }))
     }
 

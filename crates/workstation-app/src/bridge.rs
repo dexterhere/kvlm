@@ -125,6 +125,7 @@ pub struct ArtifactDetails {
 async fn artifact_details(
     load: impl Future<Output = Result<InspectLoad, String>>,
     probe: Arc<impl Fn() -> HardwareProfile + Send + Sync + 'static>,
+    gate: Arc<tokio::sync::Semaphore>,
 ) -> Result<ArtifactDetails, String> {
     let InspectLoad {
         metadata,
@@ -132,7 +133,14 @@ async fn artifact_details(
         notice,
     } = load.await?;
     let scenario = parse_scenario("8192", "512", KvCacheType::F16, KvCacheType::F16)?;
+    // Aborting this job cannot stop a running blocking probe, so one permit travels with
+    // it: repeated requests wait instead of piling up probes.
+    let permit = gate
+        .acquire_owned()
+        .await
+        .map_err(|_| "Fit estimate failed. Retry.".to_string())?;
     let report = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         fit_report(
             metadata,
             &scenario,
@@ -354,6 +362,7 @@ where
         let mut cached_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         let mut release_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         let mut inspect_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let probe_gate = Arc::new(tokio::sync::Semaphore::new(1));
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
@@ -432,8 +441,9 @@ where
                 CoreCommand::InspectArtifact { id, artifact } => {
                     inspect_jobs.abort_all();
                     let (catalog, probe) = (Arc::clone(&catalog), Arc::clone(&probe));
+                    let gate = Arc::clone(&probe_gate);
                     inspect_jobs.spawn(guarded(id, inspect_failed, async move {
-                        let result = artifact_details(catalog.inspect(*artifact), probe).await.map(Box::new);
+                        let result = artifact_details(catalog.inspect(*artifact), probe, gate).await.map(Box::new);
                         UiEvent::ArtifactInspected { id, result }
                     }));
                 }
