@@ -170,7 +170,8 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
                 | UiEvent::BenchmarkHistoryLoaded { .. }
                 | UiEvent::CatalogLoaded { .. }
                 | UiEvent::ReleaseLoaded { .. }
-                | UiEvent::ArtifactInspected { .. } => continue,
+                | UiEvent::ArtifactInspected { .. }
+                | UiEvent::LocalScanned { .. } => continue,
             }
             status.set_label(&format!("{hardware_status} · {runtime_status}"));
         }
