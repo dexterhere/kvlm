@@ -255,3 +255,45 @@ fn free_space_reserve_and_partial_budget_are_enforced() {
     );
     assert!(store.check_partial_budget(&digest, 1 << 30).is_ok());
 }
+
+#[test]
+fn a_wrong_size_request_never_deletes_a_good_blob() {
+    let dir = Dir::new();
+    let store = Storage::open(&dir.models()).unwrap();
+    let content = b"model bytes that are fine";
+    let digest = sha(content);
+    let blob = store.blob_path(&digest).unwrap();
+    fs::write(&blob, content).unwrap();
+    fs::set_permissions(&blob, fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert!(
+        !store
+            .verified_blob(&digest, content.len() as u64 + 1)
+            .unwrap()
+    );
+    assert!(blob.exists(), "a size claim alone must not remove the file");
+    assert!(store.verified_blob(&digest, content.len() as u64).unwrap());
+}
+
+#[test]
+fn a_partial_file_swapped_after_hashing_is_not_published() {
+    let dir = Dir::new();
+    let store = Storage::open(&dir.models()).unwrap();
+    let content = b"verified bytes";
+    let digest = sha(content);
+    let (mut file, _) = store.open_part(&digest, content.len() as u64).unwrap();
+    file.write_all(content).unwrap();
+    let hasher = Sha256::new().chain_update(content);
+
+    // Another process replaces the name with a different file after the bytes were hashed.
+    let part = dir.models().join("partial").join(format!("{digest}.part"));
+    fs::remove_file(&part).unwrap();
+    fs::write(&part, b"EVIL bytes here").unwrap();
+    fs::set_permissions(&part, fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert!(matches!(
+        store.publish(&digest, file, hasher),
+        Err(StorageError::Unsafe(_))
+    ));
+    assert!(!store.blob_path(&digest).unwrap().exists());
+}

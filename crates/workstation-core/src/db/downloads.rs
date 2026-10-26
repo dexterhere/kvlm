@@ -157,7 +157,7 @@ impl HistoryStore {
             .map_err(|_| "Cannot record the download.")?;
             let id = c.last_insert_rowid();
             c.execute(
-                "DELETE FROM downloads WHERE id IN (SELECT id FROM downloads WHERE state IN ('completed','failed','cancelled') ORDER BY updated_at_unix_ms ASC, id ASC LIMIT max(0,(SELECT count(*) FROM downloads)-?1))",
+                "DELETE FROM downloads WHERE id IN (SELECT id FROM downloads WHERE state = 'completed' ORDER BY updated_at_unix_ms ASC, id ASC LIMIT max(0,(SELECT count(*) FROM downloads)-?1))",
                 [MAX_ROWS],
             )
             .map_err(|_| "Cannot trim the download list.")?;

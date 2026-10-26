@@ -32,6 +32,8 @@ struct Live {
     row: adw::ActionRow,
     bar: gtk::ProgressBar,
     expected_size: u64,
+    /// The row was drawn with Pause and Cancel, so it already reflects a running transfer.
+    running: bool,
 }
 
 pub struct Downloads {
@@ -131,9 +133,9 @@ impl Downloads {
     }
 
     fn progress(&self, progress: &Progress) {
-        let known = {
+        let running = {
             let state = self.state.borrow();
-            state.rows.get(&progress.download_id).map(|live| {
+            state.rows.get(&progress.download_id).is_some_and(|live| {
                 live.bar
                     .set_fraction(fraction(progress.bytes_done, live.expected_size));
                 live.row.set_subtitle(&format!(
@@ -141,10 +143,11 @@ impl Downloads {
                     size_text(progress.bytes_done),
                     size_text(progress.total)
                 ));
+                live.running
             })
         };
-        // The first reading of a new transfer: fetch its row once.
-        if known.is_none() && !self.state.borrow().refresh_asked {
+        // A new or resumed transfer: redraw its row once so it offers Pause and Cancel.
+        if !running && !self.state.borrow().refresh_asked {
             self.load();
             self.state.borrow_mut().refresh_asked = true;
         }
@@ -164,6 +167,7 @@ impl Downloads {
                     row: widget,
                     bar,
                     expected_size: row.expected_size,
+                    running: matches!(row.state, DownloadState::Queued | DownloadState::Running),
                 },
             );
         }

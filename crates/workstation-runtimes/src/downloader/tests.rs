@@ -477,3 +477,46 @@ async fn a_dropped_stop_sender_pauses_instead_of_spinning() {
         "{outcome:?}"
     );
 }
+
+#[tokio::test]
+async fn a_cancel_set_before_a_complete_partial_is_published_keeps_it_unpublished() {
+    let dir = Dir::new();
+    let bytes = content(80_000);
+    seed_part(&dir, &bytes, 80_000);
+    let server = Server::start(|_| vec![]);
+    let (_tx, rx) = watch::channel(Some(Stop::Cancel));
+    let (outcome, _) = run_with(&downloader(&server, &dir), &artifact(&bytes), rx).await;
+    assert_eq!(outcome.end, DownloadEnd::Cancelled, "{outcome:?}");
+    assert!(part(&dir, &bytes).exists());
+    assert!(!blob(&dir, &bytes).exists());
+}
+
+#[tokio::test]
+async fn discarding_one_row_keeps_a_partial_another_row_still_needs() {
+    let dir = Dir::new();
+    let bytes = content(100_000);
+    seed_part(&dir, &bytes, 30_000);
+    let store = HistoryStore::open(&dir.database()).unwrap();
+    let mut ids = Vec::new();
+    for repo in ["o/a", "p/b"] {
+        let new = NewDownload {
+            artifact_id: format!("hf:{repo}"),
+            repo_id: repo.into(),
+            revision: REV.into(),
+            filename: "m.gguf".into(),
+            sha256: sha(&bytes),
+            size: bytes.len() as u64,
+        };
+        let id = store.begin_download(&new, 1).unwrap();
+        store
+            .update_download(id, DownloadState::Paused, 30_000, None, 2)
+            .unwrap();
+        ids.push(id);
+    }
+    let server = Server::start(|_| vec![]);
+    let dl = downloader(&server, &dir);
+    dl.discard(ids[0]).await.unwrap();
+    assert!(part(&dir, &bytes).exists(), "the other row still needs it");
+    dl.discard(ids[1]).await.unwrap();
+    assert!(!part(&dir, &bytes).exists());
+}

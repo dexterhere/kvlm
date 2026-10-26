@@ -301,10 +301,12 @@ impl Storage {
         let Some(mut file) = open_private_existing(&path)? else {
             return Ok(false);
         };
-        let good = file.metadata()?.len() == size && {
-            let hasher = self.hash_prefix(&mut file, size)?;
-            hex(hasher) == sha256
-        };
+        // A different length proves nothing about the file: the caller's size may be the
+        // wrong one, so a digest-named file is kept and merely not accepted.
+        if file.metadata()?.len() != size {
+            return Ok(false);
+        }
+        let good = hex(self.hash_prefix(&mut file, size)?) == sha256;
         if !good {
             let _ = fs::remove_file(&path);
         }
@@ -325,6 +327,13 @@ impl Storage {
         }
         part.sync_all()?;
         let (from, to) = (self.part_path(sha256)?, self.final_path(sha256)?);
+        // Publish the file that was hashed, not whatever now has the same name.
+        let (hashed, named) = (part.metadata()?, fs::symlink_metadata(&from)?);
+        if (hashed.dev(), hashed.ino()) != (named.dev(), named.ino()) {
+            return Err(StorageError::Unsafe(
+                "the partial file was replaced while it was verified",
+            ));
+        }
         let outcome = match renameat_with(
             rustix::fs::CWD,
             &from,

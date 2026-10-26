@@ -131,11 +131,25 @@ impl Downloader {
             let row = store
                 .get_download(download_id)?
                 .ok_or("That download no longer exists.")?;
+            if row.state == DownloadState::Completed {
+                return store.delete_download(download_id);
+            }
+            // The store lock is held until the row is gone, so a resume cannot slip in
+            // between and have its fresh row deleted.
+            let storage = Storage::open(models).map_err(|e| e.to_string())?;
+            let row = store
+                .get_download(download_id)?
+                .ok_or("That download no longer exists.")?;
             if row.state.is_active() {
                 return Err("Pause or cancel the download before discarding it.".into());
             }
-            if row.state != DownloadState::Completed {
-                let storage = Storage::open(models).map_err(|e| e.to_string())?;
+            // Identical files from different repositories share one partial file.
+            let shared = store.list_downloads()?.iter().any(|other| {
+                other.id != row.id
+                    && other.expected_sha256 == row.expected_sha256
+                    && other.state != DownloadState::Completed
+            });
+            if !shared {
                 storage
                     .discard_part(&row.expected_sha256)
                     .map_err(|e| e.to_string())?;
@@ -315,6 +329,9 @@ impl Transfer<'_> {
             Ok(opened) => opened,
             Err(error) => return self.storage_failed(0, error),
         };
+        if let Some(request) = *stop.borrow() {
+            return self.stopped(request, done);
+        }
         if let Err(error) = self.storage.check_space(self.size - done) {
             return self.paused_for_space(done, error);
         }
@@ -323,6 +340,10 @@ impl Transfer<'_> {
             Err(error) => return self.storage_failed(done, error),
         };
         self.report(done);
+        // Hashing a long partial file and connecting cannot be interrupted; check around them.
+        if let Some(request) = *stop.borrow() {
+            return self.stopped(request, done);
+        }
 
         // A part file that already holds every byte needs no network at all.
         if done < self.size {
@@ -416,6 +437,10 @@ impl Transfer<'_> {
                         .into(),
                 );
             }
+        }
+        if let Some(request) = *stop.borrow() {
+            let _ = file.sync_all();
+            return self.stopped(request, self.size);
         }
         self.report(self.size);
         let _ = self.store.update_download(
