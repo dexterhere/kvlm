@@ -34,6 +34,8 @@ pub enum ExtractError {
     Unsafe(&'static str),
     TooManyEntries,
     TooLarge,
+    Cancelled,
+    NoSpace,
     /// Not a readable archive.
     Corrupt,
     Io,
@@ -45,6 +47,8 @@ impl std::fmt::Display for ExtractError {
             Self::Unsafe(why) => return write!(f, "The archive was refused: {why}."),
             Self::TooManyEntries => "The archive has more entries than allowed.",
             Self::TooLarge => "The archive expands beyond the size limit.",
+            Self::Cancelled => "The install was cancelled.",
+            Self::NoSpace => "Not enough free disk space to extract the archive.",
             Self::Corrupt => "The archive is damaged.",
             Self::Io => "Cannot write the extracted files. Check free disk space.",
         })
@@ -58,22 +62,102 @@ pub struct Summary {
     pub bytes: u64,
 }
 
-struct Capped<R> {
+/// Longest GNU long-name/long-link body accepted. Real names are far shorter.
+const MAX_LONG_NAME: u64 = 4096;
+/// Free space that must remain while extracting, checked every `CHECK_EVERY` bytes.
+const MIN_FREE: u64 = 512 << 20;
+const CHECK_EVERY: u64 = 32 << 20;
+
+/// Counts decompressed bytes, stops at the cap, notices cancellation, keeps a disk reserve,
+/// and inspects tar header blocks as they pass so that metadata the `tar` crate would buffer
+/// whole (pax, sparse, oversized long names) is refused before it is read.
+struct Guarded<'a, R> {
     inner: R,
     left: u64,
-    exceeded: bool,
+    cancel: &'a (dyn Fn() -> bool + Sync),
+    dest: &'a Path,
+    since_check: u64,
+    header: [u8; 512],
+    filled: usize,
+    skip: u64,
+    failure: Option<ExtractError>,
 }
 
-impl<R: Read> Read for Capped<R> {
+impl<R: Read> Guarded<'_, R> {
+    fn fail(&mut self, error: ExtractError) -> io::Error {
+        self.failure = Some(error);
+        io::Error::new(io::ErrorKind::InvalidData, "refused")
+    }
+
+    /// Walk the bytes just read, tracking where header blocks start.
+    fn scan(&mut self, mut data: &[u8]) -> Result<(), ExtractError> {
+        while !data.is_empty() {
+            if self.skip > 0 {
+                let step = self.skip.min(data.len() as u64);
+                self.skip -= step;
+                data = &data[step as usize..];
+                continue;
+            }
+            let take = (512 - self.filled).min(data.len());
+            self.header[self.filled..self.filled + take].copy_from_slice(&data[..take]);
+            self.filled += take;
+            data = &data[take..];
+            if self.filled < 512 {
+                continue;
+            }
+            self.filled = 0;
+            let size = octal(&self.header[124..136]);
+            match self.header[156] {
+                b'x' | b'g' | b'S' => return Err(ExtractError::Unsafe("extended tar headers")),
+                b'L' | b'K' if size.is_none_or(|n| n > MAX_LONG_NAME) => {
+                    return Err(ExtractError::Unsafe("oversized long name"));
+                }
+                _ => {}
+            }
+            // An unparsable size is the `tar` crate's error to report; skip nothing here.
+            self.skip = size.unwrap_or(0).div_ceil(512) * 512;
+        }
+        Ok(())
+    }
+}
+
+/// Plain octal size field; the base-256 form used for huge sizes is not accepted.
+fn octal(field: &[u8]) -> Option<u64> {
+    let text = std::str::from_utf8(field).ok()?;
+    let digits = text.trim_matches(|c: char| c == '\0' || c == ' ');
+    if digits.is_empty() {
+        return Some(0);
+    }
+    u64::from_str_radix(digits, 8).ok()
+}
+
+impl<R: Read> Read for Guarded<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if (self.cancel)() {
+            return Err(self.fail(ExtractError::Cancelled));
+        }
         let n = self.inner.read(buf)?;
         if n as u64 > self.left {
-            self.exceeded = true;
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "size limit"));
+            return Err(self.fail(ExtractError::TooLarge));
         }
         self.left -= n as u64;
+        self.since_check += n as u64;
+        if self.since_check >= CHECK_EVERY {
+            self.since_check = 0;
+            if free_bytes(self.dest).is_none_or(|free| free < MIN_FREE) {
+                return Err(self.fail(ExtractError::NoSpace));
+            }
+        }
+        if let Err(error) = self.scan(&buf[..n]) {
+            return Err(self.fail(error));
+        }
         Ok(n)
     }
+}
+
+fn free_bytes(path: &Path) -> Option<u64> {
+    let stat = rustix::fs::statvfs(path).ok()?;
+    Some(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
 fn valid_component(part: &str) -> bool {
@@ -123,27 +207,43 @@ fn io_error(_: io::Error) -> ExtractError {
     ExtractError::Io
 }
 
-/// Extract `archive` into the existing, empty-or-shared directory `dest`. May be called for
-/// several archives with the same `dest`; a file present in two of them is refused.
+/// Extract `archive` into the existing directory `dest`. May be called for several archives
+/// with the same `dest`; a file present in two of them is refused. The returned summary is
+/// what this archive used, so the caller can shrink the limits for the next one.
 pub fn extract_tar_gz(
     archive: impl Read,
     dest: &Path,
     limits: Limits,
+    cancel: &(dyn Fn() -> bool + Sync),
 ) -> Result<Summary, ExtractError> {
-    let mut stream = Capped {
+    if free_bytes(dest).is_none_or(|free| free < MIN_FREE) {
+        return Err(ExtractError::NoSpace);
+    }
+    let mut stream = Guarded {
         inner: GzDecoder::new(archive),
         left: limits.max_bytes,
-        exceeded: false,
+        cancel,
+        dest,
+        since_check: 0,
+        header: [0; 512],
+        filled: 0,
+        skip: 0,
+        failure: None,
     };
     let result = unpack(&mut stream, dest, limits);
     match result {
-        Err(ExtractError::Corrupt) if stream.exceeded => Err(ExtractError::TooLarge),
+        // The guard's reason is more useful than the tar crate's "damaged".
+        Err(_) if stream.failure.is_some() => Err(stream.failure.take().unwrap()),
+        Ok(mut summary) => {
+            summary.bytes = limits.max_bytes - stream.left;
+            Ok(summary)
+        }
         other => other,
     }
 }
 
 fn unpack(
-    stream: &mut Capped<GzDecoder<impl Read>>,
+    stream: &mut Guarded<'_, GzDecoder<impl Read>>,
     dest: &Path,
     limits: Limits,
 ) -> Result<Summary, ExtractError> {
@@ -204,14 +304,8 @@ fn unpack(
                     io::ErrorKind::AlreadyExists => ExtractError::Unsafe("file already exists"),
                     _ => ExtractError::Io,
                 })?;
-            let written = io::copy(&mut entry, &mut file).map_err(|e| {
-                if stream_limit(&e) {
-                    ExtractError::TooLarge
-                } else {
-                    ExtractError::Corrupt
-                }
-            })?;
-            summary.bytes += written;
+            let written = io::copy(&mut entry, &mut file).map_err(|_| ExtractError::Corrupt)?;
+            let _ = written;
         } else if kind.is_symlink() {
             let link = entry
                 .link_name()
@@ -254,10 +348,6 @@ fn unpack(
         symlink(name, dest.join(target)).map_err(io_error)?;
     }
     Ok(summary)
-}
-
-fn stream_limit(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::InvalidData && error.to_string() == "size limit"
 }
 
 fn libc_nofollow() -> i32 {

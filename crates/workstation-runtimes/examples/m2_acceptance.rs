@@ -48,7 +48,7 @@ async fn install(work: &std::path::Path, backend: Backend) {
         candidate.total_size()
     );
     let root = work.join("llamacpp");
-    let cancel = AtomicBool::new(false);
+    let cancel = std::sync::Arc::new(AtomicBool::new(false));
     let installed = installer
         .install(&root, candidate, &cancel, |p| {
             println!(

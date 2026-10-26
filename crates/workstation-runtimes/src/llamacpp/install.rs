@@ -198,12 +198,16 @@ impl Installer {
     }
 
     /// Download, verify, extract and publish `candidate` under `root` (the llama.cpp
-    /// install directory). `cancel` is checked between network chunks.
+    /// install directory). `cancel` is checked between network chunks, while extracting,
+    /// and before the server is run and the build published.
+    ///
+    /// Dropping the returned future cancels the blocking work too, and the staging
+    /// directory and directory lock stay with that work until it has stopped.
     pub async fn install(
         &self,
         root: &Path,
         candidate: &Candidate,
-        cancel: &AtomicBool,
+        cancel: &Arc<AtomicBool>,
         mut progress: impl FnMut(Progress),
     ) -> Result<Installed, InstallError> {
         let name = candidate.dir_name();
@@ -214,7 +218,7 @@ impl Installer {
             return Err(InstallError::Unsafe("invalid build identity"));
         }
         prepare_root(root)?;
-        let _lock = RootLock::acquire(root)?;
+        let lock = RootLock::acquire(root)?;
         remove_stale_stages(root);
         let target = root.join(&name);
         if fs::symlink_metadata(&target).is_ok() {
@@ -229,9 +233,16 @@ impl Installer {
             .mode(0o700)
             .create(&content)
             .map_err(|_| InstallError::Io)?;
+        let abandoned = AbandonOnDrop(Arc::new(AtomicBool::new(false)));
+        let stop = {
+            let (cancel, abandoned) = (Arc::clone(cancel), Arc::clone(&abandoned.0));
+            Arc::new(move || cancel.load(Ordering::Relaxed) || abandoned.load(Ordering::Relaxed))
+        };
+        let mut held = Held { _lock: lock, stage };
         let mut done_before = 0;
+        let mut used = (0usize, 0u64);
         for (index, asset) in candidate.archives.iter().enumerate() {
-            let archive_path = stage.path.join(format!("archive-{index}.tar.gz"));
+            let archive_path = held.stage.path.join(format!("archive-{index}.tar.gz"));
             self.download(&candidate.tag, asset, &archive_path, cancel, &mut |done| {
                 progress(Progress {
                     archive: index,
@@ -241,28 +252,50 @@ impl Installer {
                 });
             })
             .await?;
-            let (path, dest) = (archive_path.clone(), content.clone());
-            tokio::task::spawn_blocking(move || {
-                let file = File::open(&path).map_err(|_| InstallError::Io)?;
-                extract::extract_tar_gz(file, &dest, LIMITS)?;
-                fs::remove_file(&path).map_err(|_| InstallError::Io)
+            let (dest, stop, left) = (content.clone(), Arc::clone(&stop), (used.0, used.1));
+            let (back, result) = tokio::task::spawn_blocking(move || {
+                let result = (|| {
+                    let file = File::open(&archive_path).map_err(|_| InstallError::Io)?;
+                    let limits = extract::Limits {
+                        max_entries: LIMITS.max_entries.saturating_sub(left.0),
+                        max_bytes: LIMITS.max_bytes.saturating_sub(left.1),
+                    };
+                    let summary = extract::extract_tar_gz(file, &dest, limits, &*stop)?;
+                    fs::remove_file(&archive_path).map_err(|_| InstallError::Io)?;
+                    Ok::<_, InstallError>(summary)
+                })();
+                (held, result)
             })
             .await
-            .map_err(|_| InstallError::Io)??;
+            .map_err(|_| InstallError::Io)?;
+            held = back;
+            let summary = result?;
+            used = (used.0 + summary.entries, used.1 + summary.bytes);
             done_before += asset.size;
         }
+        if stop() {
+            return Err(InstallError::Cancelled);
+        }
         let server = content.join("llama-server");
-        tokio::task::spawn_blocking({
-            let (server, content) = (server.clone(), content.clone());
-            move || verify_runs(&server, &content)
+        let (back, ran) = tokio::task::spawn_blocking({
+            let content = content.clone();
+            move || {
+                let ran = verify_runs(&server, &content);
+                (held, ran)
+            }
         })
         .await
-        .map_err(|_| InstallError::Io)??;
+        .map_err(|_| InstallError::Io)?;
+        held = back;
+        ran?;
+        if stop() {
+            return Err(InstallError::Cancelled);
+        }
 
         publish(&content, &target)?;
-        File::open(root)
-            .and_then(|d| d.sync_all())
-            .map_err(|_| InstallError::Io)?;
+        // Published: from here the build is real, so a failed directory sync is not an error.
+        let _ = File::open(root).and_then(|d| d.sync_all());
+        drop(held);
         Ok(Installed {
             tag: candidate.tag.clone(),
             backend: candidate.backend,
@@ -343,6 +376,9 @@ impl Installer {
             }
         }
         report(done);
+        if cancel.load(Ordering::Relaxed) {
+            return Err(InstallError::Cancelled);
+        }
         if done != asset.size || finish_hex(hasher) != asset.sha256 {
             return Err(InstallError::Integrity);
         }
@@ -420,6 +456,21 @@ impl RootLock {
         rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
             .map_err(|_| InstallError::Busy)?;
         Ok(Self { _file: file })
+    }
+}
+
+/// The lock and staging directory travel together into blocking work.
+struct Held {
+    _lock: RootLock,
+    stage: Stage,
+}
+
+/// Tells blocking work to stop when the install future is dropped.
+struct AbandonOnDrop(Arc<AtomicBool>);
+
+impl Drop for AbandonOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
     }
 }
 
@@ -519,6 +570,7 @@ pub fn remove_install(
     if in_use == Some(dir_name) {
         return Err(InstallError::Unsafe("this build is running"));
     }
+    prepare_root(root)?;
     let _lock = RootLock::acquire(root)?;
     let target = root.join(dir_name);
     match fs::symlink_metadata(&target) {

@@ -11,6 +11,10 @@ use std::{
 };
 use tar::{Builder, EntryType, Header};
 
+fn no() -> bool {
+    false
+}
+const NO: &(dyn Fn() -> bool + Sync) = &no;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct Dir(pub PathBuf);
@@ -91,7 +95,7 @@ fn run(items: &[Item]) -> (Dir, Result<super::extract::Summary, ExtractError>) {
     let dir = Dir::new();
     let dest = dir.0.join("out");
     fs::create_dir(&dest).unwrap();
-    let result = extract_tar_gz(tgz(items).as_slice(), &dest, LIMITS);
+    let result = extract_tar_gz(tgz(items).as_slice(), &dest, LIMITS, NO);
     (dir, result)
 }
 
@@ -186,7 +190,7 @@ fn an_existing_link_at_the_destination_is_never_written_through() {
     fs::write(&victim, b"precious").unwrap();
     symlink(&victim, dest.join("llama-server")).unwrap();
     let archive = tgz(&[Item::File("llama-b1/llama-server", b"EVIL".to_vec(), 0o755)]);
-    let result = extract_tar_gz(archive.as_slice(), &dest, LIMITS);
+    let result = extract_tar_gz(archive.as_slice(), &dest, LIMITS, NO);
     assert!(matches!(result, Err(ExtractError::Unsafe(_))));
     assert_eq!(fs::read(&victim).unwrap(), b"precious");
 }
@@ -202,7 +206,7 @@ fn entry_and_decompressed_byte_caps_stop_the_extraction() {
         max_bytes: LIMITS.max_bytes,
     };
     assert_eq!(
-        extract_tar_gz(tgz(&many).as_slice(), &dest, tight),
+        extract_tar_gz(tgz(&many).as_slice(), &dest, tight, NO),
         Err(ExtractError::TooManyEntries)
     );
 
@@ -216,7 +220,7 @@ fn entry_and_decompressed_byte_caps_stop_the_extraction() {
         max_bytes: 1 << 20,
     };
     assert_eq!(
-        extract_tar_gz(bomb.as_slice(), &dest2, tight),
+        extract_tar_gz(bomb.as_slice(), &dest2, tight, NO),
         Err(ExtractError::TooLarge)
     );
     assert!(fs::metadata(dest2.join("zeros")).map_or(0, |m| m.len()) <= 1 << 20);
@@ -228,10 +232,64 @@ fn garbage_is_corrupt_not_a_panic() {
     let dest = dir.0.join("out");
     fs::create_dir(&dest).unwrap();
     assert_eq!(
-        extract_tar_gz(&b"this is not gzip"[..], &dest, LIMITS),
+        extract_tar_gz(&b"this is not gzip"[..], &dest, LIMITS, NO),
         Err(ExtractError::Corrupt)
     );
     let mut cut = tgz(&[Item::File("llama-b1/a", vec![7u8; 100_000], 0o644)]);
     cut.truncate(cut.len() / 2);
-    assert!(extract_tar_gz(cut.as_slice(), &dest, LIMITS).is_err());
+    assert!(extract_tar_gz(cut.as_slice(), &dest, LIMITS, NO).is_err());
+}
+
+#[test]
+fn extended_headers_and_oversized_long_names_are_refused_before_buffering() {
+    let dir = Dir::new();
+    let dest = dir.0.join("out");
+    fs::create_dir(&dest).unwrap();
+
+    let mut builder = Builder::new(Vec::new());
+    builder
+        .append_pax_extensions([("comment", &b"hello"[..])])
+        .unwrap();
+    let mut h = header("llama-b1/a", EntryType::Regular, 1, 0o644);
+    h.set_cksum();
+    builder.append(&h, &b"x"[..]).unwrap();
+    let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+    gz.write_all(&builder.into_inner().unwrap()).unwrap();
+    let pax = gz.finish().unwrap();
+    assert_eq!(
+        extract_tar_gz(pax.as_slice(), &dest, LIMITS, NO),
+        Err(ExtractError::Unsafe("extended tar headers"))
+    );
+
+    let mut builder = Builder::new(Vec::new());
+    let mut h = Header::new_gnu();
+    h.set_entry_type(EntryType::Regular);
+    h.set_size(1);
+    h.set_mode(0o644);
+    builder
+        .append_data(&mut h, format!("llama-b1/{}", "a".repeat(5000)), &b"x"[..])
+        .unwrap();
+    let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+    gz.write_all(&builder.into_inner().unwrap()).unwrap();
+    let long = gz.finish().unwrap();
+    assert_eq!(
+        extract_tar_gz(long.as_slice(), &dest, LIMITS, NO),
+        Err(ExtractError::Unsafe("oversized long name"))
+    );
+    assert!(fs::read_dir(&dest).unwrap().next().is_none());
+}
+
+#[test]
+fn cancellation_stops_extraction_and_usage_is_reported_for_shared_caps() {
+    let dir = Dir::new();
+    let dest = dir.0.join("out");
+    fs::create_dir(&dest).unwrap();
+    let archive = tgz(&[Item::File("llama-b1/a", vec![1u8; 100_000], 0o644)]);
+    let stop = || true;
+    assert_eq!(
+        extract_tar_gz(archive.as_slice(), &dest, LIMITS, &stop),
+        Err(ExtractError::Cancelled)
+    );
+    let used = extract_tar_gz(archive.as_slice(), &dest, LIMITS, NO).unwrap();
+    assert!(used.bytes >= 100_000 && used.entries == 1);
 }

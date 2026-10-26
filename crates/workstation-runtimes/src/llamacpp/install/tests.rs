@@ -58,7 +58,7 @@ async fn install(
     server: &Server,
     root: &Path,
     candidate: &Candidate,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<Installed, InstallError> {
     Installer::for_test(server.port())
         .install(root, candidate, cancel, |_| {})
@@ -71,7 +71,7 @@ async fn a_verified_build_is_published_and_a_second_install_is_refused() {
     let server = Server::start(|_| vec![route(PATH, bytes(&archive))]);
     let dir = Dir::new();
     let root = dir.0.join("llamacpp");
-    let cancel = AtomicBool::new(false);
+    let cancel = Arc::new(AtomicBool::new(false));
     let done = install(&server, &root, &candidate(&archive), &cancel)
         .await
         .unwrap();
@@ -97,7 +97,7 @@ async fn a_checksum_mismatch_publishes_nothing_and_leaves_no_staging() {
     let server = Server::start(|_| vec![route(PATH, bytes(&archive))]);
     let dir = Dir::new();
     let root = dir.0.join("llamacpp");
-    let result = install(&server, &root, &wrong, &AtomicBool::new(false)).await;
+    let result = install(&server, &root, &wrong, &Arc::new(AtomicBool::new(false))).await;
     assert_eq!(result, Err(InstallError::Integrity));
     assert!(leftovers(&root).is_empty());
 }
@@ -111,7 +111,7 @@ async fn size_lies_and_overlong_bodies_are_integrity_failures() {
     let dir = Dir::new();
     let root = dir.0.join("llamacpp");
     assert_eq!(
-        install(&server, &root, &short, &AtomicBool::new(false)).await,
+        install(&server, &root, &short, &Arc::new(AtomicBool::new(false))).await,
         Err(InstallError::Integrity)
     );
     assert!(leftovers(&root).is_empty());
@@ -128,7 +128,7 @@ async fn a_build_that_will_not_run_is_not_published() {
             &server,
             &root,
             &candidate(&archive),
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
         )
         .await;
         assert_eq!(result, Err(InstallError::WontRun));
@@ -143,7 +143,7 @@ async fn a_build_that_will_not_run_is_not_published() {
         &server,
         &root,
         &candidate(&archive),
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
     )
     .await;
     assert_eq!(result, Err(InstallError::WontRun));
@@ -166,7 +166,7 @@ async fn hostile_archives_are_refused_before_anything_runs() {
         &server,
         &root,
         &candidate(&archive),
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
     )
     .await;
     assert!(matches!(
@@ -195,7 +195,7 @@ async fn redirects_stay_on_the_allowed_host() {
     });
     let dir = Dir::new();
     let root = dir.0.join("llamacpp");
-    let cancel = AtomicBool::new(false);
+    let cancel = Arc::new(AtomicBool::new(false));
     install(&server, &root, &candidate(&archive), &cancel)
         .await
         .unwrap();
@@ -217,7 +217,13 @@ async fn cancel_stops_and_cleans_up() {
     let server = Server::start(|_| vec![route(PATH, bytes(&archive))]);
     let dir = Dir::new();
     let root = dir.0.join("llamacpp");
-    let result = install(&server, &root, &candidate(&archive), &AtomicBool::new(true)).await;
+    let result = install(
+        &server,
+        &root,
+        &candidate(&archive),
+        &Arc::new(AtomicBool::new(true)),
+    )
+    .await;
     assert_eq!(result, Err(InstallError::Cancelled));
     assert!(leftovers(&root).is_empty());
 }
@@ -236,7 +242,7 @@ async fn http_errors_are_typed() {
             &server,
             &root,
             &candidate(&archive),
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
         )
         .await;
         assert_eq!(result, Err(expected));
@@ -258,7 +264,7 @@ async fn crash_leftovers_are_cleaned_and_a_second_installer_is_locked_out() {
             &server,
             &root,
             &candidate(&archive),
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
         )
         .await;
         assert_eq!(result, Err(InstallError::Busy));
@@ -271,7 +277,7 @@ async fn crash_leftovers_are_cleaned_and_a_second_installer_is_locked_out() {
         &server,
         &root,
         &candidate(&archive),
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
     )
     .await
     .unwrap();
@@ -348,4 +354,34 @@ async fn the_release_listing_is_requested_once_and_bounded() {
         .list_candidates(&[Backend::Cpu])
         .await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn cancelling_during_the_last_progress_report_publishes_nothing() {
+    let archive = good_archive(b"#!/bin/sh\nexit 0\n");
+    let server = Server::start(|_| vec![route(PATH, bytes(&archive))]);
+    let dir = Dir::new();
+    let root = dir.0.join("llamacpp");
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&cancel);
+    let result = Installer::for_test(server.port())
+        .install(&root, &candidate(&archive), &cancel, move |_| {
+            flag.store(true, Ordering::Relaxed)
+        })
+        .await;
+    assert_eq!(result, Err(InstallError::Cancelled));
+    assert!(leftovers(&root).is_empty());
+}
+
+#[test]
+fn removal_through_a_linked_root_is_refused() {
+    let dir = Dir::new();
+    let real = dir.0.join("real");
+    fs::create_dir(&real).unwrap();
+    fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::create_dir(real.join("b1-cpu")).unwrap();
+    let link = dir.0.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert!(remove_install(&link, "b1-cpu", None).is_err());
+    assert!(real.join("b1-cpu").exists());
 }
