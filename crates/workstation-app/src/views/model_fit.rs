@@ -75,7 +75,7 @@ impl ModelFit {
         file_group.add(&file_row);
 
         let scenario_group = adw::PreferencesGroup::builder()
-            .title("CPU scenario")
+            .title("Memory scenarios")
             .description("Requested values for this estimate; they are not read from a running inference process.")
             .build();
         let context_entry = adw::EntryRow::builder()
@@ -102,7 +102,7 @@ impl ModelFit {
         scenario_group.add(&sequence_row);
 
         let layout_group = adw::PreferencesGroup::builder()
-            .title("Architecture assumption")
+            .title("Attention layout assumption")
             .description("GGUF metadata cannot prove full-attention layout. Enabling this permits an estimate only; runtime compatibility remains unknown.")
             .build();
         let assume_layout = adw::SwitchRow::builder()
@@ -198,16 +198,10 @@ impl ModelFit {
                 match result {
                     Ok(report) => render_report(&self.inner, report),
                     Err(message) => {
+                        clear_report_fields(&self.inner);
                         self.inner
                             .status_label
                             .set_text(&format!("Estimate failed: {message}\nNo result is shown."));
-                        self.inner.metadata_label.set_text("No metadata result.");
-                        self.inner
-                            .warning_label
-                            .set_text("No layout warnings available.");
-                        self.inner
-                            .breakdown_label
-                            .set_text("No memory breakdown available.");
                     }
                 }
                 refresh_calculate_button(&self.inner);
@@ -431,6 +425,9 @@ fn clear_report_fields(inner: &Inner) {
         .warning_label
         .set_text("Layout warnings have not been inspected.");
     inner.breakdown_label.set_text("No memory breakdown.");
+    inner.status_label.set_tooltip_text(None);
+    inner.breakdown_label.set_tooltip_text(None);
+    clear_fit_style(inner);
 }
 
 fn refresh_calculate_button(inner: &Rc<Inner>) {
@@ -458,6 +455,9 @@ fn update_budget(inner: &Inner) {
     inner.budget_label.set_text(&format!(
         "Available RAM reading: {available} · captured {captured}{notice}. Each estimate requests a fresh worker reading."
     ));
+    inner.budget_label.set_tooltip_text(Some(
+        "Each estimate assumes an additional fully resident load against currently free RAM or VRAM. It does not reclaim loaded-model allocations and excludes partial offload or reuse.",
+    ));
 }
 
 fn render_report(inner: &Inner, report: &FitReport) {
@@ -475,9 +475,9 @@ fn render_report(inner: &Inner, report: &FitReport) {
         .as_deref()
         .map(|name| format!("{name:?}"))
         .unwrap_or_else(|| "Unknown".into());
-    let llama = report
+    let attention = report
         .metadata
-        .llama
+        .attention
         .as_ref()
         .map(|meta| {
             format!(
@@ -491,9 +491,9 @@ fn render_report(inner: &Inner, report: &FitReport) {
                 display_opt(meta.context_length),
             )
         })
-        .unwrap_or_else(|| "No LLaMA metadata record".into());
+        .unwrap_or_else(|| "No supported attention metadata record".into());
     inner.metadata_label.set_text(&format!(
-        "Architecture: {architecture}\nFile size estimate: {} bytes\nTensor count: {} · tensor storage bytes: {}\nLLaMA declarations: {llama}",
+        "Architecture: {architecture}\nFile size estimate: {} bytes\nTensor count: {} · tensor storage bytes: {}\nArchitecture declarations: {attention}",
         report.metadata.file_bytes,
         report.metadata.tensor_count,
         report.metadata.tensor_bytes,
@@ -520,12 +520,47 @@ fn render_report(inner: &Inner, report: &FitReport) {
     let class = fit_class_text(assessment.class);
     let reason = fit_reason_text(assessment.reason);
     inner.status_label.set_text(&format!(
-        "{status}\nFit assessment: {class} · {reason}\nRuntime compatibility remains unknown; this result is not verification."
+        "{status}\nCPU assessment: {class} · {reason}\nRuntime compatibility remains unknown; no benchmark was run.\nMemory classes below are conditional estimates, not runtime verification."
     ));
-    inner.breakdown_label.set_text(&assessment_text(assessment));
+    let scenario = scenario_text(inner);
+    let mut breakdown = vec![scenario];
+    breakdown.push(format!(
+        "CPU · {}",
+        memory_class_text(assessment.memory_class())
+    ));
+    breakdown.push(assessment_text(assessment, "CPU RAM"));
+    for gpu in &report.gpu_estimates {
+        let available = gpu
+            .available_vram_bytes
+            .map(format_bytes)
+            .unwrap_or_else(|| "Unknown".into());
+        breakdown.push(format!(
+            "GPU · {} ({}) · currently free VRAM: {available} · {}",
+            gpu.name,
+            gpu.id,
+            memory_class_text(gpu.estimate.assessment.memory_class())
+        ));
+        breakdown.push(assessment_text(&gpu.estimate.assessment, "GPU VRAM"));
+    }
+    if !report.gpu_notices.is_empty() {
+        breakdown.push(format!("GPU notices: {}", report.gpu_notices.join(" · ")));
+    }
+    let breakdown = breakdown.join("\n");
+    inner.breakdown_label.set_text(&breakdown);
+    inner
+        .status_label
+        .set_tooltip_text(Some(&assessment_text(assessment, "CPU RAM")));
+    inner.breakdown_label.set_tooltip_text(Some(&breakdown));
+    clear_fit_style(inner);
+    match assessment.memory_class() {
+        Some(FitClass::Comfortable) => inner.status_label.add_css_class("success"),
+        Some(FitClass::Constrained) => inner.status_label.add_css_class("warning"),
+        Some(FitClass::NotRecommended) => inner.status_label.add_css_class("error"),
+        Some(FitClass::Unknown) | None => inner.status_label.add_css_class("dim-label"),
+    }
 }
 
-fn assessment_text(assessment: &FitAssessment) -> String {
+fn assessment_text(assessment: &FitAssessment, budget_name: &str) -> String {
     let mut lines = Vec::new();
     match assessment.breakdown {
         Some(MemoryBreakdown {
@@ -558,13 +593,13 @@ fn assessment_text(assessment: &FitAssessment) -> String {
             maximum_bytes,
         }) => {
             lines.push(format!(
-                "CPU RAM budget limits: comfortable {} bytes · maximum {} bytes.",
+                "{budget_name} budget limits: comfortable {} bytes · maximum {} bytes.",
                 comfortable_bytes, maximum_bytes
             ));
         }
-        None => lines.push(
-            "CPU budget limits unavailable because no current RAM value was supplied.".into(),
-        ),
+        None => lines.push(format!(
+            "{budget_name} limits unavailable because current available memory was not supplied."
+        )),
     }
     lines.join("\n")
 }
@@ -608,6 +643,46 @@ fn display_opt(value: Option<u32>) -> String {
     value.map_or_else(|| "Unknown".into(), |value| value.to_string())
 }
 
+fn scenario_text(inner: &Inner) -> String {
+    let cache_name = |row: &adw::ComboRow| match selected_cache(row) {
+        Some(KvCacheType::F16) => "F16",
+        Some(KvCacheType::Q8_0) => "Q8_0",
+        Some(KvCacheType::Q4_0) => "Q4_0",
+        None => "Unknown",
+    };
+    let layout = if inner.assume_layout.is_active() {
+        "uniform full-attention assumption retained"
+    } else {
+        "attention layout unconfirmed"
+    };
+    format!(
+        "Requested scenario: context {} tokens · microbatch {} tokens · key/value cache {}/{} · 1 sequence · {layout}.",
+        inner.context_entry.text(),
+        inner.microbatch_entry.text(),
+        cache_name(&inner.key_cache),
+        cache_name(&inner.value_cache),
+    )
+}
+
+fn memory_class_text(class: Option<FitClass>) -> &'static str {
+    match class {
+        Some(FitClass::Comfortable) => "Comfortable conditional memory estimate",
+        Some(FitClass::Constrained) => "Constrained conditional memory estimate",
+        Some(FitClass::NotRecommended) => "Not recommended conditional memory estimate",
+        Some(FitClass::Unknown) | None => "Unknown conditional memory estimate",
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    format!("{bytes} bytes ({:.2} GiB)", bytes as f64 / GIB)
+}
+
+fn clear_fit_style(inner: &Inner) {
+    for class in ["success", "warning", "error", "dim-label"] {
+        inner.status_label.remove_css_class(class);
+    }
+}
+
 fn status_text(status: GgufFitStatus) -> &'static str {
     match status {
         GgufFitStatus::NoTensorData => {
@@ -640,7 +715,7 @@ fn fit_class_text(class: FitClass) -> &'static str {
         FitClass::Comfortable | FitClass::Constrained => {
             "Unverified; a memory estimate cannot establish runtime support"
         }
-        FitClass::NotRecommended => "Not recommended for this CPU scenario",
+        FitClass::NotRecommended => "Not recommended for this memory scenario",
         FitClass::Unknown => "Unknown",
     }
 }
