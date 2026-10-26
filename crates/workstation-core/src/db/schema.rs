@@ -60,14 +60,59 @@ CREATE TABLE downloads (
     updated_at_unix_ms INTEGER NOT NULL
 ) STRICT;";
 
-const SHAPE_CHECKS: &[&str] = &[
-    "SELECT id, started_at_unix_ms, snapshot_json, completion_json FROM benchmark_runs LIMIT 0",
-    "SELECT query_key, result_json, fetched_at_unix_ms FROM catalog_queries LIMIT 0",
-    "SELECT repo_id, revision, release_json, fetched_at_unix_ms FROM catalog_releases LIMIT 0",
-    "SELECT repo_id, revision, filename, gguf_json, fetched_at_unix_ms FROM artifact_metadata LIMIT 0",
-    "SELECT path, dev, inode, size, mtime_ns, ctime_ns, sha256, verified_at_unix_ms FROM local_file_digests LIMIT 0",
-    "SELECT id, artifact_id, repo_id, revision, filename, expected_sha256, expected_size, state, bytes_done, failure_code, created_at_unix_ms, updated_at_unix_ms FROM downloads LIMIT 0",
+/// Expected `name:type:notnull:pk-position` for every column of every table. CHECK
+/// size caps are not verified here; they are enforced when the tables are created.
+const SHAPES: &[(&str, &str)] = &[
+    (
+        "benchmark_runs",
+        "id:INTEGER:0:1,started_at_unix_ms:INTEGER:1:0,snapshot_json:TEXT:1:0,completion_json:TEXT:0:0",
+    ),
+    (
+        "catalog_queries",
+        "query_key:TEXT:1:1,result_json:TEXT:1:0,fetched_at_unix_ms:INTEGER:1:0",
+    ),
+    (
+        "catalog_releases",
+        "repo_id:TEXT:1:1,revision:TEXT:1:2,release_json:TEXT:1:0,fetched_at_unix_ms:INTEGER:1:0",
+    ),
+    (
+        "artifact_metadata",
+        "repo_id:TEXT:1:1,revision:TEXT:1:2,filename:TEXT:1:3,gguf_json:TEXT:1:0,fetched_at_unix_ms:INTEGER:1:0",
+    ),
+    (
+        "local_file_digests",
+        "path:TEXT:1:1,dev:INTEGER:1:0,inode:INTEGER:1:0,size:INTEGER:1:0,mtime_ns:INTEGER:1:0,ctime_ns:INTEGER:1:0,sha256:TEXT:1:0,verified_at_unix_ms:INTEGER:1:0",
+    ),
+    (
+        "downloads",
+        "id:INTEGER:0:1,artifact_id:TEXT:1:0,repo_id:TEXT:1:0,revision:TEXT:1:0,filename:TEXT:1:0,expected_sha256:TEXT:1:0,expected_size:INTEGER:1:0,state:TEXT:1:0,bytes_done:INTEGER:1:0,failure_code:TEXT:0:0,created_at_unix_ms:INTEGER:1:0,updated_at_unix_ms:INTEGER:1:0",
+    ),
 ];
+
+/// A table must be STRICT and have exactly the expected columns, types, and keys.
+fn table_matches(tx: &rusqlite::Transaction, table: &str, expected: &str) -> bool {
+    let strict: Option<i64> = tx
+        .query_row("SELECT strict FROM pragma_table_list(?1)", [table], |r| {
+            r.get(0)
+        })
+        .ok();
+    let columns: Result<Vec<String>, _> = tx
+        .prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info(?1) ORDER BY cid")
+        .and_then(|mut statement| {
+            statement
+                .query_map([table], |r| {
+                    Ok(format!(
+                        "{}:{}:{}:{}",
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?
+                    ))
+                })?
+                .collect()
+        });
+    strict == Some(1) && columns.is_ok_and(|c| c.join(",") == expected)
+}
 
 pub(super) fn initialize(connection: &mut Connection) -> Result<(), String> {
     connection
@@ -115,10 +160,11 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<(), String> {
     } else if app != APPLICATION_ID || version != VERSION {
         return Err("Unsupported or unrelated history database. Keep the file and use a compatible application version.".into());
     }
-    // Every table of the current version must have its expected columns.
-    for check in SHAPE_CHECKS {
-        tx.prepare(check)
-            .map_err(|_| "History schema is incompatible. Keep the file for recovery.")?;
+    // Every table of the current version must match exactly, or the file is kept untouched.
+    for (table, expected) in SHAPES {
+        if !table_matches(&tx, table, expected) {
+            return Err("History schema is incompatible. Keep the file for recovery.".into());
+        }
     }
     tx.commit()
         .map_err(|_| "Cannot commit history migration. Retry after freeing disk space.")?;
