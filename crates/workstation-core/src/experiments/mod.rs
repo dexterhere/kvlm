@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod follow_up;
 pub mod summary;
 pub use summary::{Spread, Summary, summarize};
 
