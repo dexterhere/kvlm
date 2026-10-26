@@ -65,6 +65,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 05 | [Hugging Face token](05-decisions/0016-huggingface-token.md) | Keyring-only token, encrypted transport, first-hop-only use |
 | 05 | [Managed llama.cpp](05-decisions/0017-managed-llamacpp.md) | Ownership modes, verified install, identity-checked readiness, process safety |
 | 05 | [Benchmark Lab](05-decisions/0018-benchmark-lab.md) | Experiment records, protocol, diagnostics, controlled comparisons, ownership rules |
+| 05 | [Application ID and contacts](05-decisions/0019-application-id.md) | Why the placeholder ID must change, options, the rename script, owner steps |
 | 05 | [Open questions](05-decisions/open-questions.md) | Specification gaps to resolve before affected implementation |
 
 Also read [contributing](../CONTRIBUTING.md), [security](../SECURITY.md),
