@@ -410,3 +410,47 @@ async fn the_overall_deadline_ends_a_silent_stream() {
         .await;
     assert_eq!(result.err(), Some(LlamaError::Timeout));
 }
+
+#[tokio::test]
+async fn a_stream_that_ends_without_completion_is_incomplete() {
+    let first = event(r#"{"choices":[{"delta":{"content":"a"}}]}"#);
+    for body in [first, Vec::new()] {
+        let fake = Fake::start(move |_, _| Reply::Chunks(vec![(0, body.clone())], 0));
+        let result = fake
+            .client()
+            .stream_chat(&request("a", "p"), DEFAULT_DEADLINE, &NO, |_| {})
+            .await;
+        assert_eq!(result.err(), Some(LlamaError::Incomplete));
+    }
+}
+
+#[tokio::test]
+async fn cancelling_inside_a_buffered_chunk_stops_before_the_next_event() {
+    let mut body = event(r#"{"choices":[{"delta":{"content":"a"}}]}"#);
+    body.extend(event(r#"{"choices":[{"delta":{"content":"b"}}]}"#));
+    body.extend(b"data: [DONE]\n\n".to_vec());
+    let fake = Fake::start(move |_, _| Reply::Chunks(vec![(0, body.clone())], 0));
+    let cancel = AtomicBool::new(false);
+    let mut calls = 0;
+    let result = fake
+        .client()
+        .stream_chat(&request("a", "p"), DEFAULT_DEADLINE, &cancel, |_| {
+            calls += 1;
+            cancel.store(true, Ordering::Relaxed)
+        })
+        .await;
+    assert_eq!(result.err(), Some(LlamaError::Cancelled));
+    assert_eq!(calls, 1);
+}
+
+#[tokio::test]
+async fn a_request_cancelled_before_sending_never_reaches_the_server() {
+    let fake = Fake::start(|_, _| Reply::Chunks(vec![], 0));
+    let cancel = AtomicBool::new(true);
+    let result = fake
+        .client()
+        .stream_chat(&request("a", "p"), DEFAULT_DEADLINE, &cancel, |_| {})
+        .await;
+    assert_eq!(result.err(), Some(LlamaError::Cancelled));
+    assert!(fake.bodies().is_empty());
+}

@@ -36,6 +36,8 @@ pub enum LlamaError {
     /// The server does not offer this endpoint (disabled or older build).
     Unsupported,
     Cancelled,
+    /// The stream ended without `[DONE]` or a finish reason.
+    Incomplete,
 }
 
 impl std::fmt::Display for LlamaError {
@@ -52,6 +54,7 @@ impl std::fmt::Display for LlamaError {
             }
             Self::Unsupported => f.write_str("This llama-server does not offer that information."),
             Self::Cancelled => f.write_str("The request was cancelled."),
+            Self::Incomplete => f.write_str("llama-server ended the response early."),
         }
     }
 }
@@ -305,22 +308,35 @@ impl LlamaClient {
             "cache_prompt": request.cache_prompt,
         });
         let started = Instant::now();
-        let mut response = self
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        if cancel.load(Ordering::Relaxed) {
+            return Err(LlamaError::Cancelled);
+        }
+        let send = self
             .client
             .post(format!("{}/v1/chat/completions", self.base))
             .header("content-type", "application/json")
             .body(body.to_string())
             .timeout(deadline)
-            .send()
-            .await
-            .map_err(map_error)?;
+            .send();
+        tokio::pin!(send);
+        let mut response = loop {
+            tokio::select! {
+                sent = &mut send => break sent.map_err(map_error)?,
+                _ = tick.tick() => {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(LlamaError::Cancelled);
+                    }
+                }
+            }
+        };
         check_status(&response)?;
 
         let mut end = StreamEnd::default();
         let mut line: Vec<u8> = Vec::new();
         let mut total = 0usize;
         let mut done = false;
-        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        let mut seen = 0u64;
         while !done {
             if cancel.load(Ordering::Relaxed) {
                 return Err(LlamaError::Cancelled);
@@ -342,15 +358,30 @@ impl LlamaClient {
                     line.push(byte);
                     continue;
                 }
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(LlamaError::Cancelled);
+                }
+                if started.elapsed() > deadline {
+                    return Err(LlamaError::Timeout);
+                }
                 let text = std::mem::take(&mut line);
-                if handle_line(&text, &mut end, started, &mut on_event)? {
+                if handle_line(&text, &mut end, &mut seen, started, &mut on_event)? {
                     done = true;
                     break;
                 }
             }
         }
         if !line.is_empty() && !done {
-            handle_line(&line, &mut end, started, &mut on_event)?;
+            done = handle_line(&line, &mut end, &mut seen, started, &mut on_event)?;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(LlamaError::Cancelled);
+        }
+        if started.elapsed() > deadline {
+            return Err(LlamaError::Timeout);
+        }
+        if !done && end.finish_reason.is_none() {
+            return Err(LlamaError::Incomplete);
         }
         end.elapsed = started.elapsed();
         Ok(end)
@@ -361,6 +392,7 @@ impl LlamaClient {
 fn handle_line(
     raw: &[u8],
     end: &mut StreamEnd,
+    seen: &mut u64,
     started: Instant,
     on_event: &mut impl FnMut(StreamEvent<'_>),
 ) -> Result<bool, LlamaError> {
@@ -373,7 +405,8 @@ fn handle_line(
     if data == "[DONE]" {
         return Ok(true);
     }
-    if end.content_events + end.reasoning_events >= MAX_EVENTS {
+    *seen += 1;
+    if *seen > MAX_EVENTS {
         return Err(LlamaError::TooLarge);
     }
     let value: Value = serde_json::from_str(data).map_err(|_| LlamaError::BadResponse)?;
