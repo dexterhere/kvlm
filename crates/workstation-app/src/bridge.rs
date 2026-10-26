@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Typed messages keep GTK objects out of blocking hardware probes.
 
-use crate::fit_workflow::{FitReport, FitRequest, estimate};
+use crate::fit_workflow::{FitReport, FitRequest, estimate, fit_report, parse_scenario};
 use std::{future::Future, pin::Pin, sync::Arc};
 use tokio::sync::mpsc;
 use workstation_bench::{
@@ -10,7 +10,13 @@ use workstation_bench::{
 };
 use workstation_core::db::HistoryEntry;
 use workstation_core::hardware::{HardwareProfile, resources::ResourceSummary};
-use workstation_runtimes::catalog_service::{CatalogLoad, CatalogService, ReleaseLoad};
+use workstation_core::{
+    fit::{gguf_fit::LayoutAssumption, memory_math::KvCacheType},
+    models::artifact::ModelArtifact,
+};
+use workstation_runtimes::catalog_service::{
+    CatalogLoad, CatalogService, InspectLoad, LoadSource, ReleaseLoad,
+};
 use workstation_runtimes::ollama::{
     Discovery, GenerationProgress, InstalledModel, ModelInspection, OllamaAdapter,
 };
@@ -48,6 +54,11 @@ pub enum CoreCommand {
         id: u64,
         repo_id: String,
         pinned: Option<String>,
+    },
+    /// Explicit fetch of one file's header (first 16 MiB at most) and a fit estimate.
+    InspectArtifact {
+        id: u64,
+        artifact: Box<ModelArtifact>,
     },
     RunQuickBenchmark {
         id: u64,
@@ -96,6 +107,54 @@ pub enum UiEvent {
         id: u64,
         result: Result<Box<ReleaseLoad>, String>,
     },
+    ArtifactInspected {
+        id: u64,
+        result: Result<Box<ArtifactDetails>, String>,
+    },
+}
+
+/// A file's header facts and the conditional fit for the default scenario.
+#[derive(Debug)]
+pub struct ArtifactDetails {
+    pub report: FitReport,
+    pub source: LoadSource,
+    pub notice: Option<String>,
+}
+
+/// 8192 context, F16 K/V, microbatch 512, uniform attention assumed. Conditional only.
+async fn artifact_details(
+    load: impl Future<Output = Result<InspectLoad, String>>,
+    probe: Arc<impl Fn() -> HardwareProfile + Send + Sync + 'static>,
+    gate: Arc<tokio::sync::Semaphore>,
+) -> Result<ArtifactDetails, String> {
+    let InspectLoad {
+        metadata,
+        source,
+        notice,
+    } = load.await?;
+    let scenario = parse_scenario("8192", "512", KvCacheType::F16, KvCacheType::F16)?;
+    // Aborting this job cannot stop a running blocking probe, so one permit travels with
+    // it: repeated requests wait instead of piling up probes.
+    let permit = gate
+        .acquire_owned()
+        .await
+        .map_err(|_| "Fit estimate failed. Retry.".to_string())?;
+    let report = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        fit_report(
+            metadata,
+            &scenario,
+            LayoutAssumption::UniformFullAttention,
+            probe(),
+        )
+    })
+    .await
+    .map_err(|_| "Fit estimate failed. Retry.".to_string())??;
+    Ok(ArtifactDetails {
+        report,
+        source,
+        notice,
+    })
 }
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -113,6 +172,7 @@ pub trait CatalogBackend: Send + Sync + 'static {
         repo_id: String,
         pinned: Option<String>,
     ) -> BoxFuture<Result<ReleaseLoad, String>>;
+    fn inspect(&self, artifact: ModelArtifact) -> BoxFuture<Result<InspectLoad, String>>;
 }
 
 /// Builds the real service on first use, so startup does no catalog work.
@@ -147,6 +207,10 @@ impl CatalogBackend for LiveCatalog {
         let service = self.service();
         Box::pin(async move { service?.release(&repo_id, pinned.as_deref()).await })
     }
+    fn inspect(&self, artifact: ModelArtifact) -> BoxFuture<Result<InspectLoad, String>> {
+        let service = self.service();
+        Box::pin(async move { service?.inspect(&artifact).await })
+    }
 }
 
 /// Aborts the wrapped task when the guarding job is dropped or aborted.
@@ -173,6 +237,13 @@ fn catalog_failed(id: u64) -> UiEvent {
     UiEvent::CatalogLoaded {
         id,
         result: Err("Catalog worker failed. Retry.".into()),
+    }
+}
+
+fn inspect_failed(id: u64) -> UiEvent {
+    UiEvent::ArtifactInspected {
+        id,
+        result: Err("Inspection worker failed. Retry.".into()),
     }
 }
 
@@ -290,6 +361,8 @@ where
         let mut search_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         let mut cached_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         let mut release_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let mut inspect_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let probe_gate = Arc::new(tokio::sync::Semaphore::new(1));
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
@@ -314,6 +387,11 @@ where
                     continue;
                 }
                 result = release_jobs.join_next(), if !release_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = inspect_jobs.join_next(), if !inspect_jobs.is_empty() => {
                     if let Some(Ok(event)) = result
                         && events.send(event).await.is_err() { break; }
                     continue;
@@ -358,6 +436,15 @@ where
                     release_jobs.spawn(guarded(id, release_failed, async move {
                         let result = catalog.release(repo_id, pinned).await.map(Box::new);
                         UiEvent::ReleaseLoaded { id, result }
+                    }));
+                }
+                CoreCommand::InspectArtifact { id, artifact } => {
+                    inspect_jobs.abort_all();
+                    let (catalog, probe) = (Arc::clone(&catalog), Arc::clone(&probe));
+                    let gate = Arc::clone(&probe_gate);
+                    inspect_jobs.spawn(guarded(id, inspect_failed, async move {
+                        let result = artifact_details(catalog.inspect(*artifact), probe, gate).await.map(Box::new);
+                        UiEvent::ArtifactInspected { id, result }
                     }));
                 }
                 CoreCommand::RunQuickBenchmark { id, model, cancel } => {
@@ -649,6 +736,43 @@ mod tests {
                 Err("fixture release failure".into())
             })
         }
+        fn inspect(&self, artifact: ModelArtifact) -> BoxFuture<Result<InspectLoad, String>> {
+            Box::pin(async move {
+                match artifact.filename.as_str() {
+                    "slow.gguf" => std::future::pending().await,
+                    "panic.gguf" => panic!("fixture inspect panic"),
+                    "bad.gguf" => Err("fixture header failure".into()),
+                    _ => Ok(InspectLoad {
+                        metadata: workstation_core::models::gguf::GgufMetadata {
+                            file_bytes: 100,
+                            tensor_count: 1,
+                            tensor_bytes: 4,
+                            alignment: 32,
+                            architecture: Some("qwen2".into()),
+                            attention: None,
+                            warnings: vec![],
+                        },
+                        source: LoadSource::Live,
+                        notice: None,
+                    }),
+                }
+            })
+        }
+    }
+
+    fn artifact_named(name: &str) -> Box<ModelArtifact> {
+        use workstation_core::models::artifact::ArtifactFormat;
+        Box::new(ModelArtifact {
+            artifact_id: format!("hf:o/n@{}:{name}", "a".repeat(40)),
+            repo_id: "o/n".into(),
+            revision: "a".repeat(40),
+            filename: name.into(),
+            format: ArtifactFormat::Gguf,
+            quantization_hint: None,
+            size_bytes: Some(100),
+            sha256: None,
+            shards: None,
+        })
     }
 
     fn start_catalog() -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
@@ -806,6 +930,76 @@ mod tests {
             .unwrap();
         assert!(matches!(receive(&events).await,
             UiEvent::CatalogLoaded { id: 9, result: Err(message) } if message.contains("Catalog worker failed")));
+    }
+
+    #[tokio::test]
+    async fn inspection_returns_details_failures_and_attributes_panics() {
+        let (commands, events) = start_catalog();
+        for (id, name) in [(1, "ok.gguf"), (2, "bad.gguf"), (3, "panic.gguf")] {
+            commands
+                .send(CoreCommand::InspectArtifact {
+                    id,
+                    artifact: artifact_named(name),
+                })
+                .await
+                .unwrap();
+            let event = receive(&events).await;
+            match (id, event) {
+                (
+                    1,
+                    UiEvent::ArtifactInspected {
+                        id: 1,
+                        result: Ok(details),
+                    },
+                ) => {
+                    assert_eq!(
+                        details.report.metadata.architecture.as_deref(),
+                        Some("qwen2")
+                    );
+                    assert_eq!(details.source, LoadSource::Live);
+                }
+                (
+                    2,
+                    UiEvent::ArtifactInspected {
+                        id: 2,
+                        result: Err(message),
+                    },
+                ) => {
+                    assert_eq!(message, "fixture header failure");
+                }
+                (
+                    3,
+                    UiEvent::ArtifactInspected {
+                        id: 3,
+                        result: Err(message),
+                    },
+                ) => {
+                    assert!(message.contains("Inspection worker failed"));
+                }
+                (_, other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_newer_inspection_aborts_a_stuck_older_one() {
+        let (commands, events) = start_catalog();
+        for (id, name) in [(1, "slow.gguf"), (2, "ok.gguf")] {
+            commands
+                .send(CoreCommand::InspectArtifact {
+                    id,
+                    artifact: artifact_named(name),
+                })
+                .await
+                .unwrap();
+        }
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::ArtifactInspected {
+                id: 2,
+                result: Ok(_)
+            }
+        ));
     }
 
     #[tokio::test]

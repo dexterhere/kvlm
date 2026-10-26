@@ -7,13 +7,19 @@
 
 use reqwest::{Client, StatusCode, Url, header, redirect::Policy};
 use serde_json::Value;
-use std::time::Duration;
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::Semaphore;
 use workstation_core::models::{
+    artifact::valid_remote_filename,
     catalog::{
         CatalogPage, RawRepoDetail, RawSibling, RepoSummary, normalize_release, valid_repo_id,
         valid_revision,
     },
+    gguf::HEADER_LIMIT,
     release::{GatedAccess, ModelRelease},
 };
 
@@ -28,6 +34,8 @@ const MAX_RETRY_AFTER_SECS: u64 = 3600;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const OPERATION_DEADLINE: Duration = Duration::from_secs(30);
+const PREFIX_DEADLINE: Duration = Duration::from_secs(120);
+const MAX_HOPS: usize = 4;
 
 /// Why a catalog request failed. Messages are safe to show: no URLs, no response text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +78,8 @@ pub struct HuggingFaceClient {
     base: Url,
     /// One request in flight: details are fetched on demand and must not burst.
     gate: Semaphore,
+    /// Production only talks https to Hugging Face hosts; test fixtures use loopback.
+    strict_hosts: bool,
 }
 
 impl HuggingFaceClient {
@@ -92,6 +102,9 @@ impl HuggingFaceClient {
             // Loopback test fixtures must never be routed through an environment proxy.
             builder = builder.no_proxy();
         }
+        if https_only {
+            builder = builder.dns_resolver(Arc::new(PublicOnly));
+        }
         let client = builder
             .use_rustls_tls()
             .https_only(https_only)
@@ -106,6 +119,7 @@ impl HuggingFaceClient {
             client,
             base,
             gate: Semaphore::new(1),
+            strict_hosts: https_only,
         })
     }
 
@@ -176,6 +190,119 @@ impl HuggingFaceClient {
         normalize_release(raw).map_err(|_| HfError::BadResponse)
     }
 
+    /// The first bytes of one GGUF file at a pinned commit, for header inspection only.
+    ///
+    /// One ranged request (redirects are followed by hand, at most four hops, only to
+    /// Hugging Face hosts) whose total length must equal `expected_size`. Returns
+    /// `min(expected_size, HEADER_LIMIT)` bytes; anything else is a bad response.
+    pub async fn fetch_prefix(
+        &self,
+        repo_id: &str,
+        revision: &str,
+        filename: &str,
+        expected_size: u64,
+    ) -> Result<Vec<u8>, HfError> {
+        if !valid_repo_id(repo_id)
+            || !valid_revision(revision)
+            || !valid_remote_filename(filename)
+            || expected_size == 0
+        {
+            return Err(HfError::InvalidRequest);
+        }
+        let (owner, name) = repo_id.split_once('/').ok_or(HfError::InvalidRequest)?;
+        let want = expected_size.min(HEADER_LIMIT);
+        let mut url = self.base.clone();
+        url.path_segments_mut()
+            .map_err(|()| HfError::InvalidRequest)?
+            .pop_if_empty()
+            .extend([owner, name, "resolve", revision])
+            .extend(filename.split('/'));
+        tokio::time::timeout(PREFIX_DEADLINE, async {
+            let _permit = self
+                .gate
+                .acquire()
+                .await
+                .map_err(|_| HfError::BadResponse)?;
+            for _ in 0..=MAX_HOPS {
+                let response = self
+                    .client
+                    .get(url.clone())
+                    .header(header::RANGE, format!("bytes=0-{}", want - 1))
+                    .header(header::ACCEPT_ENCODING, "identity")
+                    .send()
+                    .await
+                    .map_err(map_transport)?;
+                let status = response.status();
+                if status.is_redirection() {
+                    let next = response
+                        .headers()
+                        .get(header::LOCATION)
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|location| url.join(location).ok())
+                        .ok_or(HfError::BadResponse)?;
+                    if !self.redirect_allowed(&next) {
+                        return Err(HfError::BadResponse);
+                    }
+                    url = next;
+                    continue;
+                }
+                match status {
+                    StatusCode::PARTIAL_CONTENT => {
+                        let range = response
+                            .headers()
+                            .get(header::CONTENT_RANGE)
+                            .and_then(|value| value.to_str().ok())
+                            .and_then(parse_content_range)
+                            .ok_or(HfError::BadResponse)?;
+                        if range != (0, want - 1, expected_size) {
+                            return Err(HfError::BadResponse);
+                        }
+                    }
+                    StatusCode::OK => {
+                        // A server that ignored the range: acceptable only for the right file.
+                        if response.content_length() != Some(expected_size) {
+                            return Err(HfError::BadResponse);
+                        }
+                    }
+                    StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                        return Err(HfError::AccessRequired);
+                    }
+                    StatusCode::NOT_FOUND => return Err(HfError::NotFound),
+                    StatusCode::TOO_MANY_REQUESTS => {
+                        return Err(HfError::RateLimited {
+                            retry_after_secs: retry_after(response.headers()),
+                        });
+                    }
+                    _ => return Err(HfError::BadResponse),
+                }
+                return read_exactly(response, want).await;
+            }
+            Err(HfError::BadResponse)
+        })
+        .await
+        .map_err(|_| HfError::Timeout)?
+    }
+
+    /// Redirect targets must be https Hugging Face hosts on the default port, with no
+    /// credentials in the URL. Loopback fixtures may only stay on the test origin.
+    fn redirect_allowed(&self, url: &Url) -> bool {
+        if !self.strict_hosts {
+            return url.host_str() == self.base.host_str()
+                && url.port_or_known_default() == self.base.port_or_known_default();
+        }
+        let Some(host) = url.domain() else {
+            return false;
+        };
+        let host = host.to_ascii_lowercase();
+        url.scheme() == "https"
+            && url.username().is_empty()
+            && url.password().is_none()
+            && matches!(url.port(), None | Some(443))
+            && ["huggingface.co", "hf.co"]
+                .iter()
+                .any(|root| host == *root || host.ends_with(&format!(".{root}")))
+    }
+
     /// The `cursor` of a `rel="next"` link, only if the link points at this API's origin.
     /// The next request is rebuilt from the cursor, never from the link.
     fn next_cursor(&self, link: &str) -> Option<String> {
@@ -244,6 +371,61 @@ impl HuggingFaceClient {
     }
 }
 
+/// Resolver that refuses to hand out loopback, private, link-local or otherwise
+/// non-public addresses, so an allowed host name cannot be pointed at the local network.
+struct PublicOnly;
+
+impl reqwest::dns::Resolve for PublicOnly {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((name.as_str(), 0))
+                .await?
+                .filter(|addr| is_public(addr.ip()))
+                .collect();
+            if addrs.is_empty() {
+                return Err("no public address".into());
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+fn is_public(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => public_v4(ip),
+        IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
+            Some(mapped) => public_v4(mapped),
+            None => public_v6(ip),
+        },
+    }
+}
+
+fn public_v4(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    !(ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_multicast()
+        || ip.is_documentation()
+        || a == 0
+        || (a == 100 && (64..128).contains(&b)) // carrier-grade NAT
+        || (a == 192 && b == 0) // IETF protocol assignments
+        || (a == 198 && (b == 18 || b == 19)) // benchmarking
+        || a >= 240) // reserved
+}
+
+fn public_v6(ip: Ipv6Addr) -> bool {
+    let first = ip.segments()[0];
+    !(ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_multicast()
+        || (first & 0xfe00) == 0xfc00 // unique local
+        || (first & 0xffc0) == 0xfe80 // link local
+        || (first == 0x2001 && ip.segments()[1] == 0x0db8)) // documentation
+}
+
 fn map_transport(error: reqwest::Error) -> HfError {
     if error.is_timeout() {
         HfError::Timeout
@@ -280,6 +462,26 @@ async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, HfError
             return Err(HfError::TooLarge);
         }
         body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// `(first, last, total)` of a `Content-Range: bytes first-last/total` header.
+fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
+    let (range, total) = value.trim().strip_prefix("bytes ")?.split_once('/')?;
+    let (first, last) = range.split_once('-')?;
+    Some((first.parse().ok()?, last.parse().ok()?, total.parse().ok()?))
+}
+
+/// Read exactly `want` bytes and stop, so a server that sends the whole file costs no more.
+async fn read_exactly(mut response: reqwest::Response, want: u64) -> Result<Vec<u8>, HfError> {
+    let mut body = Vec::with_capacity(want as usize);
+    while (body.len() as u64) < want {
+        let Some(chunk) = response.chunk().await.map_err(map_transport)? else {
+            return Err(HfError::BadResponse);
+        };
+        let room = (want - body.len() as u64) as usize;
+        body.extend_from_slice(&chunk[..chunk.len().min(room)]);
     }
     Ok(body)
 }

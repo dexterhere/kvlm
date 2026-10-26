@@ -159,7 +159,13 @@ Rules stated as invariants:
   in core: the same parser, with the declared total as the file length, erroring on any
   read past the prefix. Truncated metadata yields "metadata not available", not a guess.
   The 16 MiB bound reuses the existing `HEADER_LIMIT`, which becomes a public constant.
-  Results are cached in `artifact_metadata`.
+  Results are cached in `artifact_metadata`. A saved header for a pinned revision is
+  reused without the network; a second, different header for the same revision is
+  refused as a conflict, and saved rows that break parser invariants read as absent.
+  Redirects are followed by hand (at most four hops) only to https hosts under
+  `huggingface.co` or `hf.co` on port 443 with no credentials in the URL, and the
+  resolver refuses loopback, private, link-local and other non-public addresses.
+  Expanding a file again re-reads the saved header and refreshes the memory budgets.
 - Fit calls `assess_gguf_fit(metadata, scenario, target, layout)`; weights come from the
   metadata's tensor bytes, not from the file size. The displayed default scenario is
   8192 context, F16 K/V, microbatch 512, the uniform attention assumption, against the

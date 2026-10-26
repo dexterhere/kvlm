@@ -7,7 +7,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use workstation_core::models::gguf::{GgufError, LayoutWarning, inspect_file, inspect_reader};
+use workstation_core::models::gguf::{
+    GgufError, LayoutWarning, inspect_file, inspect_prefix, inspect_reader,
+};
 
 const GGUF: &[u8; 4] = b"GGUF";
 const VERSION: u32 = 3;
@@ -779,4 +781,61 @@ impl Seek for PayloadGuard {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         self.inner.seek(position)
     }
+}
+
+#[test]
+fn a_prefix_with_the_declared_length_matches_the_whole_file() {
+    let whole = qwen_fixture(vec![metadata(
+        b"qwen2.context_length",
+        TYPE_U32,
+        &u32_value(4096),
+    )]);
+    let expected = inspect_reader(&mut Cursor::new(whole.clone())).unwrap();
+    // The payload is the last four bytes; the prefix stops before it.
+    let prefix = &whole[..whole.len() - 4];
+    let seen = inspect_prefix(prefix, whole.len() as u64).unwrap();
+    assert_eq!(seen, expected);
+    assert_eq!(seen.file_bytes, whole.len() as u64);
+}
+
+#[test]
+fn a_prefix_never_guesses_past_its_end() {
+    let whole = qwen_fixture(vec![]);
+    let declared = whole.len() as u64;
+    // Alignment padding is not read, so the directory ends before it.
+    let directory_end = header(
+        &[metadata(
+            b"general.architecture",
+            TYPE_STRING,
+            &string_value(b"qwen2"),
+        )],
+        &[tensor(b"weight", &[1], 0, 0)],
+    )
+    .len();
+    // Cutting inside the header or directory is an error at every length.
+    for cut in 0..directory_end {
+        assert!(
+            inspect_prefix(&whole[..cut], declared).is_err(),
+            "cut {cut} accepted"
+        );
+    }
+    // A declared length that leaves the tensor outside the file is rejected.
+    assert!(inspect_prefix(&whole[..directory_end], declared - 1).is_err());
+    // A prefix longer than the file it claims to come from is rejected.
+    assert!(inspect_prefix(&whole, declared - 1).is_err());
+}
+
+#[test]
+fn a_prefix_still_rejects_split_files() {
+    let mut entries = split_metadata(0, 2, 1);
+    entries.push(metadata(
+        b"general.architecture",
+        TYPE_STRING,
+        &string_value(b"qwen2"),
+    ));
+    let bytes = aligned(header(&entries, &[tensor(b"weight", &[1], 0, 0)]), 32);
+    assert!(matches!(
+        inspect_prefix(&bytes, bytes.len() as u64 + 4),
+        Err(GgufError::Unsupported("split files"))
+    ));
 }

@@ -3,6 +3,7 @@
 //! No tensor payload is read or executed. Container validation does not establish
 //! model authenticity, complete model semantics, runtime compatibility, or fit.
 
+use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
@@ -13,10 +14,11 @@ use std::{
     path::Path,
 };
 
-const HEADER_LIMIT: u64 = 16 * 1024 * 1024;
+/// Bytes of header, metadata and tensor directory ever read from one file.
+pub const HEADER_LIMIT: u64 = 16 * 1024 * 1024;
 const STRING_LIMIT: u64 = 1024 * 1024;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GgufMetadata {
     pub file_bytes: u64,
     pub tensor_count: u64,
@@ -27,8 +29,19 @@ pub struct GgufMetadata {
     pub warnings: Vec<LayoutWarning>,
 }
 
+impl GgufMetadata {
+    /// Invariants the parser guarantees; a saved row that breaks them is not trusted.
+    pub fn plausible(&self) -> bool {
+        self.alignment >= 8
+            && self.alignment.is_power_of_two()
+            && self.tensor_count <= 65_536
+            && self.tensor_bytes <= self.file_bytes
+            && self.file_bytes >= 24
+    }
+}
+
 /// Typed declarations only. Missing fields are not derived from other values.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttentionMetadata {
     pub context_length: Option<u32>,
     pub block_count: Option<u32>,
@@ -40,7 +53,7 @@ pub struct AttentionMetadata {
 }
 
 /// Recognized extension declarations; an empty list is not proof of full attention.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LayoutWarning {
     ExpertMetadata,
     SlidingWindowMetadata,
@@ -104,9 +117,33 @@ pub fn inspect_file(path: &Path) -> Result<GgufMetadata, GgufError> {
 pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufMetadata, GgufError> {
     let file_bytes = reader.seek(SeekFrom::End(0))?;
     reader.seek(SeekFrom::Start(0))?;
+    parse(reader, file_bytes, file_bytes)
+}
+
+/// Inspect the first bytes of a file whose full length is known from elsewhere, such
+/// as a ranged download's `Content-Range`. The same parser runs with `declared_len` as
+/// the file length for tensor-range checks, but any read past the prefix fails as a
+/// truncated header, so an incomplete directory never yields a guess.
+pub fn inspect_prefix(bytes: &[u8], declared_len: u64) -> Result<GgufMetadata, GgufError> {
+    if bytes.len() as u64 > declared_len {
+        return Err(GgufError::Invalid("prefix longer than the declared length"));
+    }
+    parse(
+        &mut io::Cursor::new(bytes),
+        bytes.len() as u64,
+        declared_len,
+    )
+}
+
+/// `readable` bounds header reads; `file_bytes` bounds tensor data ranges.
+fn parse<R: Read + Seek>(
+    reader: &mut R,
+    readable: u64,
+    file_bytes: u64,
+) -> Result<GgufMetadata, GgufError> {
     let mut input = Input {
         reader,
-        length: file_bytes,
+        length: readable,
         position: 0,
     };
     if input.fixed::<4>()? != *b"GGUF" {

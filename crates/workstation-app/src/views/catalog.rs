@@ -2,7 +2,7 @@
 //! Read-only Hugging Face model explorer: repositories, then their GGUF files.
 //! Nothing here touches the network until the user searches or expands a row.
 
-use crate::bridge::{CoreCommand, UiEvent};
+use crate::bridge::{ArtifactDetails, CoreCommand, UiEvent};
 use adw::prelude::*;
 use std::{
     cell::RefCell,
@@ -25,6 +25,14 @@ struct RepoRow {
     loaded: bool,
 }
 
+struct ArtifactRow {
+    row: adw::ExpanderRow,
+    children: Vec<gtk::Widget>,
+    artifact: ModelArtifact,
+    loading: bool,
+    loaded: bool,
+}
+
 #[derive(Default)]
 struct State {
     next_id: u64,
@@ -38,6 +46,9 @@ struct State {
     /// The newest search asked for the next page, so results append.
     continuing: bool,
     release: Option<(u64, String)>,
+    /// Newest header inspection: request id and artifact id.
+    inspect: Option<(u64, String)>,
+    artifacts: HashMap<String, ArtifactRow>,
     rows: HashMap<String, RepoRow>,
 }
 
@@ -186,6 +197,40 @@ impl Explorer {
                 };
                 self.show_release(&repo_id, result);
             }
+            UiEvent::ArtifactInspected { id, result } => {
+                let Some(artifact_id) = ({
+                    let mut state = self.state.borrow_mut();
+                    match &state.inspect {
+                        Some((pending, artifact)) if pending == id => {
+                            let artifact = artifact.clone();
+                            state.inspect = None;
+                            Some(artifact)
+                        }
+                        _ => None,
+                    }
+                }) else {
+                    return;
+                };
+                let mut state = self.state.borrow_mut();
+                let Some(entry) = state.artifacts.get_mut(&artifact_id) else {
+                    return;
+                };
+                entry.loading = false;
+                let rows = match result {
+                    Ok(details) => {
+                        entry.loaded = true;
+                        details_rows(details)
+                    }
+                    Err(message) => {
+                        entry.loaded = false;
+                        vec![info_row(
+                            "Could not read the file header",
+                            &format!("{message} Collapse and expand to retry."),
+                        )]
+                    }
+                };
+                set_children(&entry.row, &mut entry.children, rows);
+            }
             _ => {}
         }
     }
@@ -197,7 +242,9 @@ impl Explorer {
             }
             let mut state = self.state.borrow_mut();
             state.rows.clear();
+            state.artifacts.clear();
             state.release = None;
+            state.inspect = None;
         }
         for repo in &load.page.repos {
             if self.state.borrow().rows.contains_key(&repo.repo_id) {
@@ -248,48 +295,60 @@ impl Explorer {
     }
 
     fn show_release(&self, repo_id: &str, result: &Result<Box<ReleaseLoad>, String>) {
-        let mut state = self.state.borrow_mut();
-        let Some(entry) = state.rows.get_mut(repo_id) else {
-            return;
-        };
-        entry.loading = false;
-        for child in entry.children.drain(..) {
-            entry.row.remove(&child);
-        }
-        let add = |entry: &mut RepoRow, widget: gtk::Widget| {
-            entry.row.add_row(&widget);
-            entry.children.push(widget);
-        };
-        match result {
-            Err(message) => {
-                entry.loaded = false;
-                add(
-                    entry,
-                    info_row(
+        let mut new_artifacts = Vec::new();
+        {
+            let mut state = self.state.borrow_mut();
+            let Some(entry) = state.rows.get_mut(repo_id) else {
+                return;
+            };
+            entry.loading = false;
+            let rows = match result {
+                Err(message) => {
+                    entry.loaded = false;
+                    vec![info_row(
                         "Could not load files",
                         &format!("{message} Collapse and expand to retry."),
-                    ),
-                );
-            }
-            Ok(load) => {
-                entry.loaded = true;
-                let release = &load.release;
-                add(
-                    entry,
-                    info_row(&release_title(release), &release_subtitle(load)),
-                );
-                if release.artifacts.is_empty() {
-                    add(
-                        entry,
-                        info_row(
+                    )]
+                }
+                Ok(load) => {
+                    entry.loaded = true;
+                    let release = &load.release;
+                    let mut rows = vec![info_row(&release_title(release), &release_subtitle(load))];
+                    if release.artifacts.is_empty() {
+                        rows.push(info_row(
                             "No GGUF files",
                             "This repository lists no GGUF weight files.",
-                        ),
-                    );
+                        ));
+                    }
+                    for artifact in &release.artifacts {
+                        let row = artifact_row(artifact);
+                        let this = self.handle();
+                        let artifact_id = artifact.artifact_id.clone();
+                        row.connect_expanded_notify(move |row| {
+                            if row.is_expanded() {
+                                this.inspect(&artifact_id);
+                            }
+                        });
+                        rows.push(row.clone().upcast());
+                        new_artifacts.push(ArtifactRow {
+                            row,
+                            children: Vec::new(),
+                            artifact: artifact.clone(),
+                            loading: false,
+                            loaded: false,
+                        });
+                    }
+                    rows
                 }
-                for artifact in &release.artifacts {
-                    add(entry, artifact_row(artifact));
-                }
+            };
+            set_children(&entry.row, &mut entry.children, rows);
+            state
+                .artifacts
+                .retain(|_, row| row.artifact.repo_id != repo_id);
+            for row in new_artifacts {
+                state
+                    .artifacts
+                    .insert(row.artifact.artifact_id.clone(), row);
             }
         }
     }
@@ -353,36 +412,81 @@ impl Handle {
                 return;
             }
             entry.loading = true;
-            for child in entry.children.drain(..) {
-                entry.row.remove(&child);
-            }
-            let placeholder = info_row(
-                "Loading files…",
-                "Fetching the file list from Hugging Face.",
+            set_children(
+                &entry.row,
+                &mut entry.children,
+                vec![info_row(
+                    "Loading files…",
+                    "Fetching the file list from Hugging Face.",
+                )],
             );
-            entry.row.add_row(&placeholder);
-            entry.children.push(placeholder);
             // The worker keeps one release fetch; an older one will never report.
             if let Some((_, older)) = state.release.replace((id, repo_id.to_owned()))
                 && older != repo_id
                 && let Some(entry) = state.rows.get_mut(&older)
             {
                 entry.loading = false;
-                for child in entry.children.drain(..) {
-                    entry.row.remove(&child);
-                }
-                let note = info_row(
-                    "Loading was replaced by another request",
-                    "Collapse and expand to retry.",
+                set_children(
+                    &entry.row,
+                    &mut entry.children,
+                    vec![info_row(
+                        "Loading was replaced by another request",
+                        "Collapse and expand to retry.",
+                    )],
                 );
-                entry.row.add_row(&note);
-                entry.children.push(note);
             }
         }
         self.send(CoreCommand::ExpandRelease {
             id,
             repo_id: repo_id.to_owned(),
             pinned: None,
+        });
+    }
+
+    fn inspect(&self, artifact_id: &str) {
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
+        let id = next_id(&state);
+        let artifact = {
+            let mut state = state.borrow_mut();
+            let Some(entry) = state.artifacts.get_mut(artifact_id) else {
+                return;
+            };
+            // Expanding again re-reads the saved header and refreshes the memory budgets.
+            if entry.loading {
+                return;
+            }
+            entry.loading = true;
+            set_children(
+                &entry.row,
+                &mut entry.children,
+                vec![info_row(
+                    "Reading file header…",
+                    "Downloads at most the first 16 MiB of this file, once; then it is saved.",
+                )],
+            );
+            let artifact = entry.artifact.clone();
+            // The worker keeps one inspection; an older one will never report.
+            if let Some((_, older)) = state.inspect.replace((id, artifact_id.to_owned()))
+                && older != artifact_id
+                && let Some(entry) = state.artifacts.get_mut(&older)
+            {
+                entry.loading = false;
+                set_children(
+                    &entry.row,
+                    &mut entry.children,
+                    vec![info_row(
+                        "Reading was replaced by another request",
+                        "Collapse and expand to retry.",
+                    )],
+                );
+            }
+            artifact
+        };
+        self.send(CoreCommand::InspectArtifact {
+            id,
+            artifact: Box::new(artifact),
         });
     }
 
@@ -471,7 +575,7 @@ fn release_subtitle(load: &ReleaseLoad) -> String {
     parts.join(" · ")
 }
 
-fn artifact_row(artifact: &ModelArtifact) -> gtk::Widget {
+fn artifact_row(artifact: &ModelArtifact) -> adw::ExpanderRow {
     let size = artifact
         .size_bytes
         .map_or("size unknown".to_owned(), size_text);
@@ -479,7 +583,9 @@ fn artifact_row(artifact: &ModelArtifact) -> gtk::Widget {
         artifact
             .quantization_hint
             .clone()
-            .unwrap_or_else(|| "quantization unknown".into()),
+            .map_or("quantization unknown".to_owned(), |q| {
+                format!("{q} (from filename)")
+            }),
         size,
     ];
     if let Some(shards) = artifact.shards {
@@ -494,7 +600,104 @@ fn artifact_row(artifact: &ModelArtifact) -> gtk::Widget {
     } else {
         "no checksum: not downloadable".to_owned()
     });
-    info_row(&artifact.filename, &parts.join(" · "))
+    adw::ExpanderRow::builder()
+        .title(text(&artifact.filename))
+        .subtitle(text(&parts.join(" · ")))
+        .use_markup(false)
+        .build()
+}
+
+/// Replace the rows under an expander.
+fn set_children(row: &adw::ExpanderRow, children: &mut Vec<gtk::Widget>, new: Vec<gtk::Widget>) {
+    for child in children.drain(..) {
+        row.remove(&child);
+    }
+    for widget in new {
+        row.add_row(&widget);
+        children.push(widget);
+    }
+}
+
+/// What the file's header declares and the conditional fit for the default scenario.
+fn details_rows(details: &ArtifactDetails) -> Vec<gtk::Widget> {
+    let report = &details.report;
+    let facts = &report.metadata;
+    let mut rows = vec![info_row(
+        &format!(
+            "Architecture {}",
+            facts.architecture.as_deref().unwrap_or("unknown")
+        ),
+        &format!(
+            "{} tensors · weights {} · context length {}",
+            facts.tensor_count,
+            size_text(facts.tensor_bytes),
+            facts
+                .attention
+                .as_ref()
+                .and_then(|a| a.context_length)
+                .map_or("not declared".to_owned(), |n| n.to_string()),
+        ),
+    )];
+    if !facts.warnings.is_empty() {
+        rows.push(info_row(
+            "Layout notes",
+            &facts
+                .warnings
+                .iter()
+                .map(|w| format!("{w:?}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+    let memory = report
+        .estimate
+        .assessment
+        .breakdown
+        .map_or("no total available".to_owned(), |b| {
+            format!("estimated total {}", size_text(b.total_bytes))
+        });
+    rows.push(info_row(
+        super::model_fit::memory_class_text(report.estimate.assessment.memory_class()),
+        &format!(
+            "{} {memory}. Scenario: 8192-token context, F16 K/V cache, microbatch 512, uniform attention assumed; this computer's RAM available now: {}.",
+            super::model_fit::status_text(report.estimate.status),
+            report
+                .available_ram_bytes
+                .map_or("unknown".to_owned(), size_text),
+        ),
+    ));
+    for gpu in &report.gpu_estimates {
+        rows.push(info_row(
+            &format!(
+                "{}: {}",
+                gpu.name,
+                super::model_fit::memory_class_text(gpu.estimate.assessment.memory_class())
+            ),
+            &format!(
+                "VRAM available now: {}.",
+                gpu.available_vram_bytes
+                    .map_or("unknown".to_owned(), size_text)
+            ),
+        ));
+    }
+    rows.push(info_row(
+        "Coverage",
+        "Fit is estimated only for llama and qwen2 architectures without special layouts; anything else shows Unknown.",
+    ));
+    let source = match details.source {
+        LoadSource::Live => "Read from Hugging Face just now.".to_owned(),
+        LoadSource::Cached { fetched_at_unix_ms } => {
+            format!("Header saved {}.", age(fetched_at_unix_ms))
+        }
+    };
+    rows.push(info_row(
+        "Source",
+        &match &details.notice {
+            Some(notice) => format!("{source} {notice}"),
+            None => source,
+        },
+    ));
+    rows
 }
 
 fn size_text(bytes: u64) -> String {
