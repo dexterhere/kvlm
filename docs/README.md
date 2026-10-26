@@ -18,11 +18,15 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Benchmark memory sampling](03-development/benchmark-memory-sampling.md) | Bounded background memory peaks, coverage, and attribution limits |
 | 03 | [Benchmark history](03-development/benchmark-history.md) | SQLite snapshots, outcomes, restart recovery, and storage limits |
 | 03 | [Quick Benchmark](03-development/quick-benchmark.md) | Local-only guard, one explicit streaming request, timings, cancellation, and limits |
+| 03 | [Model downloads](03-development/model-downloads.md) | Explicit download, pause, resume, discard, and what stops a transfer |
+| 03 | [Hugging Face access](03-development/huggingface-access.md) | Gated models, keyring-only token, and what is sent where |
+| 03 | [M1 acceptance evidence](03-development/m1-acceptance.md) | Live catalog, resume, dedup and gated-refusal results |
 | 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
 | 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection, merged-file split markers, validation evidence, and limits |
 | 03 | [GGUF fit scenarios](03-development/gguf-fit.md) | Local declarations with explicit settings, assumptions, and unknown compatibility |
 | 03 | [Desktop CPU/CUDA fit workflow](03-development/desktop-cpu-fit.md) | File selection, explicit inputs, fresh RAM, asynchronous estimates, and validation limits |
 | 04 | [Milestones](04-roadmap/milestones.md) | Current state and M0–M4 delivery order |
+| 04 | [M1 plan](04-roadmap/m1/Planned.md) | Model Explorer, Hugging Face catalog, deduplication, downloads: [implementation](04-roadmap/m1/Implementation.md) and [diagrams](04-roadmap/m1/Diagrams.md) |
 | 04 | [Next feature: hardware discovery](04-roadmap/next-feature-hardware-discovery.md) | Implementation sequence, scope, and acceptance checks for M0 Step 2 |
 | 05 | [Decisions](05-decisions/README.md) | How to record architecture decisions |
 | 05 | [Foundation decision](05-decisions/0001-workspace-foundation.md) | Accepted setup choices |
@@ -38,6 +42,9 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 05 | [Memory sampling decision](05-decisions/0011-benchmark-memory-sampling.md) | Observed memory peaks and additive history compatibility |
 | 05 | [Qwen2 and GPU fit](05-decisions/0012-qwen2-gpu-fit.md) | Scoped metadata and conditional CPU/CUDA memory classes |
 | 05 | [Benchmark verification](05-decisions/0013-benchmark-verification.md) | Exact manifest/hardware identity and persistent verification |
+| 05 | [Hugging Face catalog](05-decisions/0014-huggingface-catalog.md) | Explicit public catalog access, pinned revisions, rustls, bounded client |
+| 05 | [Resumable downloads](05-decisions/0015-resumable-downloads.md) | Private locked store, verified publication, Range resume, explicit start |
+| 05 | [Hugging Face token](05-decisions/0016-huggingface-token.md) | Keyring-only token, encrypted transport, first-hop-only use |
 | 05 | [Open questions](05-decisions/open-questions.md) | Specification gaps to resolve before affected implementation |
 
 Also read [contributing](../CONTRIBUTING.md), [security](../SECURITY.md),

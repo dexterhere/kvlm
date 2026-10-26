@@ -67,7 +67,16 @@ fn estimate_with_hardware(
     hardware: impl FnOnce() -> HardwareProfile,
 ) -> Result<FitReport, String> {
     let metadata = inspect_file(&request.path).map_err(|error| error.to_string())?;
-    let hardware = hardware();
+    fit_report(metadata, &request.scenario, request.layout, hardware())
+}
+
+/// Fit of already-inspected metadata against a fresh hardware reading.
+pub fn fit_report(
+    metadata: GgufMetadata,
+    scenario: &RuntimeScenario,
+    layout: LayoutAssumption,
+    hardware: HardwareProfile,
+) -> Result<FitReport, String> {
     let available_ram_bytes = hardware.system_ram.and_then(|pool| pool.available_bytes);
     let ram_notice = available_ram_bytes
         .is_none()
@@ -93,12 +102,12 @@ fn estimate_with_hardware(
         let available_vram_bytes = gpu.dedicated_vram.and_then(|pool| pool.available_bytes);
         let estimate = assess_gguf_fit(
             &metadata,
-            &request.scenario,
+            scenario,
             &ExecutionTarget::DedicatedGpu {
                 backend: GpuBackend::Cuda,
                 available_vram_bytes,
             },
-            request.layout,
+            layout,
         )
         .map_err(|error| error.to_string())?;
         gpu_estimates.push(GpuFitReport {
@@ -121,11 +130,11 @@ fn estimate_with_hardware(
         .unwrap_or(0);
     let estimate = assess_gguf_fit(
         &metadata,
-        &request.scenario,
+        scenario,
         &ExecutionTarget::Cpu {
             available_ram_bytes,
         },
-        request.layout,
+        layout,
     )
     .map_err(|error| error.to_string())?;
     Ok(FitReport {

@@ -664,7 +664,7 @@ fn scenario_text(inner: &Inner) -> String {
     )
 }
 
-fn memory_class_text(class: Option<FitClass>) -> &'static str {
+pub(super) fn memory_class_text(class: Option<FitClass>) -> &'static str {
     match class {
         Some(FitClass::Comfortable) => "Comfortable conditional memory estimate",
         Some(FitClass::Constrained) => "Constrained conditional memory estimate",
@@ -683,7 +683,7 @@ fn clear_fit_style(inner: &Inner) {
     }
 }
 
-fn status_text(status: GgufFitStatus) -> &'static str {
+pub(super) fn status_text(status: GgufFitStatus) -> &'static str {
     match status {
         GgufFitStatus::NoTensorData => {
             "No tensor data was found; no weights estimate is available."

@@ -1,18 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Typed messages keep GTK objects out of blocking hardware probes.
 
-use crate::fit_workflow::{FitReport, FitRequest, estimate};
-use std::sync::Arc;
+use crate::fit_workflow::{FitReport, FitRequest, estimate, fit_report, parse_scenario};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, atomic::AtomicBool},
+};
 use tokio::sync::mpsc;
 use workstation_bench::{
     history::{self, PersistedRun},
     runner::BenchmarkOutcome,
 };
 use workstation_core::db::HistoryEntry;
+use workstation_core::db::downloads::DownloadRow;
 use workstation_core::hardware::{HardwareProfile, resources::ResourceSummary};
+use workstation_core::{
+    fit::{gguf_fit::LayoutAssumption, memory_math::KvCacheType},
+    models::{
+        artifact::ModelArtifact,
+        dedup::{Limits, ScanReport, Wanted, default_roots, scan},
+    },
+};
+use workstation_runtimes::catalog_service::{
+    CatalogLoad, CatalogService, InspectLoad, LoadSource, ReleaseLoad,
+};
+use workstation_runtimes::downloader::{
+    DownloadEnd, DownloadOutcome, Downloader, Progress, Stop as DownloadStop,
+};
 use workstation_runtimes::ollama::{
     Discovery, GenerationProgress, InstalledModel, ModelInspection, OllamaAdapter,
 };
+use workstation_runtimes::secrets::{Token, TokenService, TokenSlot};
 
 #[derive(Debug)]
 pub enum CoreCommand {
@@ -31,11 +50,82 @@ pub enum CoreCommand {
         model: String,
     },
     EstimateFit(FitRequest),
+    /// Explicit network search; falls back to saved results when offline.
+    SearchCatalog {
+        id: u64,
+        query: String,
+        cursor: Option<String>,
+    },
+    /// Saved first page only; never touches the network.
+    LoadCachedCatalog {
+        id: u64,
+        query: String,
+    },
+    /// Explicit network fetch of one repository's files; `pinned` is a commit id.
+    ExpandRelease {
+        id: u64,
+        repo_id: String,
+        pinned: Option<String>,
+    },
+    /// Local-only: look for files already on disk with these artifacts' SHA-256.
+    ScanLocal {
+        id: u64,
+        wanted: Vec<Wanted>,
+    },
+    /// Explicit fetch of one file's header (first 16 MiB at most) and a fit estimate.
+    InspectArtifact {
+        id: u64,
+        artifact: Box<ModelArtifact>,
+    },
+    /// Explicit download of one verified-size, checksummed file. One at a time.
+    StartDownload {
+        id: u64,
+        artifact: Box<ModelArtifact>,
+    },
+    /// Keep the partial file; the user can resume.
+    PauseDownload,
+    /// Keep the partial file; the user decides separately whether to discard it.
+    CancelDownload,
+    /// Delete an unfinished download's partial file and row, then list again.
+    DiscardDownload {
+        id: u64,
+        download_id: i64,
+    },
+    /// Saved downloads only; reads local state and never touches the network.
+    LoadDownloads {
+        id: u64,
+    },
+    /// Save the token to the desktop keyring and use it. Explicit action only.
+    SaveToken {
+        id: u64,
+        token: Token,
+    },
+    /// Read the saved token from the keyring into this session.
+    LoadToken {
+        id: u64,
+    },
+    /// Forget the token now and remove the saved copy.
+    ClearToken {
+        id: u64,
+    },
+    /// Ask Hugging Face whose token this is.
+    CheckToken {
+        id: u64,
+    },
     RunQuickBenchmark {
         id: u64,
         model: InstalledModel,
         cancel: tokio::sync::watch::Receiver<bool>,
     },
+}
+
+/// What a finished token action achieved. Never carries the token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TokenOutcome {
+    Saved,
+    Loaded { found: bool },
+    Cleared,
+    Valid { name: String },
 }
 
 #[derive(Debug)]
@@ -69,6 +159,331 @@ pub enum UiEvent {
         id: u64,
         result: Result<Box<FitReport>, String>,
     },
+    /// `Ok(None)` means a cache-only request found nothing saved.
+    CatalogLoaded {
+        id: u64,
+        result: Result<Option<Box<CatalogLoad>>, String>,
+    },
+    ReleaseLoaded {
+        id: u64,
+        result: Result<Box<ReleaseLoad>, String>,
+    },
+    ArtifactInspected {
+        id: u64,
+        result: Result<Box<ArtifactDetails>, String>,
+    },
+    LocalScanned {
+        id: u64,
+        result: Result<Box<ScanReport>, String>,
+    },
+    TokenDone {
+        id: u64,
+        result: Result<TokenOutcome, String>,
+    },
+    /// Latest progress only; older readings are dropped, never queued.
+    DownloadProgress(Progress),
+    /// Only one download runs, so the end of one needs no request id.
+    DownloadFinished {
+        outcome: DownloadOutcome,
+    },
+    DownloadsLoaded {
+        id: u64,
+        result: Result<Vec<DownloadRow>, String>,
+    },
+}
+
+/// A file's header facts and the conditional fit for the default scenario.
+#[derive(Debug)]
+pub struct ArtifactDetails {
+    pub report: FitReport,
+    pub source: LoadSource,
+    pub notice: Option<String>,
+}
+
+/// 8192 context, F16 K/V, microbatch 512, uniform attention assumed. Conditional only.
+async fn artifact_details(
+    load: impl Future<Output = Result<InspectLoad, String>>,
+    probe: Arc<impl Fn() -> HardwareProfile + Send + Sync + 'static>,
+    gate: Arc<tokio::sync::Semaphore>,
+) -> Result<ArtifactDetails, String> {
+    let InspectLoad {
+        metadata,
+        source,
+        notice,
+    } = load.await?;
+    let scenario = parse_scenario("8192", "512", KvCacheType::F16, KvCacheType::F16)?;
+    // Aborting this job cannot stop a running blocking probe, so one permit travels with
+    // it: repeated requests wait instead of piling up probes.
+    let permit = gate
+        .acquire_owned()
+        .await
+        .map_err(|_| "Fit estimate failed. Retry.".to_string())?;
+    let report = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        fit_report(
+            metadata,
+            &scenario,
+            LayoutAssumption::UniformFullAttention,
+            probe(),
+        )
+    })
+    .await
+    .map_err(|_| "Fit estimate failed. Retry.".to_string())??;
+    Ok(ArtifactDetails {
+        report,
+        source,
+        notice,
+    })
+}
+
+pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+
+/// Source of catalog data. Production uses [`CatalogService`]; tests inject fakes.
+pub trait CatalogBackend: Send + Sync + 'static {
+    fn search(
+        &self,
+        query: String,
+        cursor: Option<String>,
+    ) -> BoxFuture<Result<CatalogLoad, String>>;
+    fn cached_search(&self, query: String) -> BoxFuture<Result<Option<CatalogLoad>, String>>;
+    fn release(
+        &self,
+        repo_id: String,
+        pinned: Option<String>,
+    ) -> BoxFuture<Result<ReleaseLoad, String>>;
+    fn inspect(&self, artifact: ModelArtifact) -> BoxFuture<Result<InspectLoad, String>>;
+    /// Blocking, cancellable file scan; the caller runs it on a blocking thread.
+    fn scan_local(&self, wanted: Vec<Wanted>, cancel: &AtomicBool) -> Result<ScanReport, String>;
+    fn download(
+        &self,
+        artifact: ModelArtifact,
+        stop: tokio::sync::watch::Receiver<Option<DownloadStop>>,
+        progress: Box<dyn Fn(Progress) + Send>,
+    ) -> BoxFuture<DownloadOutcome>;
+    fn list_downloads(&self) -> BoxFuture<Result<Vec<DownloadRow>, String>>;
+    fn discard_download(&self, download_id: i64) -> BoxFuture<Result<(), String>>;
+    fn save_token(&self, token: Token) -> BoxFuture<Result<TokenOutcome, String>>;
+    fn load_token(&self) -> BoxFuture<Result<TokenOutcome, String>>;
+    fn clear_token(&self) -> BoxFuture<Result<TokenOutcome, String>>;
+    fn check_token(&self) -> BoxFuture<Result<TokenOutcome, String>>;
+}
+
+/// Builds the real service on first use, so startup does no catalog work.
+#[derive(Default)]
+struct LiveCatalog {
+    /// The token every client of this application reads; empty until the user adds one.
+    slot: TokenSlot,
+    service: std::sync::OnceLock<Result<Arc<CatalogService>, String>>,
+    downloader: std::sync::OnceLock<Result<Arc<Downloader>, String>>,
+}
+
+impl LiveCatalog {
+    fn service(&self) -> Result<Arc<CatalogService>, String> {
+        self.service
+            .get_or_init(|| CatalogService::new(self.slot.clone()).map(Arc::new))
+            .clone()
+    }
+    fn downloader(&self) -> Result<Arc<Downloader>, String> {
+        self.downloader
+            .get_or_init(|| Downloader::new(self.slot.clone()).map(Arc::new))
+            .clone()
+    }
+}
+
+impl CatalogBackend for LiveCatalog {
+    fn search(
+        &self,
+        query: String,
+        cursor: Option<String>,
+    ) -> BoxFuture<Result<CatalogLoad, String>> {
+        let service = self.service();
+        Box::pin(async move { service?.search(&query, cursor.as_deref()).await })
+    }
+    fn cached_search(&self, query: String) -> BoxFuture<Result<Option<CatalogLoad>, String>> {
+        let service = self.service();
+        Box::pin(async move { service?.cached_search(&query, None).await })
+    }
+    fn release(
+        &self,
+        repo_id: String,
+        pinned: Option<String>,
+    ) -> BoxFuture<Result<ReleaseLoad, String>> {
+        let service = self.service();
+        Box::pin(async move { service?.release(&repo_id, pinned.as_deref()).await })
+    }
+    fn inspect(&self, artifact: ModelArtifact) -> BoxFuture<Result<InspectLoad, String>> {
+        let service = self.service();
+        Box::pin(async move { service?.inspect(&artifact).await })
+    }
+    fn scan_local(&self, wanted: Vec<Wanted>, cancel: &AtomicBool) -> Result<ScanReport, String> {
+        // Digest hints are optional: an unreadable database only costs re-hashing.
+        let store = workstation_core::db::default_database_path()
+            .and_then(|path| workstation_core::db::HistoryStore::open(&path))
+            .ok();
+        Ok(scan(
+            &default_roots(),
+            &wanted,
+            store.as_ref(),
+            cancel,
+            &Limits::default(),
+        ))
+    }
+    fn download(
+        &self,
+        artifact: ModelArtifact,
+        stop: tokio::sync::watch::Receiver<Option<DownloadStop>>,
+        progress: Box<dyn Fn(Progress) + Send>,
+    ) -> BoxFuture<DownloadOutcome> {
+        let downloader = self.downloader();
+        Box::pin(async move {
+            match downloader {
+                Ok(downloader) => downloader.run(artifact, stop, progress).await,
+                Err(message) => failed_outcome("storage", message),
+            }
+        })
+    }
+    fn list_downloads(&self) -> BoxFuture<Result<Vec<DownloadRow>, String>> {
+        let downloader = self.downloader();
+        Box::pin(async move { downloader?.list().await })
+    }
+    fn discard_download(&self, download_id: i64) -> BoxFuture<Result<(), String>> {
+        let downloader = self.downloader();
+        Box::pin(async move { downloader?.discard(download_id).await })
+    }
+    fn save_token(&self, token: Token) -> BoxFuture<Result<TokenOutcome, String>> {
+        let tokens = TokenService::keyring(self.slot.clone());
+        Box::pin(async move {
+            tokens
+                .save(token)
+                .await
+                .map(|()| TokenOutcome::Saved)
+                .map_err(|error| {
+                    format!("The token is in use for this session, but saving it to the keyring did not finish. {error} Press Use saved later to see whether it was stored.")
+                })
+        })
+    }
+    fn load_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+        let tokens = TokenService::keyring(self.slot.clone());
+        Box::pin(async move {
+            tokens
+                .load()
+                .await
+                .map(|found| TokenOutcome::Loaded { found })
+                .map_err(|error| error.to_string())
+        })
+    }
+    fn clear_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+        let tokens = TokenService::keyring(self.slot.clone());
+        Box::pin(async move {
+            tokens
+                .clear()
+                .await
+                .map(|()| TokenOutcome::Cleared)
+                .map_err(|error| format!("The token was forgotten for this session, but the saved copy may remain. {error}"))
+        })
+    }
+    fn check_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+        let service = self.service();
+        Box::pin(async move {
+            service?
+                .validate_token()
+                .await
+                .map(|name| TokenOutcome::Valid { name })
+        })
+    }
+}
+
+fn failed_outcome(code: &'static str, message: String) -> DownloadOutcome {
+    DownloadOutcome {
+        download_id: None,
+        bytes_done: 0,
+        end: DownloadEnd::Failed { code, message },
+    }
+}
+
+/// Aborts the wrapped task when the guarding job is dropped or aborted.
+struct AbortOnDrop(tokio::task::AbortHandle);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Runs a catalog job so a panic is reported for its own request id; aborting the
+/// guarding job (a newer request) aborts the work too and produces no event.
+async fn guarded(
+    id: u64,
+    failed: fn(u64) -> UiEvent,
+    work: impl std::future::Future<Output = UiEvent> + Send + 'static,
+) -> UiEvent {
+    let task = tokio::spawn(work);
+    let _abort = AbortOnDrop(task.abort_handle());
+    task.await.unwrap_or_else(|_| failed(id))
+}
+
+fn catalog_failed(id: u64) -> UiEvent {
+    UiEvent::CatalogLoaded {
+        id,
+        result: Err("Catalog worker failed. Retry.".into()),
+    }
+}
+
+fn inspect_failed(id: u64) -> UiEvent {
+    UiEvent::ArtifactInspected {
+        id,
+        result: Err("Inspection worker failed. Retry.".into()),
+    }
+}
+
+fn scan_failed(id: u64) -> UiEvent {
+    UiEvent::LocalScanned {
+        id,
+        result: Err("Local file check failed. Retry.".into()),
+    }
+}
+
+fn download_failed(_id: u64) -> UiEvent {
+    UiEvent::DownloadFinished {
+        outcome: failed_outcome(
+            "internal",
+            "The download worker stopped unexpectedly. Resume to retry.".into(),
+        ),
+    }
+}
+
+fn downloads_failed(id: u64) -> UiEvent {
+    UiEvent::DownloadsLoaded {
+        id,
+        result: Err("Downloads worker failed. Retry.".into()),
+    }
+}
+
+fn token_failed(id: u64) -> UiEvent {
+    UiEvent::TokenDone {
+        id,
+        result: Err("The token action failed. Retry.".into()),
+    }
+}
+
+/// The request id and the work for one token command.
+fn token_job(
+    catalog: &Arc<dyn CatalogBackend>,
+    command: CoreCommand,
+) -> Option<(u64, BoxFuture<Result<TokenOutcome, String>>)> {
+    Some(match command {
+        CoreCommand::SaveToken { id, token } => (id, catalog.save_token(token)),
+        CoreCommand::LoadToken { id } => (id, catalog.load_token()),
+        CoreCommand::ClearToken { id } => (id, catalog.clear_token()),
+        CoreCommand::CheckToken { id } => (id, catalog.check_token()),
+        _ => return None,
+    })
+}
+
+fn release_failed(id: u64) -> UiEvent {
+    UiEvent::ReleaseLoaded {
+        id,
+        result: Err("Catalog worker failed. Retry.".into()),
+    }
 }
 
 pub fn start(
@@ -135,6 +550,35 @@ where
     I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
     B: std::future::Future<Output = PersistedRun> + Send + 'static,
 {
+    start_with_catalog(
+        runtime,
+        probe,
+        fit,
+        discover,
+        inspect,
+        run_benchmark,
+        load_history,
+        Arc::new(LiveCatalog::default()),
+    )
+}
+
+/// Every worker is injectable so tests never touch hardware, Ollama, or the network.
+#[allow(clippy::too_many_arguments)]
+fn start_with_catalog<D, I, B>(
+    runtime: &tokio::runtime::Handle,
+    probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
+    fit: impl Fn(FitRequest) -> Result<FitReport, String> + Send + Sync + 'static,
+    discover: impl Fn() -> D + Send + 'static,
+    inspect: impl Fn(String) -> I + Send + 'static,
+    run_benchmark: impl Fn(InstalledModel, tokio::sync::watch::Receiver<bool>) -> B + Send + 'static,
+    load_history: impl Fn() -> Result<Vec<HistoryEntry>, String> + Send + Sync + 'static,
+    catalog: Arc<dyn CatalogBackend>,
+) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>)
+where
+    D: std::future::Future<Output = Result<Discovery, String>> + Send,
+    I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
+    B: std::future::Future<Output = PersistedRun> + Send + 'static,
+{
     let (commands, mut command_rx) = mpsc::channel(1);
     let (events, event_rx) = async_channel::bounded(1);
     let probe = Arc::new(probe);
@@ -144,6 +588,29 @@ where
         let mut pending = None;
         let mut benchmark_jobs = tokio::task::JoinSet::new();
         let mut benchmark_id = 0;
+        // One live search, one saved-page read and one release fetch at a time; a newer
+        // request of the same kind aborts the older. Saved-page reads never cancel a search.
+        let mut search_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let mut cached_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let mut release_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let mut inspect_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let probe_gate = Arc::new(tokio::sync::Semaphore::new(1));
+        let mut scan_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        // Tells the running scan, which a blocking thread cannot be aborted from, to stop.
+        let mut scan_cancel = Arc::new(AtomicBool::new(false));
+        // A replaced scan keeps running until it notices the flag; its permit travels with
+        // the blocking thread so the replacement starts only after it has stopped.
+        let scan_gate = Arc::new(tokio::sync::Semaphore::new(1));
+        // One download at a time. The sender lives as long as the job so that closing the
+        // application (dropping it) pauses the transfer instead of leaving it running.
+        let mut download_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let mut download_stop: Option<tokio::sync::watch::Sender<Option<DownloadStop>>> = None;
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<Progress>();
+        // Short bookkeeping reads and discards; never aborted, so a discard always finishes.
+        let mut download_list_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        // Keyring calls run on their own task, one at a time, so a hung prompt never blocks
+        // download control or browsing.
+        let mut token_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
@@ -155,6 +622,55 @@ where
                     };
                     if events.send(UiEvent::BenchmarkFinished { id: benchmark_id, outcome, resources: resources.map(Box::new) }).await.is_err() { break; }
                     if events.send(UiEvent::BenchmarkHistorySaved { benchmark_id, result: saved }).await.is_err() { break; }
+                    continue;
+                }
+                result = search_jobs.join_next(), if !search_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = cached_jobs.join_next(), if !cached_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = release_jobs.join_next(), if !release_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = inspect_jobs.join_next(), if !inspect_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = scan_jobs.join_next(), if !scan_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = download_jobs.join_next(), if !download_jobs.is_empty() => {
+                    download_stop = None;
+                    // Readings queued before the end would only be stale.
+                    while progress_rx.try_recv().is_ok() {}
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = token_jobs.join_next(), if !token_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = download_list_jobs.join_next(), if !download_list_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                Some(mut latest) = progress_rx.recv() => {
+                    // Keep only the newest reading.
+                    while let Ok(next) = progress_rx.try_recv() { latest = next; }
+                    if events.send(UiEvent::DownloadProgress(latest)).await.is_err() { break; }
                     continue;
                 }
                 command = command_rx.recv() => match command { Some(command) => command, None => break },
@@ -174,6 +690,112 @@ where
                         result = tokio::task::spawn_blocking(move || load()) => result,
                     }.unwrap_or_else(|_| Err("History worker failed. Reload to retry.".into()));
                     if events.send(UiEvent::BenchmarkHistoryLoaded { id, result }).await.is_err() { break; }
+                }
+                CoreCommand::SearchCatalog { id, query, cursor } => {
+                    search_jobs.abort_all();
+                    let catalog = Arc::clone(&catalog);
+                    search_jobs.spawn(guarded(id, catalog_failed, async move {
+                        let result = catalog.search(query, cursor).await.map(|load| Some(Box::new(load)));
+                        UiEvent::CatalogLoaded { id, result }
+                    }));
+                }
+                CoreCommand::LoadCachedCatalog { id, query } => {
+                    cached_jobs.abort_all();
+                    let catalog = Arc::clone(&catalog);
+                    cached_jobs.spawn(guarded(id, catalog_failed, async move {
+                        let result = catalog.cached_search(query).await.map(|load| load.map(Box::new));
+                        UiEvent::CatalogLoaded { id, result }
+                    }));
+                }
+                CoreCommand::ExpandRelease { id, repo_id, pinned } => {
+                    release_jobs.abort_all();
+                    let catalog = Arc::clone(&catalog);
+                    release_jobs.spawn(guarded(id, release_failed, async move {
+                        let result = catalog.release(repo_id, pinned).await.map(Box::new);
+                        UiEvent::ReleaseLoaded { id, result }
+                    }));
+                }
+                CoreCommand::ScanLocal { id, wanted } => {
+                    scan_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    scan_jobs.abort_all();
+                    scan_cancel = Arc::new(AtomicBool::new(false));
+                    let (catalog, cancel) = (Arc::clone(&catalog), Arc::clone(&scan_cancel));
+                    let gate = Arc::clone(&scan_gate);
+                    scan_jobs.spawn(guarded(id, scan_failed, async move {
+                        let Ok(permit) = gate.acquire_owned().await else {
+                            return scan_failed(id);
+                        };
+                        let result = tokio::task::spawn_blocking(move || {
+                            let _permit = permit;
+                            catalog.scan_local(wanted, &cancel)
+                        })
+                            .await
+                            .unwrap_or_else(|_| Err("Local file check failed. Retry.".into()))
+                            .map(Box::new);
+                        UiEvent::LocalScanned { id, result }
+                    }));
+                }
+                CoreCommand::StartDownload { id, artifact } => {
+                    if download_jobs.is_empty() {
+                        let (stop, stop_rx) = tokio::sync::watch::channel(None);
+                        download_stop = Some(stop);
+                        let (catalog, progress) = (Arc::clone(&catalog), progress_tx.clone());
+                        download_jobs.spawn(guarded(id, download_failed, async move {
+                            let report = Box::new(move |p| { let _ = progress.send(p); });
+                            let outcome = catalog.download(*artifact, stop_rx, report).await;
+                            UiEvent::DownloadFinished { outcome }
+                        }));
+                    } else {
+                        let outcome = failed_outcome("busy", "Another download is still active. Pause or cancel it first.".into());
+                        if events.send(UiEvent::DownloadFinished { outcome }).await.is_err() { break; }
+                    }
+                }
+                CoreCommand::PauseDownload | CoreCommand::CancelDownload => {
+                    let stop = if matches!(command, CoreCommand::PauseDownload) { DownloadStop::Pause } else { DownloadStop::Cancel };
+                    if let Some(sender) = &download_stop { let _ = sender.send(Some(stop)); }
+                }
+                CoreCommand::SaveToken { .. } | CoreCommand::LoadToken { .. } | CoreCommand::ClearToken { .. } | CoreCommand::CheckToken { .. } => {
+                    // A running transfer was authorised by the token being removed: pause it.
+                    if matches!(command, CoreCommand::ClearToken { .. })
+                        && let Some(sender) = &download_stop
+                    {
+                        let _ = sender.send(Some(DownloadStop::Pause));
+                    }
+                    if let Some((id, work)) = token_job(&catalog, command) {
+                        if token_jobs.is_empty() {
+                            token_jobs.spawn(guarded(id, token_failed, async move {
+                                UiEvent::TokenDone { id, result: work.await }
+                            }));
+                        } else {
+                            let result = Err("Another token action is still running. Wait for it to finish.".to_owned());
+                            if events.send(UiEvent::TokenDone { id, result }).await.is_err() { break; }
+                        }
+                    }
+                }
+                CoreCommand::DiscardDownload { id, download_id } => {
+                    let catalog = Arc::clone(&catalog);
+                    download_list_jobs.spawn(guarded(id, downloads_failed, async move {
+                        let result = match catalog.discard_download(download_id).await {
+                            Ok(()) => catalog.list_downloads().await,
+                            Err(message) => Err(message),
+                        };
+                        UiEvent::DownloadsLoaded { id, result }
+                    }));
+                }
+                CoreCommand::LoadDownloads { id } => {
+                    let catalog = Arc::clone(&catalog);
+                    download_list_jobs.spawn(guarded(id, downloads_failed, async move {
+                        UiEvent::DownloadsLoaded { id, result: catalog.list_downloads().await }
+                    }));
+                }
+                CoreCommand::InspectArtifact { id, artifact } => {
+                    inspect_jobs.abort_all();
+                    let (catalog, probe) = (Arc::clone(&catalog), Arc::clone(&probe));
+                    let gate = Arc::clone(&probe_gate);
+                    inspect_jobs.spawn(guarded(id, inspect_failed, async move {
+                        let result = artifact_details(catalog.inspect(*artifact), probe, gate).await.map(Box::new);
+                        UiEvent::ArtifactInspected { id, result }
+                    }));
                 }
                 CoreCommand::RunQuickBenchmark { id, model, cancel } => {
                     if benchmark_jobs.is_empty() {
@@ -238,6 +860,8 @@ where
                 }
             }
         }
+        // A scan on a blocking thread cannot be aborted; tell it to stop.
+        scan_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
     });
     (commands, event_rx)
 }
@@ -406,6 +1030,614 @@ mod tests {
         let closed = tokio::time::timeout(Duration::from_secs(2), commands.closed()).await;
         release.send(()).unwrap();
         assert!(closed.is_ok());
+    }
+
+    /// Catalog fake: "slow" never finishes, "panic" panics, anything else succeeds.
+    struct FakeCatalog;
+    fn page_for(query: &str) -> workstation_core::models::catalog::CatalogPage {
+        use workstation_core::models::{catalog::RepoSummary, release::GatedAccess};
+        workstation_core::models::catalog::CatalogPage {
+            repos: vec![RepoSummary {
+                repo_id: format!("o/{query}"),
+                downloads: Some(1),
+                likes: None,
+                gated: GatedAccess::Open,
+            }],
+            next_cursor: None,
+        }
+    }
+    impl CatalogBackend for FakeCatalog {
+        fn search(
+            &self,
+            query: String,
+            _cursor: Option<String>,
+        ) -> BoxFuture<Result<CatalogLoad, String>> {
+            Box::pin(async move {
+                match query.as_str() {
+                    "slow" => std::future::pending().await,
+                    "panic" => panic!("fixture catalog panic"),
+                    "fail" => Err("fixture failure".into()),
+                    _ => Ok(CatalogLoad {
+                        page: page_for(&query),
+                        source: workstation_runtimes::catalog_service::LoadSource::Live,
+                        notice: None,
+                    }),
+                }
+            })
+        }
+        fn cached_search(&self, query: String) -> BoxFuture<Result<Option<CatalogLoad>, String>> {
+            Box::pin(async move {
+                Ok((query != "empty").then(|| CatalogLoad {
+                    page: page_for(&query),
+                    source: workstation_runtimes::catalog_service::LoadSource::Cached {
+                        fetched_at_unix_ms: 7,
+                    },
+                    notice: None,
+                }))
+            })
+        }
+        fn release(
+            &self,
+            repo_id: String,
+            _pinned: Option<String>,
+        ) -> BoxFuture<Result<ReleaseLoad, String>> {
+            Box::pin(async move {
+                if repo_id == "slow/slow" {
+                    std::future::pending::<()>().await;
+                }
+                Err("fixture release failure".into())
+            })
+        }
+        fn scan_local(
+            &self,
+            wanted: Vec<Wanted>,
+            cancel: &AtomicBool,
+        ) -> Result<ScanReport, String> {
+            if wanted.iter().any(|w| w.artifact_id == "panic") {
+                panic!("fixture scan panic");
+            }
+            scan_local_fake(&wanted, cancel)
+        }
+        fn download(
+            &self,
+            artifact: ModelArtifact,
+            mut stop: tokio::sync::watch::Receiver<Option<DownloadStop>>,
+            progress: Box<dyn Fn(Progress) + Send>,
+        ) -> BoxFuture<DownloadOutcome> {
+            Box::pin(async move {
+                let ended = |end| DownloadOutcome {
+                    download_id: Some(1),
+                    bytes_done: 5,
+                    end,
+                };
+                match artifact.filename.as_str() {
+                    "slow.gguf" => {
+                        progress(Progress {
+                            download_id: 1,
+                            bytes_done: 5,
+                            total: 10,
+                        });
+                        let _ = stop.changed().await;
+                        let request = *stop.borrow();
+                        ended(match request {
+                            Some(DownloadStop::Cancel) => DownloadEnd::Cancelled,
+                            _ => DownloadEnd::Paused {
+                                code: None,
+                                message: None,
+                            },
+                        })
+                    }
+                    "panic.gguf" => panic!("fixture download panic"),
+                    _ => ended(DownloadEnd::Completed),
+                }
+            })
+        }
+        fn list_downloads(&self) -> BoxFuture<Result<Vec<DownloadRow>, String>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn save_token(&self, _token: Token) -> BoxFuture<Result<TokenOutcome, String>> {
+            Box::pin(async { Ok(TokenOutcome::Saved) })
+        }
+        fn load_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+            Box::pin(async { Ok(TokenOutcome::Loaded { found: true }) })
+        }
+        fn clear_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+            Box::pin(async { panic!("fixture token panic") })
+        }
+        fn check_token(&self) -> BoxFuture<Result<TokenOutcome, String>> {
+            Box::pin(async {
+                std::future::pending::<()>().await;
+                Ok(TokenOutcome::Valid {
+                    name: "never".into(),
+                })
+            })
+        }
+        fn discard_download(&self, download_id: i64) -> BoxFuture<Result<(), String>> {
+            Box::pin(async move {
+                if download_id == 13 {
+                    Err("fixture discard failure".into())
+                } else {
+                    Ok(())
+                }
+            })
+        }
+        fn inspect(&self, artifact: ModelArtifact) -> BoxFuture<Result<InspectLoad, String>> {
+            Box::pin(async move {
+                match artifact.filename.as_str() {
+                    "slow.gguf" => std::future::pending().await,
+                    "panic.gguf" => panic!("fixture inspect panic"),
+                    "bad.gguf" => Err("fixture header failure".into()),
+                    _ => Ok(InspectLoad {
+                        metadata: workstation_core::models::gguf::GgufMetadata {
+                            file_bytes: 100,
+                            tensor_count: 1,
+                            tensor_bytes: 4,
+                            alignment: 32,
+                            architecture: Some("qwen2".into()),
+                            attention: None,
+                            warnings: vec![],
+                        },
+                        source: LoadSource::Live,
+                        notice: None,
+                    }),
+                }
+            })
+        }
+    }
+
+    fn scan_local_fake(wanted: &[Wanted], cancel: &AtomicBool) -> Result<ScanReport, String> {
+        use workstation_core::models::dedup::{LocalMatch, RootKind, Stop};
+        let mut report = ScanReport::default();
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            report.stopped = Some(Stop::Cancelled);
+        }
+        report.matches = wanted
+            .iter()
+            .filter(|w| w.artifact_id == "found")
+            .map(|w| LocalMatch {
+                artifact_id: w.artifact_id.clone(),
+                path: "/fixture/blob".into(),
+                root: RootKind::Ollama,
+            })
+            .collect();
+        Ok(report)
+    }
+
+    fn artifact_named(name: &str) -> Box<ModelArtifact> {
+        use workstation_core::models::artifact::ArtifactFormat;
+        Box::new(ModelArtifact {
+            artifact_id: format!("hf:o/n@{}:{name}", "a".repeat(40)),
+            repo_id: "o/n".into(),
+            revision: "a".repeat(40),
+            filename: name.into(),
+            format: ArtifactFormat::Gguf,
+            quantization_hint: None,
+            size_bytes: Some(100),
+            sha256: None,
+            shards: None,
+        })
+    }
+
+    fn start_catalog() -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
+        start_with_catalog(
+            &tokio::runtime::Handle::current(),
+            snapshot,
+            |_| Err("unused".into()),
+            || async { Err("unused".into()) },
+            |_| async { Err("unused".into()) },
+            |_, _| async { unreachable!("no benchmark in catalog tests") },
+            || Ok(Vec::new()),
+            Arc::new(FakeCatalog),
+        )
+    }
+
+    #[tokio::test]
+    async fn catalog_commands_return_live_cached_and_failed_results() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 1,
+                query: "qwen".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::CatalogLoaded { id: 1, result: Ok(Some(load)) } if load.page.repos[0].repo_id == "o/qwen"));
+        commands
+            .send(CoreCommand::LoadCachedCatalog {
+                id: 2,
+                query: "qwen".into(),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::CatalogLoaded { id: 2, result: Ok(Some(load)) } if matches!(load.source, workstation_runtimes::catalog_service::LoadSource::Cached { fetched_at_unix_ms: 7 })));
+        commands
+            .send(CoreCommand::LoadCachedCatalog {
+                id: 3,
+                query: "empty".into(),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::CatalogLoaded {
+                id: 3,
+                result: Ok(None)
+            }
+        ));
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 4,
+                query: "fail".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::CatalogLoaded { id: 4, result: Err(message) } if message == "fixture failure"));
+        commands
+            .send(CoreCommand::ExpandRelease {
+                id: 5,
+                repo_id: "o/n".into(),
+                pinned: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::ReleaseLoaded {
+                id: 5,
+                result: Err(_)
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_newer_search_aborts_the_stuck_older_one() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 1,
+                query: "slow".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 2,
+                query: "next".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::CatalogLoaded {
+                id: 2,
+                result: Ok(Some(_))
+            }
+        ));
+        // The aborted request never reports; other commands still flow.
+        commands
+            .send(CoreCommand::ExpandRelease {
+                id: 3,
+                repo_id: "o/n".into(),
+                pinned: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::ReleaseLoaded { id: 3, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_stuck_search_does_not_block_other_work() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 1,
+                query: "slow".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        commands
+            .send(CoreCommand::ExpandRelease {
+                id: 2,
+                repo_id: "o/n".into(),
+                pinned: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::ReleaseLoaded { id: 2, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_catalog_panic_becomes_a_failure_for_that_request() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 9,
+                query: "panic".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::CatalogLoaded { id: 9, result: Err(message) } if message.contains("Catalog worker failed")));
+    }
+
+    #[tokio::test]
+    async fn inspection_returns_details_failures_and_attributes_panics() {
+        let (commands, events) = start_catalog();
+        for (id, name) in [(1, "ok.gguf"), (2, "bad.gguf"), (3, "panic.gguf")] {
+            commands
+                .send(CoreCommand::InspectArtifact {
+                    id,
+                    artifact: artifact_named(name),
+                })
+                .await
+                .unwrap();
+            let event = receive(&events).await;
+            match (id, event) {
+                (
+                    1,
+                    UiEvent::ArtifactInspected {
+                        id: 1,
+                        result: Ok(details),
+                    },
+                ) => {
+                    assert_eq!(
+                        details.report.metadata.architecture.as_deref(),
+                        Some("qwen2")
+                    );
+                    assert_eq!(details.source, LoadSource::Live);
+                }
+                (
+                    2,
+                    UiEvent::ArtifactInspected {
+                        id: 2,
+                        result: Err(message),
+                    },
+                ) => {
+                    assert_eq!(message, "fixture header failure");
+                }
+                (
+                    3,
+                    UiEvent::ArtifactInspected {
+                        id: 3,
+                        result: Err(message),
+                    },
+                ) => {
+                    assert!(message.contains("Inspection worker failed"));
+                }
+                (_, other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    fn wanted_named(id: &str) -> Wanted {
+        Wanted {
+            artifact_id: id.into(),
+            size: 1,
+            sha256: "a".repeat(64),
+        }
+    }
+
+    #[tokio::test]
+    async fn local_scans_report_matches_failures_and_the_newest_request_only() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::ScanLocal {
+                id: 1,
+                wanted: vec![wanted_named("found")],
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::LocalScanned { id: 1, result: Ok(report) } if report.matches.len() == 1));
+        commands
+            .send(CoreCommand::ScanLocal {
+                id: 2,
+                wanted: vec![wanted_named("panic")],
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::LocalScanned { id: 2, result: Err(message) } if message.contains("Local file check failed")));
+        commands
+            .send(CoreCommand::ScanLocal {
+                id: 3,
+                wanted: vec![wanted_named("none")],
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::LocalScanned { id: 3, result: Ok(report) } if report.matches.is_empty() && report.stopped.is_none()));
+    }
+
+    #[tokio::test]
+    async fn downloads_report_progress_pause_busy_panic_and_discard() {
+        let (commands, events) = start_catalog();
+        let start = |id, name| CoreCommand::StartDownload {
+            id,
+            artifact: artifact_named(name),
+        };
+        commands.send(start(1, "slow.gguf")).await.unwrap();
+        assert!(
+            matches!(receive(&events).await, UiEvent::DownloadProgress(p) if p.bytes_done == 5)
+        );
+        commands.send(start(2, "ok.gguf")).await.unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::DownloadFinished { outcome } if matches!(outcome.end, DownloadEnd::Failed { code: "busy", .. })));
+        commands.send(CoreCommand::PauseDownload).await.unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::DownloadFinished { outcome } if matches!(outcome.end, DownloadEnd::Paused { .. })));
+        commands.send(start(3, "slow.gguf")).await.unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::DownloadProgress(_)
+        ));
+        commands.send(CoreCommand::CancelDownload).await.unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::DownloadFinished { outcome } if outcome.end == DownloadEnd::Cancelled));
+        commands.send(start(4, "panic.gguf")).await.unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::DownloadFinished { outcome } if matches!(outcome.end, DownloadEnd::Failed { code: "internal", .. })));
+        commands.send(start(5, "ok.gguf")).await.unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::DownloadFinished { outcome } if outcome.end == DownloadEnd::Completed));
+        for (id, download_id) in [(6, 2), (7, 13)] {
+            commands
+                .send(CoreCommand::DiscardDownload { id, download_id })
+                .await
+                .unwrap();
+        }
+        let mut results = [receive(&events).await, receive(&events).await];
+        results.sort_by_key(|event| match event {
+            UiEvent::DownloadsLoaded { id, .. } => *id,
+            _ => 0,
+        });
+        assert!(
+            matches!(&results[0], UiEvent::DownloadsLoaded { id: 6, result: Ok(rows) } if rows.is_empty())
+        );
+        assert!(
+            matches!(&results[1], UiEvent::DownloadsLoaded { id: 7, result: Err(m) } if m.contains("fixture discard"))
+        );
+        commands
+            .send(CoreCommand::LoadDownloads { id: 8 })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::DownloadsLoaded {
+                id: 8,
+                result: Ok(_)
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn token_actions_run_one_at_a_time_and_report_panics_without_the_token() {
+        let (commands, events) = start_catalog();
+        let token = Token::parse("hf_secretvalue").unwrap();
+        commands
+            .send(CoreCommand::SaveToken { id: 1, token })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::TokenDone {
+                id: 1,
+                result: Ok(TokenOutcome::Saved)
+            }
+        ));
+        commands
+            .send(CoreCommand::LoadToken { id: 2 })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::TokenDone {
+                id: 2,
+                result: Ok(TokenOutcome::Loaded { found: true })
+            }
+        ));
+        commands
+            .send(CoreCommand::ClearToken { id: 3 })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::TokenDone { id: 3, result: Err(message) } if message.contains("failed")));
+        // A hung keyring call occupies the single token slot; the next action is refused,
+        // and downloads and browsing still work.
+        commands
+            .send(CoreCommand::CheckToken { id: 4 })
+            .await
+            .unwrap();
+        commands
+            .send(CoreCommand::LoadToken { id: 5 })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::TokenDone { id: 5, result: Err(message) } if message.contains("still running")));
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 6,
+                query: "ok".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::CatalogLoaded { id: 6, .. }
+        ));
+        let debug = format!(
+            "{:?}",
+            CoreCommand::SaveToken {
+                id: 9,
+                token: Token::parse("hf_secretvalue").unwrap()
+            }
+        );
+        assert!(!debug.contains("secretvalue"), "{debug}");
+    }
+
+    #[tokio::test]
+    async fn a_newer_inspection_aborts_a_stuck_older_one() {
+        let (commands, events) = start_catalog();
+        for (id, name) in [(1, "slow.gguf"), (2, "ok.gguf")] {
+            commands
+                .send(CoreCommand::InspectArtifact {
+                    id,
+                    artifact: artifact_named(name),
+                })
+                .await
+                .unwrap();
+        }
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::ArtifactInspected {
+                id: 2,
+                result: Ok(_)
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_saved_page_read_does_not_cancel_a_live_search() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 1,
+                query: "fail".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        commands
+            .send(CoreCommand::LoadCachedCatalog {
+                id: 2,
+                query: "".into(),
+            })
+            .await
+            .unwrap();
+        let mut seen = vec![];
+        for _ in 0..2 {
+            if let UiEvent::CatalogLoaded { id, .. } = receive(&events).await {
+                seen.push(id);
+            }
+        }
+        seen.sort();
+        assert_eq!(seen, [1, 2]);
     }
 
     fn fit_request(id: u64) -> CoreCommand {

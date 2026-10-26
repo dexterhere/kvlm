@@ -8,6 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod catalog_cache;
+pub mod digests;
+pub mod downloads;
 pub mod queries;
 pub mod schema;
 pub use queries::HistoryStore;
@@ -80,6 +83,15 @@ pub fn default_database_path() -> Result<PathBuf, String> {
         std::env::var_os("HOME").as_deref(),
     )
 }
+/// Where verified model files live: beside the database, under the application data directory.
+pub fn default_models_dir() -> Result<PathBuf, String> {
+    let database = default_database_path()?;
+    database
+        .parent()
+        .map(|dir| dir.join("models"))
+        .ok_or_else(|| "The application data directory is unavailable.".to_string())
+}
+
 fn data_path(xdg: Option<&OsStr>, home: Option<&OsStr>) -> Result<PathBuf, String> {
     let root = xdg
         .map(Path::new)

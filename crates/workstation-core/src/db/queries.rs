@@ -12,7 +12,7 @@ use std::{
 
 const MAX_JSON: usize = 262_144;
 pub struct HistoryStore {
-    connection: Connection,
+    pub(super) connection: Connection,
 }
 
 impl HistoryStore {

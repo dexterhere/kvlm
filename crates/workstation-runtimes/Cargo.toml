@@ -13,6 +13,9 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+oo7.workspace = true
 
 [lints]
 workspace = true
