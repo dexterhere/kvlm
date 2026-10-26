@@ -31,6 +31,16 @@ For each, the deliverable is a checklist with exact commands and the expected ev
 it, plus the code paths that make the check possible (for example a `--report-hardware` mode that prints a
 redacted capability report). No hardware matrix is claimed as validated unless it was run.
 
+## Local execution is not proven by loopback
+
+An adapter that talks to `127.0.0.1` may still reach a runtime that proxies requests elsewhere, and an unauthenticated
+loopback port trusts every local user. The execution-time local-only guard of the quick benchmark therefore applies to
+every adapter: a benchmark runs only when the adapter supplies affirmative evidence (the model is listed as a local
+file/weights and no remote routing marker is present). For LM Studio and vLLM that evidence is often unavailable; the
+interface then says "local execution cannot be proven for this runtime" and requires an explicit confirmation instead of
+implying it. Managed llama.cpp (own process, own file) is the provable case. Capability contracts (M2 phase 2a) cover
+discovery, loaded models and streaming inference for these adapters; vLLM streaming uses the OpenAI-compatible stream.
+
 ## Security and performance
 
 Adapters use loopback-only clients with no proxy or redirects, response caps, request deadlines, and parse only known
@@ -41,8 +51,9 @@ in the background when hidden). No credentials are stored for these adapters.
 
 | Phase | Branch | Contents |
 | --- | --- | --- |
+| 4z | `chore/m4-app-id-decision` | decision record for the application ID and contacts with options; the ID lives in one constant and one rename script so a change is mechanical; **runs first** because packaging depends on it |
 | 4a | `feat/m4-lmstudio-adapter` | LM Studio adapter, tests with a local server, Runtimes card |
 | 4b | `feat/m4-vllm-adapter` | vLLM adapter and metrics parser, tests, Runtimes card |
 | 4c | `feat/m4-a11y-keyboard` | quick search, shortcuts, label audit, minimum size, docs |
 | 4d | `feat/m4-packaging` | AppStream/desktop/Meson completeness, opt-in update check, release checklist |
-| 4e | `chore/m4-beta-readiness` | hardware validation procedures, capability report, namespace/contact decision record, beta status document |
+| 4e | `chore/m4-beta-readiness` | hardware validation procedures, capability report, beta status document; M4 is reported *implemented, validation pending* until the owner supplies reviewed evidence for each hardware matrix and the GNOME/accessibility passes |

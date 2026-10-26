@@ -21,10 +21,14 @@ configuration. Attached runtimes can never be terminated or modified.
 - **Loopback by default.** `bind_host` is `127.0.0.1`. Any other host is refused in M2 (no "listen on
   all interfaces" option). No API key is needed on loopback, but the profile rejects hosts that are not
   loopback literals.
-- **No shell.** The command line is built as an argument vector from validated fields. The model path
-  must be a regular file inside the application's model store or another path the user picked
-  explicitly; it is passed as one argument. Free-form extra arguments are limited to an allow-list of
-  flag names; values are validated. The child environment is cleared except for a small allow-list.
+- **No shell, no free-form flags.** The command line is an argument vector built from validated fields. The model
+  path must be a regular file (no-follow open) inside the application's model store, or a path the user chose
+  explicitly; it is one argument. There is no free-text extra-argument field: optional flags are a closed enum
+  (threads, parallel slots, no-mmap, mlock) with typed values. `--host`, `--port`, `--model`, `--alias`,
+  `--api-key*`, config/preset loading, `--hf-*`/download options and any alias of them are supervisor-owned and
+  can never come from the profile; each flag is emitted exactly once. The child environment is cleared except
+  for a small allow-list. Only binaries inside the application's install store are ever launched (there is no
+  "use my own binary" option in M2).
 - **Verified installs only.** Runtime archives come from `github.com/ggml-org/llama.cpp` releases over
   https, from an allow-listed set of hosts, with no credentials. The asset's SHA-256 (published by the
   release API) must match before anything is extracted. Extraction rejects absolute paths, `..`,
@@ -35,9 +39,15 @@ configuration. Attached runtimes can never be terminated or modified.
   probe), response sizes. No unbounded queues between the child and the UI.
 - **UI never blocks.** Spawning, waiting, polling and file work run on Tokio tasks or `spawn_blocking`;
   the GTK thread only receives `UiEvent`s. Progress/log events are coalesced.
-- **Clean shutdown.** Managed children are terminated when the application exits (SIGTERM, then SIGKILL
-  after a grace period). `kill_on_drop` covers a panic; a crash of the application itself is handled on
-  next start by refusing to adopt unknown processes (it reports a port in use rather than killing).
+- **Clean shutdown and crash containment.** Each child starts in its own process group
+  (`CommandExt::process_group(0)`), so a stop signals the whole group with the safe `rustix` API. On normal exit
+  and on SIGINT/SIGTERM of the application the supervisor sends SIGTERM, waits, then SIGKILLs the group and
+  reaps it. `kill_on_drop` covers a panic but not an abort or SIGKILL, so the supervisor also writes a private
+  state record (`runtimes/managed.json`, 0600: pid, `/proc/<pid>/stat` start time, expected executable path,
+  launch generation). On the next start the application terminates a recorded process **only** if the pid is
+  alive, its start time matches, and `/proc/<pid>/exe` is the recorded binary inside the install store; anything
+  else is left alone and reported as a port conflict. Orphans from a crash are therefore reclaimed without ever
+  signalling a pid the application cannot prove it started.
 - Missing data stays unknown. The application never claims `Ready` from process liveness alone: `Ready`
   needs `GET /health` to return 200.
 
@@ -57,14 +67,26 @@ configuration. Attached runtimes can never be terminated or modified.
 ### Installer (`workstation-runtimes::llamacpp::install`)
 
 1. `GET https://api.github.com/repos/ggml-org/llama.cpp/releases/latest` (explicit action, 4 MiB cap).
-2. Choose the asset by platform and backend: Linux x86_64 `ubuntu-x64` (CPU) and `ubuntu-vulkan-x64`
-   (Vulkan); CUDA bundles for Linux are not published, so CUDA users get Vulkan or a user-supplied path.
-   The choice is shown to the user with the reason; nothing is silently downloaded.
-3. Download to a partial file in the install store with the same size caps, no auto redirect except to
-   allow-listed GitHub asset hosts, hash while streaming, require the API's `digest` (`sha256:`) to match.
-4. Extract into a temporary directory with the safety rules above, make only `llama-server`
-   (and its shared libraries) executable, verify `llama-server --version` runs with a timeout and clean
-   environment, then rename into `runtimes/llamacpp/<tag>-<backend>/`.
+2. Release selection (checked against upstream on 2026-10-27): `releases/latest` is not usable (it points at a
+   nightly marker) and every build is flagged "pre-release", so the client lists `GET /repos/ggml-org/llama.cpp/releases?per_page=20`
+   (metadata cap 8 MiB) and takes the newest non-draft release that has the wanted Linux `x86_64` asset **with a
+   published `sha256:` digest**; a missing digest means refusal. Linux assets are `.tar.gz`
+   (`llama-<tag>-bin-ubuntu-x64`, `-vulkan-x64`, `-cuda-12.8-x64` plus a separate `cudart-` runtime bundle,
+   `-rocm-*`). The backend offered follows detection: CPU always; Vulkan when a Vulkan ICD exists; CUDA 12.8 only
+   when the NVIDIA driver reports a compatible CUDA version (the cudart bundle is large and is shown with its size
+   before any download). glibc/architecture are checked before offering anything. Nothing downloads without the
+   user's explicit choice.
+3. Download to a partial file in the install store (archive cap 1 GiB, extracted cap 2.5 GiB, entry cap 2,000),
+   redirects followed by hand only to allow-listed GitHub asset hosts over https, SHA-256 hashed while streaming
+   and required to equal the API digest before extraction.
+4. Extract with a streaming gzip+tar reader into a private staging directory under the install root (same
+   filesystem): only regular files and directories are created, via no-follow creates; the only symlinks allowed are
+   relative links to a sibling file name (shared-library version links) and are checked after extraction;
+   byte limits count actual decompressed output. Generated directory names match `[A-Za-z0-9._-]{1,64}`. Make only
+   the server and libraries executable, verify `llama-server --version` runs (timeout, cleared environment), then
+   publish with an atomic no-replace rename into `runtimes/llamacpp/<tag>-<backend>/`. Removal refuses while a managed
+   process runs from that version and only deletes a directory the application created (recorded in `runtime_installs`).
+   Tests cover interrupted publication, disk full, concurrent install/remove and removal of an active version.
 5. Record the install; allow removal of one version (the application deletes only directories it created).
 
 ### Supervisor (`workstation-runtimes::supervisor`)
@@ -72,12 +94,23 @@ configuration. Attached runtimes can never be terminated or modified.
 State machine owned by one Tokio task per managed runtime, driven by commands (`Start`, `Stop`,
 `Restart`) and child events (exit, health result). Pre-flight: binary exists and is inside the install
 store, model file readable, port free (bind probe on loopback; a conflict is reported, never "fixed" by
-killing). Spawn with piped stdout/stderr, new process group, cleared environment. Two reader tasks feed a
+killing). A free port is not an identity: every launch gets a random `--alias` (the launch generation) and readiness
+requires `/health` = 200 **and** `/v1/models` listing exactly that alias **and** the child still alive, so another
+listener answering `/health` can never make a launch look Ready; a startup timeout kills the group and reports why.
+Spawn with piped stdout/stderr, new process group, cleared environment. Two reader tasks feed a
 shared ring buffer (`LogBuffer`: at most 2,000 lines, each cut at 4 KiB, control characters replaced).
 Health: poll `/health` every 500 ms while Starting (503 = loading), every 5 s while Ready; start timeout
 configurable (default 180 s). Failure recovery: unexpected exit moves to Failed with the last 50 log lines;
 optional bounded auto-restart (default off; max 3 within 10 minutes with exponential backoff). Stop:
 SIGTERM, wait 5 s, SIGKILL, reap; `Stopping` always ends in `Stopped` or `Failed`.
+
+### Capability contract (first, phase 2a)
+
+The `RuntimeAdapter` contract of specification 5.3 is defined once as typed capabilities (probe, list models,
+loaded models, start/stop managed, load/unload, stream inference). Operations an engine or ownership mode does not
+support return a typed `Unsupported` error, never a silent no-op. `Busy` is derived from real signals
+(`/slots` or `/metrics` request counters), not assumed. The existing Ollama adapter is mapped onto it without
+behaviour change; Attached values simply lack the managed operations.
 
 ### Adapter (`workstation-runtimes::llamacpp`)
 
@@ -90,7 +123,13 @@ drop) and the native timings object when present. Loopback-only client with no p
 
 Pure functions that turn a profile into text: Continue.dev `config.yaml` model entry, Zed `settings.json`
 OpenAI-compatible provider entry, OpenCode `opencode.json` provider, and a `systemd --user` unit running
-`llama-server` with the same argument vector (quoted per systemd rules). Output is shown and can be copied
+`llama-server` with the same argument vector. JSON is produced by `serde_json`; YAML scalars are emitted as JSON
+double-quoted strings (valid YAML), so names and paths cannot break structure. For systemd every argument is quoted
+and escaped for backslash, double quote, `%` (to `%%`) and `$` (to `$$`); control characters and newlines are rejected,
+and `ExecStart` must be an absolute path. Tests parse the output with real parsers and, when `systemd-analyze` exists,
+run `systemd-analyze --user verify` on the generated unit with hostile names and paths. Existing files are never
+overwritten; the unit is never enabled or started by the application; a unit the user installs and starts is
+externally owned, not Managed. Output is shown and can be copied
 or saved only to a path the user chooses; the application never edits existing editor config files and
 never enables or starts a unit.
 
@@ -105,9 +144,9 @@ and no stop control. New `CoreCommand`/`UiEvent` pairs follow the existing id/st
 
 | Phase | Branch | Contents |
 | --- | --- | --- |
-| 2a | `feat/m2-runtime-profiles` | ownership/lifecycle types, `LaunchProfile` validation, argument builder, schema v3, store |
-| 2b | `feat/m2-llamacpp-install` | release client, checksum, safe extraction, install store, tests with a local server and crafted archives |
-| 2c | `feat/m2-supervisor` | process supervisor, ring log buffer, state machine, port pre-flight, stop/restart/recovery, tests with a fake child program |
+| 2a | `feat/m2-runtime-profiles` | capability contract, ownership/lifecycle types, `LaunchProfile` validation, closed flag enum and reserved-flag rules, argument builder, schema v3, store |
+| 2b | `feat/m2-llamacpp-install` | release listing, backend detection, checksum, tar.gz safe extraction, install store, tests with a local server and crafted archives |
+| 2c | `feat/m2-supervisor` | process supervisor, process groups, state record and orphan reclaim, ring log buffer, state machine, port pre-flight, stop/restart/recovery, tests with a fake child program |
 | 2d | `feat/m2-llamacpp-adapter` | health/props/slots/metrics, streaming completion, tests with a local server |
 | 2e | `feat/m2-dev-exports` | Continue.dev, Zed, OpenCode, systemd user unit generators and tests |
 | 2f | `feat/m2-runtime-ui` | bridge commands, Runtimes managed card, profile editor, log dialog, smoke tests |
