@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::{HistoryEntry, RunCompletion, RunSnapshot, schema};
+use super::{HistoryEntry, RunCompletion, RunOutcome, RunSnapshot, schema};
+use crate::{hardware::HardwareProfile, models::artifact::canonical_manifest_digest};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
@@ -138,7 +139,102 @@ impl HistoryStore {
         }
         Ok(entries)
     }
+
+    /// Search exact identities across history, independent of the recent-view limit.
+    /// Call from a blocking worker with a freshly detected hardware profile.
+    pub fn verified_run(
+        &self,
+        digest: &str,
+        hardware: &HardwareProfile,
+    ) -> Result<Option<i64>, String> {
+        let digest = canonical_manifest_digest(digest).ok_or("Invalid manifest digest.")?;
+        let Some(hash) = hardware
+            .identity_hash()
+            .filter(|hash| hardware.profile_hash.as_deref() == Some(hash.as_str()))
+        else {
+            return Ok(None);
+        };
+        // CASE guards malformed JSON; every selected record is revalidated below.
+        let mut statement = self.connection.prepare("SELECT id, length(CAST(snapshot_json AS BLOB)), length(CAST(completion_json AS BLOB)), snapshot_json, completion_json
+            FROM benchmark_runs WHERE completion_json IS NOT NULL
+            AND CASE WHEN json_valid(snapshot_json) THEN lower(json_extract(snapshot_json, '$.model_digest')) END IN (?1, ?2)
+            AND CASE WHEN json_valid(snapshot_json) THEN json_extract(snapshot_json, '$.hardware.profile_hash') END = ?3
+            ORDER BY id DESC")
+            .map_err(|_| "Cannot query benchmark verification.")?;
+        let mut rows = statement
+            .query(params![digest, &digest[7..], hash])
+            .map_err(|_| "Cannot read benchmark verification.")?;
+        while let Some(row) = rows
+            .next()
+            .map_err(|_| "Cannot read benchmark verification row.")?
+        {
+            let snapshot_length: i64 = row
+                .get(1)
+                .map_err(|_| "Invalid verification snapshot length.")?;
+            let completion_length: i64 = row
+                .get(2)
+                .map_err(|_| "Invalid verification outcome length.")?;
+            if !(0..=MAX_JSON as i64).contains(&snapshot_length)
+                || !(0..=MAX_JSON as i64).contains(&completion_length)
+            {
+                return Err(
+                    "Verification record exceeds the supported size. Keep the file for recovery."
+                        .into(),
+                );
+            }
+            let snapshot_json: String = row.get(3).map_err(|_| "Invalid verification snapshot.")?;
+            let completion_json: String =
+                row.get(4).map_err(|_| "Invalid verification outcome.")?;
+            let snapshot: RunSnapshot = decode(&snapshot_json)?;
+            let completion: RunCompletion = decode(&completion_json)?;
+            let matches = snapshot
+                .model_digest
+                .as_deref()
+                .and_then(canonical_manifest_digest)
+                .as_ref()
+                == Some(&digest)
+                && completion
+                    .model_digest
+                    .as_deref()
+                    .and_then(canonical_manifest_digest)
+                    .as_ref()
+                    == Some(&digest)
+                && snapshot
+                    .hardware
+                    .as_ref()
+                    .and_then(|profile| profile.profile_hash.as_deref())
+                    == Some(hash.as_str())
+                && snapshot
+                    .hardware
+                    .as_ref()
+                    .and_then(HardwareProfile::identity_hash)
+                    .as_deref()
+                    == Some(hash.as_str())
+                && snapshot.runtime_endpoint == "http://127.0.0.1:11434"
+                && snapshot.started_at_unix_ms > 0
+                && completion.finished_at_unix_ms >= snapshot.started_at_unix_ms
+                && completion
+                    .runtime_version
+                    .as_ref()
+                    .is_some_and(|version| !version.trim().is_empty());
+            if matches
+                && matches!(&completion.outcome, RunOutcome::Completed(metrics)
+                if metrics.response_chunks > 0 && metrics.elapsed_ns > 0
+                && metrics.first_response_ns.is_some_and(|first| first <= metrics.elapsed_ns)
+                && metrics.eval_count.is_some_and(|count| count > 0)
+                && metrics.eval_duration_ns.is_some_and(|duration| duration > 0)
+                && matches!(metrics.done_reason.as_str(), "stop" | "length"))
+            {
+                return row
+                    .get(0)
+                    .map(Some)
+                    .map_err(|_| "Invalid verification identifier.".into());
+            }
+        }
+        Ok(None)
+    }
 }
+
 fn encode(value: &impl Serialize) -> Result<String, String> {
     let json = serde_json::to_string(value).map_err(|_| "Cannot encode benchmark history.")?;
     if json.len() > MAX_JSON {

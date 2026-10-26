@@ -86,6 +86,31 @@ fn complete_entries() -> Vec<Vec<u8>> {
     ]
 }
 
+fn qwen2_entries(key_length: Option<u32>, value_length: Option<u32>) -> Vec<Vec<u8>> {
+    let mut entries = vec![
+        entry(b"general.architecture", TYPE_STRING, &text(b"qwen2")),
+        entry(b"qwen2.block_count", TYPE_U32, &scalar(2)),
+        entry(b"qwen2.embedding_length", TYPE_U32, &scalar(128)),
+        entry(b"qwen2.attention.head_count", TYPE_U32, &scalar(4)),
+        entry(b"qwen2.attention.head_count_kv", TYPE_U32, &scalar(2)),
+    ];
+    if let Some(length) = key_length {
+        entries.push(entry(
+            b"qwen2.attention.key_length",
+            TYPE_U32,
+            &scalar(length),
+        ));
+    }
+    if let Some(length) = value_length {
+        entries.push(entry(
+            b"qwen2.attention.value_length",
+            TYPE_U32,
+            &scalar(length),
+        ));
+    }
+    entries
+}
+
 fn metadata(
     entries: &[Vec<u8>],
     with_tensor: bool,
@@ -145,6 +170,123 @@ fn complete_geometry_uses_parser_file_length_and_supplied_scenario() {
     .unwrap();
     assert_eq!(mixed.assessment.breakdown.unwrap().kv_cache_bytes, 143_360);
     assert_eq!(mixed.assessment.class, FitClass::Unknown);
+}
+
+#[test]
+fn qwen2_uses_declared_lengths_or_independent_integral_gguf_defaults() {
+    for (key_length, value_length, expected_kv) in [
+        (Some(32), Some(64), 393_216),
+        (None, None, 262_144),
+        (Some(24), None, 229_376),
+    ] {
+        let parsed = metadata(&qwen2_entries(key_length, value_length), true);
+        let attention = parsed.attention.as_ref().unwrap();
+        assert_eq!(attention.key_length, key_length);
+        assert_eq!(attention.value_length, value_length);
+
+        let result = assess_gguf_fit(
+            &parsed,
+            &scenario(),
+            &cpu(Some(16 * 1024 * MIB)),
+            LayoutAssumption::UniformFullAttention,
+        )
+        .unwrap();
+        assert_eq!(result.status, GgufFitStatus::AssumedGeometry);
+        assert_eq!(result.assessment.class, FitClass::Unknown);
+        assert_eq!(result.assessment.reason, FitReason::UnverifiedRuntime);
+        assert_eq!(
+            result.assessment.breakdown.unwrap().kv_cache_bytes,
+            expected_kv
+        );
+    }
+}
+
+#[test]
+fn qwen2_nonintegral_default_head_length_does_not_promote_geometry() {
+    let mut entries = qwen2_entries(None, None);
+    entries[2] = entry(b"qwen2.embedding_length", TYPE_U32, &scalar(129));
+    let parsed = metadata(&entries, true);
+    assert_eq!(parsed.attention.as_ref().unwrap().key_length, None);
+    assert_eq!(parsed.attention.as_ref().unwrap().value_length, None);
+
+    let result = assess_gguf_fit(
+        &parsed,
+        &scenario(),
+        &cpu(Some(16 * 1024 * MIB)),
+        LayoutAssumption::UniformFullAttention,
+    )
+    .unwrap();
+    assert_eq!(result.status, GgufFitStatus::MissingDimensions);
+    assert_eq!(result.assessment.class, FitClass::Unknown);
+    assert!(result.assessment.breakdown.is_none());
+}
+
+#[test]
+fn qwen2_still_requires_one_sequence_explicit_assumption_and_no_layout_warnings() {
+    let complete = qwen2_entries(None, None);
+    for (scenario, layout, expected) in [
+        (
+            RuntimeScenario {
+                sequence_count: None,
+                ..scenario()
+            },
+            LayoutAssumption::UniformFullAttention,
+            GgufFitStatus::UnknownSequenceCount,
+        ),
+        (
+            RuntimeScenario {
+                sequence_count: Some(2),
+                ..scenario()
+            },
+            LayoutAssumption::UniformFullAttention,
+            GgufFitStatus::MultipleSequences,
+        ),
+        (
+            scenario(),
+            LayoutAssumption::Unconfirmed,
+            GgufFitStatus::UnconfirmedLayout,
+        ),
+    ] {
+        let result = assess_gguf_fit(
+            &metadata(&complete, true),
+            &scenario,
+            &cpu(Some(16 * 1024 * MIB)),
+            layout,
+        )
+        .unwrap();
+        assert_eq!(result.status, expected);
+        assert_eq!(result.assessment.class, FitClass::Unknown);
+        assert!(result.assessment.breakdown.is_none());
+    }
+
+    let markers: [(&[u8], u32, Vec<u8>); 8] = [
+        (b"qwen2.attention.sliding_window", TYPE_U32, scalar(4096)),
+        (
+            b"qwen2.attention.sliding_window_pattern",
+            TYPE_U32,
+            scalar(2),
+        ),
+        (b"qwen2.attention.causal", TYPE_BOOL, vec![0]),
+        (b"qwen2.full_attention_interval", TYPE_U32, scalar(2)),
+        (b"qwen2.expert_count", TYPE_U32, scalar(2)),
+        (b"qwen2.recurrent.state_size", TYPE_U32, scalar(2)),
+        (b"qwen2.adapters.lora_rank", TYPE_U32, scalar(2)),
+        (b"qwen2.tensor_data_layout", TYPE_STRING, text(b"repacked")),
+    ];
+    for (key, kind, value) in markers {
+        let mut entries = complete.clone();
+        entries.push(entry(key, kind, &value));
+        let result = assess_gguf_fit(
+            &metadata(&entries, true),
+            &scenario(),
+            &cpu(Some(16 * 1024 * MIB)),
+            LayoutAssumption::UniformFullAttention,
+        )
+        .unwrap();
+        assert_eq!(result.status, GgufFitStatus::LayoutWarnings, "{key:?}");
+        assert_eq!(result.assessment.class, FitClass::Unknown);
+        assert!(result.assessment.breakdown.is_none());
+    }
 }
 
 #[test]

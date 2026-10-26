@@ -213,10 +213,7 @@ impl OllamaAdapter {
 }
 
 fn canonical_digest(digest: Option<&str>) -> Option<String> {
-    let digest = digest?;
-    let hex = digest.strip_prefix("sha256:").unwrap_or(digest);
-    (hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .then(|| format!("sha256:{}", hex.to_ascii_lowercase()))
+    workstation_core::models::artifact::canonical_manifest_digest(digest?)
 }
 
 fn cloud_name(name: &str) -> bool {

@@ -59,3 +59,9 @@ and [AMDGPU sysfs documentation](https://kernel.org/doc/html/latest/gpu/amdgpu/d
 
 Memory-fit classifications and benchmark verification still require separate
 decisions before their implementation. This phase does not close those questions.
+## Follow-up: verification identity
+
+The initial hash described above is superseded for new records by
+[decision 0013](0013-benchmark-verification.md). `hardware-v2` additionally accounts
+for CPU topology/features and GPU model, vendor, capacities and compute capabilities.
+Legacy snapshots remain readable and are never rewritten to claim new verification.

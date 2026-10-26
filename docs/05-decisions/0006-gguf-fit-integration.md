@@ -53,3 +53,10 @@ validation, 4 Python tests, 5 Meson checks, staged installation, and 20 syntheti
 CLI checks passed. See the [validation record](../03-development/gguf-fit.md#validation).
 No real-model, runtime, hardware, or GUI acceptance is claimed. The dependent
 feature commits remain on the feature branch; no pull request merge is claimed.
+## Follow-up: Qwen2 and conditional GPU classes
+
+[Decision 0012](0012-qwen2-gpu-fit.md) extends the original adapter to exact Qwen2
+declarations and the narrow GGUF head-length default, while preserving the original
+runtime-compatibility gate. The desktop view now presents independent conditional
+CPU/CUDA memory-policy classes; those are not positive runtime compatibility claims.
+See the [reference acceptance record](../03-development/m0-acceptance.md).

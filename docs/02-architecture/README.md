@@ -32,9 +32,10 @@ worker; no file inspection or hardware probing occurs on the GTK thread.
 explicit runtime scenario and available-memory budget. Only a labeled uniform
 full-attention assumption, complete dimensions, and one sequence allow a breakdown.
 Warnings block that path; absence of warnings does not establish support. Runtime
-compatibility stays Unknown. See [the scenario guide](../03-development/gguf-fit.md).
+compatibility stays Unknown. Conditional memory-policy classes are reported separately.
+See [the scenario guide](../03-development/gguf-fit.md).
 The [desktop CPU workflow](../03-development/desktop-cpu-fit.md) reuses that adapter
-and reads Linux `MemAvailable` afresh for each estimate without probing GPUs again.
+and reads Linux `MemAvailable` and confirmed CUDA device budgets afresh for each estimate.
 Request generations discard replies after file, scenario, or hardware changes.
 
 ## Execution model
@@ -47,10 +48,8 @@ Closing the application cancels asynchronous HTTP work and releases channels.
 Already-running blocking probes cannot be forcibly cancelled; shutdown uses a bounded
 runtime wait.
 
-On this dependent feature branch, hardware discovery runs in `spawn_blocking` and
-returns typed snapshots to Overview. Attached-Ollama discovery is carried from its
-unmerged PR and runs asynchronously on Tokio; it never changes runtime state.
-Hardware, fit, and GGUF prerequisite PRs have not been merged either.
+Hardware discovery runs in `spawn_blocking` and returns typed snapshots to Overview.
+Attached-Ollama discovery runs asynchronously on Tokio and never changes runtime state.
 Model selection sends `InspectOllama { id, model }` and receives correlated inspection
 events; UI generations reject stale replies. `/api/show` and fresh `/api/ps` requests
 run concurrently on Tokio. Their partial failures remain separate. Declared metadata
@@ -73,6 +72,10 @@ generation; it retains maxima/counts and returns promptly on the runner outcome.
 Native probe cleanup also stays in blocking workers. Optional terminal JSON fields
 preserve legacy history without a structural migration. See
 [decision 0011](../05-decisions/0011-benchmark-memory-sampling.md).
+Exact saved benchmark verification refreshes the selected Ollama name/digest and
+hardware before a blocking SQLite query. It rechecks versioned hardware identity and
+both stored manifest digests, and UI request IDs reject stale replies. See
+[decision 0013](../05-decisions/0013-benchmark-verification.md).
 The core calculator is pure: callers supply supported model/runtime metadata and
 available-memory readings; it performs no probing, network, database, or GTK work.
 
@@ -87,8 +90,9 @@ Shared GPU memory overlaps physical system RAM. The initial calculator caps its
 resident footprint by both GPU mapping and host-RAM budgets, without adding them.
 CPU-only and selected GPU placement policies are defined in
 [decision 0004](../05-decisions/0004-static-memory-fit.md). Offload, verified layout
-and compatibility evidence, actual runtime settings, and GPU fit wiring remain
-separate work. CPU estimates in Overview are explicitly labeled scenarios.
+and compatibility evidence, and actual runtime settings remain separate work.
+Confirmed CUDA devices now have conditional static GPU estimates; other backends
+remain explicit unknowns. CPU estimates in Overview are explicitly labeled scenarios.
 
 ## Ownership and storage
 

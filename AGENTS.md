@@ -29,6 +29,8 @@ telemetry, root requirements, plaintext credentials, or untrusted model-code exe
   `develop → staging → main`. Never commit directly to those three branches or
   skip stages. Read `docs/03-development/git-workflow.md` before Git operations.
 - Make small, frequent commits at coherent checkpoints when implementing work.
+- Name new branches `feat/...`, `fix/...`, or `chore/...`; use conventional commit
+  subjects such as `feat(fit): ...`, `fix(gguf): ...`, or `chore(docs): ...`.
 - No `Co-authored-by` trailers or generated assistant attribution. Preserve existing
   copyright and use the configured Git identity. Never invent an identity.
 - Run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`,

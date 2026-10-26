@@ -4,7 +4,7 @@
 published as the initial baseline on 2026-10-24. All subsequent work follows:
 
 ```text
-feature/* → develop → staging → main
+feat/*, fix/*, chore/* → develop → staging → main
 ```
 
 - `develop`: integration of tested feature work. Branch features from here and
@@ -13,6 +13,11 @@ feature/* → develop → staging → main
   repository's `develop`; fixes go through a feature branch and develop first.
 - `main`: stable validated history. Its pull requests come only from this
   repository's `staging` after the acceptance evidence is reviewed.
+
+Create new branches with `feat/`, `fix/`, or `chore/` prefixes and a short description,
+for example `feat/m0-fit-verification`. Existing branches keep their names.
+Use matching conventional commit subjects such as `feat(fit): add GPU scenarios`,
+`fix(gguf): validate split markers`, or `chore(docs): update acceptance evidence`.
 
 Never skip a stage, force-push shared branches, or commit directly to these three
 branches. The initial foundation bootstrap is the sole direct-push exception.
@@ -59,7 +64,7 @@ For example, start a new feature from an up-to-date develop branch:
 git fetch origin
 git switch develop
 git pull --ff-only origin develop
-git switch -c feature/my-change
+git switch -c feat/my-change
 ```
 
 Use merge commits for promotions so ancestry is preserved; do not squash or rebase

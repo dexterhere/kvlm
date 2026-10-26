@@ -616,11 +616,30 @@ ON benchmark_runs(artifact_id, hardware_profile_hash);
 **Objective:** Prove the end-to-end Rust + GTK4 + Tokio architecture, hardware probing, Ollama discovery, static fit calculation, and single-run benchmark storage on a real Linux GNOME machine.
 
 **M0 Implementation Checklist (Agent Execution Plan):**
-1. [ ] **Step 1 — Workspace & GTK4 Shell:** Initialize Cargo workspace with `workstation-core`, `workstation-runtimes`, `workstation-bench`, and `workstation-app`. Create `AdwApplicationWindow` with the 4-view navigation sidebar and Tokio-to-GLib async event bridge.
-2. [ ] **Step 2 — Hardware Profiler:** Implement `HardwareProfile::detect()` in `workstation-core` supporting NVIDIA (`nvml-wrapper`), AMD (`sysfs` VRAM + GTT), and Linux `/proc/meminfo` + `/proc/cpuinfo`. Render hardware cards in View 1 (*Overview*).
-3. [ ] **Step 3 — Ollama Attached Adapter:** Implement `OllamaAdapter` in `workstation-runtimes` probing `http://127.0.0.1:11434/api/version`, `/api/tags`, and `/api/ps`. Display connected status and installed models in View 3 (*Runtimes*).
-4. [ ] **Step 4 — Static Memory Fit Calculator:** Implement the 4-part memory formula ($M_{\text{weights}} + M_{\text{KV}} + M_{\text{buffers}} + M_{\text{overhead}}$) and `llmfit` evaluation in `workstation-core::fit`. Display `Comfortable` / `Constrained` / `Not Recommended` badges with memory breakdown tooltips.
-5. [ ] **Step 5 — Vertical Slice Benchmark & SQLite Persistence:** Implement a single-button "Run Quick Benchmark" on any installed Ollama model, stream tokens, compute TTFT and Decode $t/s$, sample VRAM via NVML/sysfs, save to `~/.local/share/local-ai-workstation/workstation.db`, and display the `Benchmark Verified` badge on restart.
+1. [x] **Step 1 — Workspace & GTK4 Shell:** Initialize Cargo workspace with `workstation-core`, `workstation-runtimes`, `workstation-bench`, and `workstation-app`. Create `AdwApplicationWindow` with the 4-view navigation sidebar and Tokio-to-GLib async event bridge.
+2. [x] **Step 2 — Hardware Profiler:** Implement `HardwareProfile::detect()` in `workstation-core` supporting NVIDIA (`nvml-wrapper`), AMD (`sysfs` VRAM + GTT), and Linux `/proc/meminfo` + `/proc/cpuinfo`. Render hardware cards in View 1 (*Overview*).
+3. [x] **Step 3 — Ollama Attached Adapter:** Implement `OllamaAdapter` in `workstation-runtimes` probing `http://127.0.0.1:11434/api/version`, `/api/tags`, and `/api/ps`. Display connected status and installed models in View 3 (*Runtimes*).
+4. [x] **Step 4 — Static Memory Fit Calculator:** Implement the 4-part memory formula ($M_{\text{weights}} + M_{\text{KV}} + M_{\text{buffers}} + M_{\text{overhead}}$) and `llmfit` evaluation in `workstation-core::fit`. Display `Comfortable` / `Constrained` / `Not Recommended` badges with memory breakdown tooltips.
+5. [x] **Step 5 — Vertical Slice Benchmark & SQLite Persistence:** Implement a single-button "Run Quick Benchmark" on any installed Ollama model, stream tokens, compute TTFT and Decode $t/s$, sample VRAM via NVML/sysfs, save to `~/.local/share/local-ai-workstation/workstation.db`, and display the `Benchmark Verified` badge on restart.
+
+**Implementation evidence (2026-10-26):** The five feature areas now have code and
+reference checks, including Qwen2/CUDA conditional memory classes and an exact
+manifest/hardware `Benchmark Verified` indicator restored in a separate process.
+See [M0 acceptance](../03-development/m0-acceptance.md),
+[decision 0012](../05-decisions/0012-qwen2-gpu-fit.md), and
+[decision 0013](../05-decisions/0013-benchmark-verification.md). The measured Qwen
+result is Constrained at 8K and Not recommended at 32K under current full-residence
+budgets. The native session was Hyprland.
+
+**M0 acceptance amendment (2026-10-26):** Explicit project instruction accepted the
+measured GTK/CUDA reference results and their documented limits for M0 sign-off.
+The accepted reference baseline uses Hyprland and preserves the actual 8K/32K fit
+classifications. GNOME-session validation is a follow-up, not a claimed test result.
+The original definition below is retained as the product target; this dated amendment
+records the approved M0 acceptance scope. Earlier implementation decisions, including
+[0004](../05-decisions/0004-static-memory-fit.md), remain in effect: the calculator for
+supplied metadata is implemented; `llmfit-core` integration was evaluated and deferred.
+M0 completion does not merge feature PRs or skip `develop → staging → main`.
 
 **M0 Definition of Done:**
 - `cargo test --workspace` passes all unit tests for memory fit calculations and mock Ollama HTTP responses.

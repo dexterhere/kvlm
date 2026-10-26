@@ -5,7 +5,7 @@ use super::memory_math::{
     ExecutionTarget, FitAssessment, FitError, ModelInput, RuntimeCompatibility, RuntimeConfig,
     TransformerShape, assess_fit,
 };
-use crate::models::gguf::{GgufMetadata, LlamaMetadata};
+use crate::models::gguf::{AttentionMetadata, GgufMetadata};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutAssumption {
@@ -40,7 +40,7 @@ pub struct GgufFitAssessment {
     pub assessment: FitAssessment,
 }
 
-/// Estimate a supplied scenario using only explicit LLaMA dimensions.
+/// Estimate a supplied scenario using only LLaMA or Qwen2 dimensions.
 /// Expects a successfully inspected snapshot; it does not check file identity or freshness.
 /// A layout assumption can enable a breakdown, never Comfortable/Constrained.
 /// NotRecommended, if returned, applies only to this scenario's supplied budget.
@@ -55,10 +55,17 @@ pub fn assess_gguf_fit(
         return Err(FitError::ZeroValue("sequence count"));
     }
     let has_tensors = metadata.tensor_count > 0 && metadata.tensor_bytes > 0;
-    let shape = metadata.llama.as_ref().and_then(declared_shape);
+    let shape = metadata.attention.as_ref().and_then(|declarations| {
+        declared_shape(
+            declarations,
+            metadata.architecture.as_deref() == Some("qwen2"),
+        )
+    });
     let status = if !has_tensors {
         GgufFitStatus::NoTensorData
-    } else if metadata.architecture.as_deref() != Some("llama") || metadata.llama.is_none() {
+    } else if !matches!(metadata.architecture.as_deref(), Some("llama" | "qwen2"))
+        || metadata.attention.is_none()
+    {
         GgufFitStatus::UnsupportedArchitecture
     } else if !metadata.warnings.is_empty() {
         GgufFitStatus::LayoutWarnings
@@ -90,13 +97,20 @@ pub fn assess_gguf_fit(
     Ok(GgufFitAssessment { status, assessment })
 }
 
-fn declared_shape(metadata: &LlamaMetadata) -> Option<TransformerShape> {
+fn declared_shape(metadata: &AttentionMetadata, qwen2: bool) -> Option<TransformerShape> {
+    let default_head = if qwen2 {
+        let embedding = metadata.embedding_length?;
+        let heads = metadata.attention_heads?;
+        (heads > 0 && embedding.is_multiple_of(heads)).then(|| embedding / heads)
+    } else {
+        None
+    };
     Some(TransformerShape {
         layers: u64::from(metadata.block_count?),
         embedding_length: u64::from(metadata.embedding_length?),
         attention_heads: u64::from(metadata.attention_heads?),
         kv_heads: u64::from(metadata.kv_heads?),
-        key_head_dim: u64::from(metadata.key_length?),
-        value_head_dim: u64::from(metadata.value_length?),
+        key_head_dim: u64::from(metadata.key_length.or(default_head)?),
+        value_head_dim: u64::from(metadata.value_length.or(default_head)?),
     })
 }

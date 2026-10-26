@@ -1,6 +1,6 @@
-# Desktop CPU fit scenario
+# Desktop CPU and CUDA fit scenarios
 
-The Overview contains an optional, local CPU memory-estimate workflow. It inspects a
+The Overview contains an optional local CPU/CUDA memory-estimate workflow. It inspects a
 user-selected GGUF and evaluates an explicitly supplied scenario. It does not load the
 model or connect to an inference runtime.
 
@@ -35,8 +35,8 @@ the busy indicator but is not rendered. Only the matching current reply may popu
 the result.
 
 The GTK thread sends a typed request to the core worker. File inspection and the fresh
-CPU `MemAvailable` read run on a blocking worker (`spawn_blocking`). Each estimate
-reads RAM again rather than using the Overview’s cached snapshot. A failed or missing
+CPU `MemAvailable` and device probing run on a blocking worker (`spawn_blocking`). Each estimate
+reads RAM and confirmed CUDA budgets again rather than using the Overview’s cached snapshot. A failed or missing
 reading remains unknown; a zero-byte reading remains a real reading. If the command
 queue is full, the UI asks the user to wait for the hardware refresh and retry. If the
 worker channel is closed, it reports that the application must be reopened. Both
@@ -47,16 +47,17 @@ conditions release the pending request and permit retry.
 The view shows the declared architecture and relevant metadata, recognized layout
 warnings, the adapter status, the fit assessment reason, any available four-part
 memory breakdown, and CPU RAM budget limits. Architecture text is rendered as plain
-text. Runtime compatibility remains unverified. The adapter does not produce
-`Comfortable` or `Constrained`; `Not recommended` can only mean the estimate exceeded
-the supplied CPU budget for this scenario. It is not a conclusion about other devices
-or placements.
+text. Runtime compatibility remains unverified. The view separately shows conditional
+`Comfortable`, `Constrained`, or `Not recommended` memory-policy classes for the CPU
+and each confirmed CUDA device. Each class has a four-part breakdown and policy limits.
+Missing metadata or available-memory readings remain Unknown. Qwen2 head-length defaults
+follow [decision 0012](../05-decisions/0012-qwen2-gpu-fit.md).
 
-This workflow does not run inference, make network requests, download or execute model
-code, alter runtime state, predict throughput, or provide benchmark proof. The CPU
-budget is a current RAM reading from the worker, not a test of runtime allocation.
-The file-size component is an estimate and is not an authenticity check. No GPU fit,
-attached or managed runtime configuration, or automatic recommendation is implied.
+Each placement is an additional fully resident load against currently free memory.
+Existing loaded allocations are not reclaimed or attributed to the selected file.
+A model already occupying VRAM can therefore leave insufficient space for another load.
+The view does not infer partial offload, runtime support, or throughput. The separate
+Benchmark Lab verification indicator describes a saved prior request only.
 
 ## Optional GTK widget-flow check
 
@@ -102,3 +103,9 @@ No application panic or GTK critical error occurred in the successful test.
 Meson 1.3.2 setup/build, all five checks, and a staged `/usr` installation passed.
 Its two existing `configure_file(copy:)` deprecation warnings remain. The staged
 installation did not update host desktop caches or install into the host prefix.
+
+## Follow-up, 2026-10-26
+
+Native GTK fit flows, Qwen2 8K/32K CPU/CUDA calculations, and conditional class rendering
+passed on the reference Hyprland session. See the [M0 acceptance record](m0-acceptance.md).
+Historical validation above does not describe current integration status.
