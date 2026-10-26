@@ -2,6 +2,7 @@
 //! Empty-state views for the development foundation; no fabricated telemetry.
 
 pub mod access;
+pub mod attached;
 pub mod bench_lab;
 pub mod benchmark_history;
 pub mod catalog;

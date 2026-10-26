@@ -6,6 +6,7 @@ pub mod downloader;
 pub mod huggingface;
 pub mod llamacpp;
 pub mod lmstudio;
+pub mod local_http;
 pub mod ollama;
 pub mod secrets;
 pub mod supervisor;

@@ -26,6 +26,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [llama.cpp HTTP client](03-development/llamacpp-client.md) | Loopback-only readiness, props/slots/metrics, bounded streaming chat |
 | 03 | [Developer exports](03-development/developer-exports.md) | Continue.dev, Zed, OpenCode and systemd --user text generators |
 | 03 | [M2 acceptance evidence](03-development/m2-acceptance.md) | Live run with the real llama-server, coverage and what is not claimed |
+| 03 | [Attached runtimes](03-development/attached-runtimes.md) | LM Studio and vLLM read-only discovery, limits, what is not done |
 | 03 | [Managed runtime in the interface](03-development/managed-runtime-ui.md) | Runtimes card: install, profiles, start/stop, logs, shutdown |
 | 03 | [Benchmark Lab store](03-development/benchmark-lab-store.md) | Experiment, pass and finding records, one-running rule, pruning, summaries |
 | 03 | [Benchmark Lab metrics](03-development/benchmark-lab-metrics.md) | Valid-only ITL, server-counter speeds, CPU/process/GPU load sampling |

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod application;
+mod attached;
 mod bridge;
 mod fit_state;
 mod fit_workflow;

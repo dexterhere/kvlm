@@ -40,6 +40,11 @@ pub fn supports(engine: Engine, ownership: OwnershipMode, capability: Capability
             capability,
             Probe | ListModels | LoadedModels | StartStop | StreamInference
         ),
+        // Read-only discovery of externally owned servers. They stay unsupported for streaming
+        // inference until a benchmark can tell the user that local execution is unproven.
+        (Engine::LmStudio | Engine::Vllm, OwnershipMode::Attached) => {
+            matches!(capability, Probe | ListModels | LoadedModels)
+        }
         _ => false,
     }
 }
@@ -120,5 +125,17 @@ mod tests {
             OwnershipMode::Managed,
             Capability::Probe
         ));
+        for engine in [Engine::LmStudio, Engine::Vllm] {
+            assert!(supports(
+                engine,
+                OwnershipMode::Attached,
+                Capability::ListModels
+            ));
+            assert!(!supports(
+                engine,
+                OwnershipMode::Attached,
+                Capability::StreamInference
+            ));
+        }
     }
 }

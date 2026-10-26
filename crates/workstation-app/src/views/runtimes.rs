@@ -54,6 +54,7 @@ pub struct Runtimes {
     inspection: Rc<RefCell<InspectionState>>,
     commands: tokio::sync::mpsc::Sender<CoreCommand>,
     managed: super::managed::ManagedCard,
+    layout: gtk::Box,
 }
 
 impl Runtimes {
@@ -110,6 +111,7 @@ impl Runtimes {
             inspection: Rc::new(RefCell::new(InspectionState::default())),
             commands,
             managed,
+            layout,
         };
         let state = Rc::clone(&runtimes.state);
         let spinner = runtimes.spinner.clone();
@@ -123,6 +125,11 @@ impl Runtimes {
             request(&state, button, &spinner, &status, &commands);
         });
         runtimes
+    }
+
+    /// Add a section below the managed runtime card.
+    pub fn append(&self, section: &impl IsA<gtk::Widget>) {
+        self.layout.append(section);
     }
 
     /// Reads the saved managed-runtime state (local files only) and starts supervision.
