@@ -194,8 +194,13 @@ pub struct Supervisor {
 impl Supervisor {
     /// `record_path` is the private file kept while a child runs (see `record`). Fails with
     /// `Busy` when another instance holds it. Call `reclaim_orphan` before the first start.
-    pub fn spawn(record_path: PathBuf) -> Result<Self, SupervisorError> {
-        let lock = record::ProcessLock::acquire(&record_path).ok_or(SupervisorError::Busy)?;
+    pub async fn spawn(record_path: PathBuf) -> Result<Self, SupervisorError> {
+        let for_lock = record_path.clone();
+        let lock = tokio::task::spawn_blocking(move || record::ProcessLock::acquire(&for_lock))
+            .await
+            .ok()
+            .flatten()
+            .ok_or(SupervisorError::Busy)?;
         let lock = std::sync::Arc::new(lock);
         let (tx, rx) = mpsc::channel(8);
         let (status_tx, status) = watch::channel(Status::stopped());
@@ -399,6 +404,14 @@ async fn actor(
             command = rx.recv() => match command {
                 None => {
                     stop_run(&mut state).await;
+                    // A child that could not be reaped stays supervised for a while longer.
+                    for _ in 0..30 {
+                        if state.run.is_none() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        stop_run(&mut state).await;
+                    }
                     break;
                 }
                 Some(Cmd::Start(spec, reply)) => {
@@ -573,9 +586,15 @@ async fn start(state: &mut State, spec: StartSpec, explicit: bool) -> Result<(),
         );
         let saved = tokio::task::spawn_blocking(move || record::write(&path, &record)).await;
         if !matches!(saved, Ok(Ok(()))) {
-            teardown(&mut run).await;
-            finish(&mut run, &state.record_path).await;
-            return refuse(state, FailureKind::SpawnFailed);
+            if teardown(&mut run).await {
+                finish(&mut run, &state.record_path).await;
+                return refuse(state, FailureKind::SpawnFailed);
+            }
+            // Cannot reap it: keep owning it (and its record, if any) rather than lose it.
+            run.stuck = true;
+            state.run = Some(run);
+            state.fail(FailureKind::StuckOnStop, None);
+            return Err(SupervisorError::Refused(FailureKind::StuckOnStop));
         }
     }
     state.run = Some(run);
@@ -674,8 +693,8 @@ async fn on_probe(state: &mut State, alias: String, health: Health) {
     let Some(run) = state.run.as_mut() else {
         return;
     };
-    if run.alias != alias {
-        return; // a probe from an earlier launch
+    if run.alias != alias || run.stuck {
+        return; // a probe from an earlier launch, or for a child already being stopped
     }
     match health {
         Health::Ready => {
@@ -749,10 +768,8 @@ async fn stop_run(state: &mut State) {
     }
     state.publish(RuntimeLifecycleState::Stopping, None);
     let mut run = state.run.take().expect("checked above");
-    if run.probe.is_some() {
-        if let Some(probe) = run.probe.take() {
-            probe.abort();
-        }
+    if let Some(probe) = run.probe.take() {
+        probe.abort();
     }
     if teardown(&mut run).await {
         finish(&mut run, &state.record_path).await;

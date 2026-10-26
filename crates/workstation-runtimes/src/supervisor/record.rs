@@ -55,9 +55,14 @@ impl ProcessLock {
             .truncate(false)
             .write(true)
             .mode(0o600)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+            )
             .open(record_path.with_extension("lock"))
             .ok()?;
+        if !file.metadata().ok()?.is_file() {
+            return None;
+        }
         // A concurrent fork in this process shares the open file description until its exec
         // closes it, so a few short retries ride that out; a real holder still reads as busy.
         for attempt in 0..5 {
@@ -144,9 +149,14 @@ pub async fn reclaim(
         remove(path);
         return Reclaim::Nothing;
     };
-    let Ok(pidfd) = pidfd_open(pid, PidfdFlags::empty()) else {
-        remove(path); // no such process
-        return Reclaim::Nothing;
+    let pidfd = match pidfd_open(pid, PidfdFlags::empty()) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::SRCH) => {
+            remove(path); // only ESRCH proves the process is gone
+            return Reclaim::Nothing;
+        }
+        // Out of descriptors or memory says nothing about the process: keep the record.
+        Err(_) => return Reclaim::Skipped("the process could not be pinned"),
     };
     // Checked after the pidfd exists: whatever these read is the process the pidfd names.
     let Some((state, ticks)) = proc_stat(record.pid) else {
