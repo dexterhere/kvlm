@@ -128,6 +128,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     overview.request();
     benchmarks.request_history();
     catalog.load_saved();
+    catalog.load_downloads();
     let closing_events = events.clone();
     window.connect_close_request(move |_| {
         closing_events.close();

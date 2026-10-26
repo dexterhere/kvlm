@@ -2,6 +2,7 @@
 //! Read-only Hugging Face model explorer: repositories, then their GGUF files.
 //! Nothing here touches the network until the user searches or expands a row.
 
+use super::downloads::Downloads;
 use crate::bridge::{ArtifactDetails, CoreCommand, UiEvent};
 use adw::prelude::*;
 use std::{
@@ -66,6 +67,7 @@ pub struct Explorer {
     status: gtk::Label,
     list: gtk::ListBox,
     more: gtk::Button,
+    downloads: Downloads,
     state: Rc<RefCell<State>>,
     commands: mpsc::Sender<CoreCommand>,
 }
@@ -92,9 +94,11 @@ impl Explorer {
             .build();
         let more = gtk::Button::with_label("Load more");
         more.set_visible(false);
+        let downloads = Downloads::new(commands.clone());
         let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
         for child in [
             bar.upcast_ref::<gtk::Widget>(),
+            downloads.widget.upcast_ref(),
             status.upcast_ref(),
             list.upcast_ref(),
             more.upcast_ref(),
@@ -119,6 +123,7 @@ impl Explorer {
             status,
             list,
             more,
+            downloads,
             state: Rc::new(RefCell::new(State::default())),
             commands,
         };
@@ -160,8 +165,20 @@ impl Explorer {
         });
     }
 
+    /// Startup read of saved downloads. Local only.
+    pub fn load_downloads(&self) {
+        self.downloads.load();
+    }
+
     pub fn receive(&self, event: &UiEvent) {
+        self.downloads.receive(event);
         match event {
+            UiEvent::DownloadFinished { outcome }
+                if outcome.end == workstation_runtimes::downloader::DownloadEnd::Completed =>
+            {
+                // The new file is now a verified local copy of what is listed.
+                self.handle().scan_local();
+            }
             UiEvent::CatalogLoaded { id, result } => {
                 if self.state.borrow().search != *id {
                     return;
@@ -410,6 +427,28 @@ impl Explorer {
                                 this.inspect(&artifact_id);
                             }
                         });
+                        let download = gtk::Button::builder()
+                            .label("Download")
+                            .valign(gtk::Align::Center)
+                            .build();
+                        download.update_property(&[gtk::accessible::Property::Label(&format!(
+                            "Download {}",
+                            clean(&artifact.filename)
+                        ))]);
+                        if wanted_of(artifact).is_some() {
+                            download.set_tooltip_text(Some(&format!(
+                                "Downloads {} and checks its SHA-256 before keeping it.",
+                                artifact.size_bytes.map_or(String::new(), size_text)
+                            )));
+                            let (this, artifact) = (self.handle(), artifact.clone());
+                            download.connect_clicked(move |_| this.download(artifact.clone()));
+                        } else {
+                            download.set_sensitive(false);
+                            download.set_tooltip_text(Some(
+                                "Needs a published size and checksum, and a single file.",
+                            ));
+                        }
+                        row.add_suffix(&download);
                         rows.push(row.clone().upcast());
                         new_artifacts.push(ArtifactRow {
                             base_subtitle: row.subtitle().to_string(),
@@ -529,6 +568,17 @@ impl Handle {
     }
 
     /// Local-only check of every loaded file that has a published size and checksum.
+    fn download(&self, artifact: ModelArtifact) {
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
+        let id = next_id(&state);
+        self.send(CoreCommand::StartDownload {
+            id,
+            artifact: Box::new(artifact),
+        });
+    }
+
     fn scan_local(&self) {
         let Some(state) = self.state.upgrade() else {
             return;

@@ -151,8 +151,8 @@ pub enum UiEvent {
     },
     /// Latest progress only; older readings are dropped, never queued.
     DownloadProgress(Progress),
+    /// Only one download runs, so the end of one needs no request id.
     DownloadFinished {
-        id: u64,
         outcome: DownloadOutcome,
     },
     DownloadsLoaded {
@@ -364,9 +364,8 @@ fn scan_failed(id: u64) -> UiEvent {
     }
 }
 
-fn download_failed(id: u64) -> UiEvent {
+fn download_failed(_id: u64) -> UiEvent {
     UiEvent::DownloadFinished {
-        id,
         outcome: failed_outcome(
             "internal",
             "The download worker stopped unexpectedly. Resume to retry.".into(),
@@ -637,11 +636,11 @@ where
                         download_jobs.spawn(guarded(id, download_failed, async move {
                             let report = Box::new(move |p| { let _ = progress.send(p); });
                             let outcome = catalog.download(*artifact, stop_rx, report).await;
-                            UiEvent::DownloadFinished { id, outcome }
+                            UiEvent::DownloadFinished { outcome }
                         }));
                     } else {
                         let outcome = failed_outcome("busy", "Another download is still active. Pause or cancel it first.".into());
-                        if events.send(UiEvent::DownloadFinished { id, outcome }).await.is_err() { break; }
+                        if events.send(UiEvent::DownloadFinished { outcome }).await.is_err() { break; }
                     }
                 }
                 CoreCommand::PauseDownload | CoreCommand::CancelDownload => {
@@ -1336,10 +1335,10 @@ mod tests {
         );
         commands.send(start(2, "ok.gguf")).await.unwrap();
         assert!(matches!(receive(&events).await,
-            UiEvent::DownloadFinished { id: 2, outcome } if matches!(outcome.end, DownloadEnd::Failed { code: "busy", .. })));
+            UiEvent::DownloadFinished { outcome } if matches!(outcome.end, DownloadEnd::Failed { code: "busy", .. })));
         commands.send(CoreCommand::PauseDownload).await.unwrap();
         assert!(matches!(receive(&events).await,
-            UiEvent::DownloadFinished { id: 1, outcome } if matches!(outcome.end, DownloadEnd::Paused { .. })));
+            UiEvent::DownloadFinished { outcome } if matches!(outcome.end, DownloadEnd::Paused { .. })));
         commands.send(start(3, "slow.gguf")).await.unwrap();
         assert!(matches!(
             receive(&events).await,
@@ -1347,13 +1346,13 @@ mod tests {
         ));
         commands.send(CoreCommand::CancelDownload).await.unwrap();
         assert!(matches!(receive(&events).await,
-            UiEvent::DownloadFinished { id: 3, outcome } if outcome.end == DownloadEnd::Cancelled));
+            UiEvent::DownloadFinished { outcome } if outcome.end == DownloadEnd::Cancelled));
         commands.send(start(4, "panic.gguf")).await.unwrap();
         assert!(matches!(receive(&events).await,
-            UiEvent::DownloadFinished { id: 4, outcome } if matches!(outcome.end, DownloadEnd::Failed { code: "internal", .. })));
+            UiEvent::DownloadFinished { outcome } if matches!(outcome.end, DownloadEnd::Failed { code: "internal", .. })));
         commands.send(start(5, "ok.gguf")).await.unwrap();
         assert!(matches!(receive(&events).await,
-            UiEvent::DownloadFinished { id: 5, outcome } if outcome.end == DownloadEnd::Completed));
+            UiEvent::DownloadFinished { outcome } if outcome.end == DownloadEnd::Completed));
         for (id, download_id) in [(6, 2), (7, 13)] {
             commands
                 .send(CoreCommand::DiscardDownload { id, download_id })
