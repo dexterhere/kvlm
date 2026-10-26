@@ -16,6 +16,11 @@ use workstation_runtimes::ollama::{
 
 #[derive(Debug)]
 pub enum CoreCommand {
+    CheckBenchmarkVerification {
+        id: u64,
+        model_name: String,
+        model_digest: String,
+    },
     LoadBenchmarkHistory {
         id: u64,
     },
@@ -35,6 +40,10 @@ pub enum CoreCommand {
 
 #[derive(Debug)]
 pub enum UiEvent {
+    BenchmarkVerificationChecked {
+        id: u64,
+        result: Result<Option<i64>, String>,
+    },
     BenchmarkHistoryLoaded {
         id: u64,
         result: Result<Vec<HistoryEntry>, String>,
@@ -151,6 +160,13 @@ where
                 command = command_rx.recv() => match command { Some(command) => command, None => break },
             }};
             match command {
+                CoreCommand::CheckBenchmarkVerification { id, model_name, model_digest } => {
+                    let result = tokio::select! {
+                        _ = events.closed() => break,
+                        result = check_verification(model_name, model_digest) => result,
+                    };
+                    if events.send(UiEvent::BenchmarkVerificationChecked { id, result }).await.is_err() { break; }
+                }
                 CoreCommand::LoadBenchmarkHistory { id } => {
                     let load = Arc::clone(&load_history);
                     let result = tokio::select! {
@@ -224,6 +240,42 @@ where
         }
     });
     (commands, event_rx)
+}
+
+async fn check_verification(
+    model_name: String,
+    model_digest: String,
+) -> Result<Option<i64>, String> {
+    use workstation_core::{
+        db::{self, HistoryStore},
+        models::artifact::canonical_manifest_digest,
+    };
+    let digest = canonical_manifest_digest(&model_digest).ok_or("Invalid model digest.")?;
+    let discovery = OllamaAdapter::new()?.discover().await?;
+    let models = discovery.installed?;
+    let mut selected = models.iter().filter(|model| model.name == model_name);
+    let model = selected
+        .next()
+        .ok_or("Model is no longer installed. Refresh Runtimes.")?;
+    if selected.next().is_some()
+        || model.cloud_routed()
+        || model.name.to_ascii_lowercase().ends_with(":cloud")
+        || model.name.to_ascii_lowercase().ends_with("-cloud")
+        || model
+            .digest
+            .as_deref()
+            .and_then(canonical_manifest_digest)
+            .as_ref()
+            != Some(&digest)
+    {
+        return Err("Model identity or routing changed. Refresh Runtimes.".into());
+    }
+    tokio::task::spawn_blocking(move || {
+        let hardware = HardwareProfile::detect();
+        HistoryStore::open(&db::default_database_path()?)?.verified_run(&digest, &hardware)
+    })
+    .await
+    .map_err(|_| "Verification worker failed. Retry the check.")?
 }
 
 #[cfg(test)]

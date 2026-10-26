@@ -55,12 +55,13 @@ Architecture-specific fields are reported only when their declared GGUF key is a
 value that fits in `u32`, are not coerced and cause inspection to fail for these
 recognized keys, even for a non-LLaMA architecture. The reader does not fill in
 architecture defaults, derive fields from tensor dimensions, or guess from file
-or tensor names. Missing optional LLaMA fields remain `None`; invalid values fail
+or tensor names. Missing optional architecture fields remain `None`; invalid values fail
 inspection.
 `context_length` is the declared training context, not a requested runtime context.
-The `llama` metadata object is present only when `general.architecture` is exactly
-`llama`; other architecture strings remain raw declared metadata and are not
-promoted to LLaMA fields.
+The `attention` metadata object is present only for exact `llama` or `qwen2`
+architecture identifiers and contains only the matching namespace. Other architectures
+remain raw identifiers. The fit adapter may apply the narrowly supported Qwen2
+head-length default; the inspector itself preserves missing declarations.
 
 Warnings identify metadata categories that need more analysis. Their absence does
 not prove that a model is dense, full-attention, causal, non-hybrid, or runtime
@@ -114,3 +115,9 @@ Clippy with warnings denied, and the repository validator. Four opt-in graphical
 tests were skipped. No packaging files changed; local Meson and live GUI/inference
 checks were not repeated. Independent parser review found no actionable issues.
 This is inspection evidence, not M0 completion.
+
+### Qwen2 fit follow-up
+
+[Decision 0012](../05-decisions/0012-qwen2-gpu-fit.md) supersedes the earlier
+Qwen2 fit limitation. Architecture-scoped declarations now feed conditional CPU and
+CUDA estimates. See the [real 8K/32K evidence](m0-acceptance.md#real-fit-workflow).

@@ -6,6 +6,7 @@ use adw::prelude::*;
 use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 use tokio::sync::{mpsc, watch};
 use workstation_bench::runner::{BenchmarkOutcome, QuickBenchmarkReport};
+use workstation_core::models::artifact::canonical_manifest_digest;
 use workstation_runtimes::ollama::{GenerationProgress, InstalledModel};
 
 const MAX_VISIBLE_MODELS: usize = 100;
@@ -20,6 +21,8 @@ struct ActiveRun {
 #[derive(Default)]
 struct RunState {
     generation: u64,
+    verification_generation: u64,
+    verification_pending: Option<u64>,
     inventory_ready: bool,
     models: Vec<InstalledModel>,
     selected: Option<InstalledModel>,
@@ -29,6 +32,8 @@ struct RunState {
 pub struct Benchmarks {
     pub widget: gtk::ScrolledWindow,
     model: adw::ComboRow,
+    verification_status: gtk::Label,
+    check_verification: gtk::Button,
     run: gtk::Button,
     cancel: gtk::Button,
     status: gtk::Label,
@@ -46,6 +51,20 @@ impl Benchmarks {
         run.set_sensitive(false);
         let cancel = gtk::Button::with_label("Cancel");
         cancel.set_sensitive(false);
+        let verification_status = gtk::Label::builder()
+            .label("No saved verification checked.")
+            .xalign(0.0)
+            .wrap(true)
+            .selectable(true)
+            .build();
+        let verification_help = gtk::Label::builder()
+            .label("A successful past request must match this Ollama manifest and hardware profile. This does not verify current context, placement, or static fit.")
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .build();
+        let check_verification = gtk::Button::with_label("Check verification");
+        check_verification.set_sensitive(false);
         let status = gtk::Label::builder()
             .label("Refresh Runtimes to load installed models.")
             .xalign(0.0)
@@ -90,6 +109,14 @@ impl Benchmarks {
         let selection = adw::PreferencesGroup::new();
         selection.add(&model);
         content.append(&selection);
+        let verification = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(6)
+            .build();
+        verification.append(&verification_status);
+        verification.append(&verification_help);
+        verification.append(&check_verification);
+        content.append(&verification);
         content.append(&workload);
         content.append(&controls);
         content.append(&status);
@@ -107,6 +134,8 @@ impl Benchmarks {
         let panel = Self {
             widget,
             model,
+            verification_status,
+            check_verification,
             run,
             cancel,
             status,
@@ -125,6 +154,9 @@ impl Benchmarks {
         let status = self.status.clone();
         let results = self.results.clone();
         let cancel = self.cancel.clone();
+        let commands = self.commands.clone();
+        let verification_status = self.verification_status.clone();
+        let check_verification = self.check_verification.clone();
         self.model.connect_selected_notify(move |row| {
             let Some(state) = state.upgrade() else { return };
             let Some(run) = run.upgrade() else { return };
@@ -135,7 +167,16 @@ impl Benchmarks {
                     .and_then(|index| state.models.get(index as usize))
                     .cloned()
             };
+            let identity_changed = {
+                let state = state.borrow();
+                !same_identity(state.selected.as_ref(), selected.as_ref())
+            };
             select_model(&state, selected, &status, &results, &run, &cancel);
+            if !identity_changed {
+                return;
+            }
+            verification_status.set_text("Checking saved verification for selected model…");
+            request_verification(&state, &commands, &verification_status, &check_verification);
         });
 
         let state = Rc::downgrade(&self.state);
@@ -154,6 +195,16 @@ impl Benchmarks {
         self.cancel.connect_clicked(move |button| {
             if let Some(state) = state.upgrade() {
                 cancel_run(&state, &status, button);
+            }
+        });
+
+        let state = Rc::downgrade(&self.state);
+        let commands = self.commands.clone();
+        let status = self.verification_status.clone();
+        let button = self.check_verification.clone();
+        self.check_verification.connect_clicked(move |_| {
+            if let Some(state) = state.upgrade() {
+                request_verification(&state, &commands, &status, &button);
             }
         });
     }
@@ -194,6 +245,37 @@ impl Benchmarks {
                     &self.cancel,
                 );
             }
+            UiEvent::BenchmarkHistorySaved { result: Ok(_), .. } => {
+                restart_verification(
+                    &self.state,
+                    &self.commands,
+                    &self.verification_status,
+                    &self.check_verification,
+                );
+            }
+            UiEvent::HardwareDetected(_) => {
+                restart_verification(
+                    &self.state,
+                    &self.commands,
+                    &self.verification_status,
+                    &self.check_verification,
+                );
+            }
+            UiEvent::HardwareFailed(_) => {
+                invalidate_verification(&self.state);
+                self.verification_status
+                    .set_text("Hardware refresh failed. No verification badge is shown.");
+                sync_verification_button(&self.state.borrow(), &self.check_verification);
+            }
+            UiEvent::BenchmarkVerificationChecked { id, result } => {
+                receive_verification(
+                    &self.state,
+                    *id,
+                    result,
+                    &self.verification_status,
+                    &self.check_verification,
+                );
+            }
             _ => {}
         }
     }
@@ -218,6 +300,7 @@ impl Benchmarks {
         let choices = {
             let mut state = self.state.borrow_mut();
             invalidate_run(&mut state);
+            invalidate_verification_state(&mut state);
             state.inventory_ready = true;
             state.models = models;
             state.selected = None;
@@ -248,6 +331,9 @@ impl Benchmarks {
             ));
         }
         self.status.set_text(&message);
+        self.verification_status
+            .set_text("Choose a current installed model to check saved verification.");
+        sync_verification_button(&self.state.borrow(), &self.check_verification);
         sync_buttons(&self.state.borrow(), &self.run, &self.cancel);
     }
 }
@@ -304,17 +390,18 @@ fn select_model(
     run: &gtk::Button,
     cancel: &gtk::Button,
 ) {
-    let mut state = state.borrow_mut();
-    if same_identity(state.selected.as_ref(), selected.as_ref()) {
+    let mut run_state = state.borrow_mut();
+    if same_identity(run_state.selected.as_ref(), selected.as_ref()) {
         return;
     }
-    invalidate_run(&mut state);
-    state.selected = selected;
+    invalidate_run(&mut run_state);
+    invalidate_verification_state(&mut run_state);
+    run_state.selected = selected;
     clear_results(results);
-    let message = if state.in_flight.is_some() {
+    let message = if run_state.in_flight.is_some() {
         "Selection changed. Waiting for the cancelled run to finish.".into()
     } else {
-        match state.selected.as_ref() {
+        match run_state.selected.as_ref() {
             None => "Choose an installed model.".to_string(),
             Some(model) if !has_digest(model) => {
                 "This model has no digest in the current inventory and cannot be benchmarked."
@@ -324,7 +411,7 @@ fn select_model(
         }
     };
     status.set_text(&message);
-    sync_buttons(&state, run, cancel);
+    sync_buttons(&run_state, run, cancel);
 }
 
 fn same_identity(left: Option<&InstalledModel>, right: Option<&InstalledModel>) -> bool {
@@ -340,6 +427,111 @@ fn has_digest(model: &InstalledModel) -> bool {
         .digest
         .as_deref()
         .is_some_and(|digest| !digest.trim().is_empty())
+}
+
+fn invalidate_verification_state(state: &mut RunState) {
+    state.verification_generation = state.verification_generation.wrapping_add(1);
+    state.verification_pending = None;
+}
+
+fn invalidate_verification(state: &RefCell<RunState>) {
+    invalidate_verification_state(&mut state.borrow_mut());
+}
+
+fn restart_verification(
+    state: &RefCell<RunState>,
+    commands: &mpsc::Sender<CoreCommand>,
+    status: &gtk::Label,
+    button: &gtk::Button,
+) {
+    invalidate_verification(state);
+    status.set_text("Checking saved verification for selected model…");
+    request_verification(state, commands, status, button);
+}
+
+fn request_verification(
+    state: &RefCell<RunState>,
+    commands: &mpsc::Sender<CoreCommand>,
+    status: &gtk::Label,
+    button: &gtk::Button,
+) {
+    let mut state = state.borrow_mut();
+    let Some(model) = state
+        .selected
+        .as_ref()
+        .filter(|model| !model.cloud_routed())
+    else {
+        status.set_text("Choose a current local installed model to check verification.");
+        sync_verification_button(&state, button);
+        return;
+    };
+    let Some(model_digest) = model.digest.as_deref().and_then(canonical_manifest_digest) else {
+        status.set_text("This model has no valid SHA-256 manifest digest to verify.");
+        sync_verification_button(&state, button);
+        return;
+    };
+    let model_name = model.name.clone();
+    if state.verification_pending.is_some() {
+        return;
+    }
+    state.verification_generation = state.verification_generation.wrapping_add(1);
+    let id = state.verification_generation;
+    match commands.try_send(CoreCommand::CheckBenchmarkVerification {
+        id,
+        model_name,
+        model_digest,
+    }) {
+        Ok(()) => {
+            state.verification_pending = Some(id);
+            status.set_text("Checking saved benchmark and current hardware…");
+        }
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            status.set_text("Worker busy. Select Check verification to retry.");
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            status.set_text("Worker unavailable. Reopen the application to retry verification.");
+        }
+    }
+    sync_verification_button(&state, button);
+}
+
+fn receive_verification(
+    state: &RefCell<RunState>,
+    id: u64,
+    result: &Result<Option<i64>, String>,
+    status: &gtk::Label,
+    button: &gtk::Button,
+) {
+    let mut state = state.borrow_mut();
+    if state.verification_pending != Some(id) {
+        return;
+    }
+    state.verification_pending = None;
+    match result {
+        Ok(Some(run_id)) => status.set_text(&format!(
+            "Benchmark Verified · successful prior run #{run_id} matches this manifest and hardware."
+        )),
+        Ok(None) => status.set_text("No matching completed benchmark for this manifest and hardware."),
+        Err(message) => status.set_text(&display_text(&format!(
+            "Verification unavailable: {message}. Select Check verification to retry."
+        ))),
+    }
+    sync_verification_button(&state, button);
+}
+
+fn sync_verification_button(state: &RunState, button: &gtk::Button) {
+    button.set_sensitive(
+        state.inventory_ready
+            && state.verification_pending.is_none()
+            && state.selected.as_ref().is_some_and(|model| {
+                !model.cloud_routed()
+                    && model
+                        .digest
+                        .as_deref()
+                        .and_then(canonical_manifest_digest)
+                        .is_some()
+            }),
+    );
 }
 
 fn invalidate_run(state: &mut RunState) {

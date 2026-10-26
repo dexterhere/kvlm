@@ -10,6 +10,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Getting started](03-development/getting-started.md) | Dependencies, build, run, validation, installation |
 | 03 | [Repository layout](03-development/repository-layout.md) | Where code, fixtures, metadata, and documentation belong |
 | 03 | [Git workflow](03-development/git-workflow.md) | Small commits, authorship, review, publication |
+| 03 | [M0 acceptance](03-development/m0-acceptance.md) | Real Qwen CPU/CUDA estimates, native benchmark, restart badge, accepted scope, and follow-ups |
 | 03 | [Foundation validation](03-development/validation.md) | Checks performed and practical limits |
 | 03 | [Hardware validation](03-development/hardware-validation.md) | Hardware feature checks and live reference evidence |
 | 03 | [Ollama discovery validation](03-development/ollama-validation.md) | Read-only attached-runtime discovery and validation limits |
@@ -20,7 +21,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
 | 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection, merged-file split markers, validation evidence, and limits |
 | 03 | [GGUF fit scenarios](03-development/gguf-fit.md) | Local declarations with explicit settings, assumptions, and unknown compatibility |
-| 03 | [Desktop CPU fit workflow](03-development/desktop-cpu-fit.md) | File selection, explicit inputs, fresh RAM, asynchronous estimates, and validation limits |
+| 03 | [Desktop CPU/CUDA fit workflow](03-development/desktop-cpu-fit.md) | File selection, explicit inputs, fresh RAM, asynchronous estimates, and validation limits |
 | 04 | [Milestones](04-roadmap/milestones.md) | Current state and M0–M4 delivery order |
 | 04 | [Next feature: hardware discovery](04-roadmap/next-feature-hardware-discovery.md) | Implementation sequence, scope, and acceptance checks for M0 Step 2 |
 | 05 | [Decisions](05-decisions/README.md) | How to record architecture decisions |
@@ -35,6 +36,8 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 05 | [Quick Benchmark decision](05-decisions/0009-quick-benchmark.md) | Digest-pinned local execution and honest single-request measurements |
 | 05 | [Benchmark history decision](05-decisions/0010-benchmark-history.md) | Versioned local SQLite storage and immutable run records |
 | 05 | [Memory sampling decision](05-decisions/0011-benchmark-memory-sampling.md) | Observed memory peaks and additive history compatibility |
+| 05 | [Qwen2 and GPU fit](05-decisions/0012-qwen2-gpu-fit.md) | Scoped metadata and conditional CPU/CUDA memory classes |
+| 05 | [Benchmark verification](05-decisions/0013-benchmark-verification.md) | Exact manifest/hardware identity and persistent verification |
 | 05 | [Open questions](05-decisions/open-questions.md) | Specification gaps to resolve before affected implementation |
 
 Also read [contributing](../CONTRIBUTING.md), [security](../SECURITY.md),

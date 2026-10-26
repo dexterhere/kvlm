@@ -62,3 +62,15 @@ The repository validator, 4 Python tests, and all 5 Meson checks passed. Meson 1
 build and a staged installation passed; the two existing `configure_file(copy:)`
 deprecation warnings remain. No real-model, GPU, runtime, or GUI integration was
 checked. No inference or model downloads occurred. M0 remains incomplete.
+
+## Qwen2 and GPU follow-up, 2026-10-26
+
+The adapter now accepts exact `llama` and `qwen2` identifiers. Qwen2 missing K/V
+lengths use the GGUF embedding/head default only when the ratio is integral; explicit
+lengths retain precedence. Namespace isolation, one sequence, no layout warnings and
+an explicit attention assumption remain required. Runtime compatibility stays Unknown.
+The UI separately displays conditional memory-policy classes for fresh CPU/CUDA
+budgets, without transferring benchmark evidence to a selected GGUF. See
+[decision 0012](../05-decisions/0012-qwen2-gpu-fit.md) and
+[reference acceptance](m0-acceptance.md). Historical limitations above describe the
+initial slice, not the current Qwen2 path.

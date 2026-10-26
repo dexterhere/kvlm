@@ -6,13 +6,18 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 ### Added
 
+- Qwen2 architecture metadata and conditional CPU/CUDA memory-policy classes with
+  fresh budgets, four-part breakdowns, and explicit layout assumptions.
+- Exact Ollama manifest/hardware benchmark verification restored after restart,
+  versioned hardware fingerprints, and real Qwen GTK/CUDA acceptance checks.
+- Immutable SQLite benchmark history and sampled system/device memory peaks.
 - Explicit single-model Quick Benchmark with affirmative local-only checks, immutable
   manifest digest requests, bounded streaming, independent client/server metrics,
-  cancellation, and partial failure outcomes. Results remain session-only.
+  cancellation, and partial failure outcomes.
 
 - Installed Ollama model selection, read-only metadata inspection, and fresh loaded
   context/allocation with explicit unknowns and stale-reply protection.
-- Attached Ollama discovery, carried from its unmerged prerequisite PR.
+- Attached Ollama discovery.
 
 - Local GGUF CPU scenario estimates in Overview, with editable settings, fresh RAM,
   asynchronous inspection, explicit assumptions, and stale-result protection.
@@ -34,5 +39,6 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 - Moved the original master specification into `docs/01-product/` without altering its contents.
 
-Verified runtime-fit integration, model catalog/downloads, SQLite persistence,
-configuration exports, managed runtime control, resource sampling, and restart verification remain planned.
+Verified runtime settings, model catalog/downloads, configuration exports, managed
+runtime control, process attribution, and controlled benchmark comparisons remain planned.
+M0 acceptance for the measured GTK/CUDA baseline is recorded in [the reference record](docs/03-development/m0-acceptance.md).
