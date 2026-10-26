@@ -352,3 +352,23 @@ mechanical work with a bounded brief (fixtures, boilerplate, doc tables, formatt
 fixes). Delegate output is a proposal until the diff and tests are read. Each phase
 ends with fmt, clippy with warnings denied, the workspace tests, the repository
 validator, and a green CI run before merge.
+
+## As built
+
+Differences between this plan and the code that shipped:
+
+- Resume uses `StartDownload` with the saved artifact; there is no separate `ResumeDownload`.
+  `PauseDownload` and `CancelDownload` both keep the partial file. `DiscardDownload` deletes it.
+- One `TokenDone` event carries the outcome of save, load, clear and check
+  (`Saved`, `Loaded { found }`, `Cleared`, `Valid { name }`); token actions run on their own
+  single-flight task.
+- The keyring uses only the encrypted Secret Service transport. Removing a token also pauses a
+  running download.
+- Header inspection and downloads share one HTTP client per application; the token slot is
+  shared between them so a loaded token applies to both.
+- The live acceptance steps are an example, `crates/workstation-runtimes/examples/m1_acceptance.rs`,
+  not a test. Results are in the [M1 acceptance evidence](../../03-development/m1-acceptance.md).
+
+See [ADR 0014](../../05-decisions/0014-huggingface-catalog.md),
+[0015](../../05-decisions/0015-resumable-downloads.md) and
+[0016](../../05-decisions/0016-huggingface-token.md) for the decisions behind them.

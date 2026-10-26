@@ -31,8 +31,10 @@ from [PR #14](https://github.com/dexterhere/kvlm/pull/14). No prerequisite or ne
 merged automatically. Continue feature PR review through `develop → staging → main`.
 
 M0 milestone acceptance does not merge these PRs or bypass required CI and promotion.
-Next feature work belongs to M1: live model catalog, normalized model/artifact records,
-then downloads and deduplication. GNOME-session validation and accessibility remain
+M1 (live model catalog, normalized artifacts, local deduplication, resumable downloads,
+keyring token) is implemented on `develop`; see the
+[M1 acceptance evidence](../03-development/m1-acceptance.md) for what was run and what is pending.
+Next feature work belongs to M2. GNOME-session validation and accessibility remain
 tracked follow-ups. Process attribution, GPU utilization, controlled cold/warm
 comparisons, and additional hardware matrices remain later milestone work. Do not
 equate static memory policy, a saved successful request, and verified runtime settings.
@@ -42,7 +44,7 @@ equate static memory policy, a saved successful request, and verified runtime se
 | Milestone | Outcome | Status |
 | --- | --- | --- |
 | M0 | Hardware → attached Ollama → static fit → quick benchmark → persisted verification | Complete for accepted GTK/CUDA reference baseline; merged to `main` 2026-10-26 |
-| M1 | Live model catalog, normalized artifacts, resumable downloads, deduplication, Secret Service | Planned |
+| M1 | Live model catalog, normalized artifacts, resumable downloads, deduplication, Secret Service | Implemented on `develop`; acceptance pending the token restart check and sign-off ([evidence](../03-development/m1-acceptance.md)) |
 | M2 | Managed portable llama.cpp, lifecycle/logs, ownership guards, developer exports | Planned |
 | M3 | Controlled A/B benchmarks, cold/warm separation, sampling, diagnostics | Planned |
 | M4 | LM Studio/vLLM, NVIDIA/AMD APU/CPU validation, GNOME polish, public beta packaging | Planned |

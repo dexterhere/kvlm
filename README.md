@@ -65,11 +65,14 @@ laptop; see the [M0 acceptance record](docs/03-development/m0-acceptance.md) for
 measurements and limits. The measured native GTK/CUDA results on Hyprland were accepted
 on 2026-10-26. GNOME-session validation remains a follow-up and is not claimed as tested.
 
-**Next, M1:** a Hugging Face model explorer (Family → Release → Artifact), artifact
-details with fit estimates, detection of files you already have in Ollama or the Hugging
-Face cache, resumable verified downloads, and keyring-stored tokens for gated models. See
-the [M1 plan](docs/04-roadmap/m1/Planned.md). Managed runtimes, controlled benchmark
-comparisons, and more hardware matrices come in M2 to M4; the
+**M1 is implemented on `develop` and awaiting sign-off.** The Models page searches Hugging Face
+GGUF repositories, shows a file's header and a conditional fit, notes files you already have
+in Ollama, the Hugging Face cache or the application's store, downloads with pause, resume
+and checksum verification, and keeps a gated-model token in your desktop keyring. A live run
+on the reference machine is recorded in the
+[M1 acceptance evidence](docs/03-development/m1-acceptance.md); the stored-token restart
+check is still pending. See the [M1 plan](docs/04-roadmap/m1/Planned.md). Managed runtimes,
+controlled benchmark comparisons, and more hardware matrices come in M2 to M4; the
 [roadmap](docs/04-roadmap/milestones.md) tracks them.
 
 This is an independent community project; it is not an official GNOME application or a
