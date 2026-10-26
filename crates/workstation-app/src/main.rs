@@ -4,6 +4,7 @@ mod application;
 mod bridge;
 mod fit_state;
 mod fit_workflow;
+mod lab;
 mod managed;
 mod views;
 mod window;

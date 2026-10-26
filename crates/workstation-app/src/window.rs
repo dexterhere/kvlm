@@ -4,8 +4,11 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use workstation_core::APP_NAME;
 
-use crate::bridge::{self, UiEvent};
 use crate::views;
+use crate::{
+    bridge::{self, UiEvent},
+    lab,
+};
 
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
     let (commands, events) = bridge::start(runtime);
@@ -13,6 +16,8 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     let runtimes = views::runtimes::Runtimes::new(commands.clone());
     let catalog = views::catalog::Explorer::new(commands.clone());
     let benchmarks = views::bench_lab::Benchmarks::new(commands);
+    let (lab_commands, lab_events) = lab::start(runtime, lab::live());
+    let lab_page = views::lab::Lab::new(lab_commands);
     let stack = adw::ViewStack::new();
     stack.set_vexpand(true);
     stack.add_titled_with_icon(
@@ -38,6 +43,12 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         Some("benchmarks"),
         "Benchmarks",
         "applications-science-symbolic",
+    );
+    stack.add_titled_with_icon(
+        &lab_page.widget,
+        Some("lab"),
+        "Lab",
+        "applications-engineering-symbolic",
     );
 
     let switcher = adw::ViewSwitcher::builder()
@@ -96,7 +107,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         }
     });
     window.add_action(&navigate);
-    for (index, name) in ["overview", "catalog", "runtimes", "benchmarks"]
+    for (index, name) in ["overview", "catalog", "runtimes", "benchmarks", "lab"]
         .into_iter()
         .enumerate()
     {
@@ -128,16 +139,30 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     overview.request();
     runtimes.load_managed();
     benchmarks.request_history();
+    lab_page.load();
     catalog.load_saved();
     catalog.load_downloads();
     let closing_events = events.clone();
+    let closing_lab = lab_events.clone();
+    let closing_page = lab_page.clone();
     window.connect_close_request(move |_| {
+        closing_page.cancel();
         closing_events.close();
+        closing_lab.close();
         glib::Propagation::Proceed
     });
     let shutdown_events = events.clone();
+    let shutdown_lab = lab_events.clone();
+    let shutdown_page = lab_page.clone();
     app.connect_shutdown(move |_| {
+        shutdown_page.cancel();
         shutdown_events.close();
+        shutdown_lab.close();
+    });
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(event) = lab_events.recv().await {
+            lab_page.receive(&event);
+        }
     });
     let weak_status = status.downgrade();
     glib::MainContext::default().spawn_local(async move {

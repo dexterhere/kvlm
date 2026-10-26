@@ -32,6 +32,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Benchmark Lab protocol](03-development/benchmark-lab-protocol.md) | Cold/warm protocol runner, failure and cancellation rules, llama.cpp target |
 | 03 | [Benchmark Lab diagnostics](03-development/benchmark-lab-diagnostics.md) | DIAG-01..04 rules, thresholds, evidence and not-evaluated reporting |
 | 03 | [Benchmark Lab comparisons](03-development/benchmark-lab-compare.md) | A/B comparison, refusals, controlled single-variable follow-up |
+| 03 | [Benchmark Lab page](03-development/benchmark-lab-ui.md) | Check/Run/Cancel flow, restarts for cold loads and follow-ups, stored experiments |
 | 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
 | 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection, merged-file split markers, validation evidence, and limits |
 | 03 | [GGUF fit scenarios](03-development/gguf-fit.md) | Local declarations with explicit settings, assumptions, and unknown compatibility |

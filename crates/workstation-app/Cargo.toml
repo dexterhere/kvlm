@@ -19,6 +19,7 @@ gtk.workspace = true
 adw.workspace = true
 tokio.workspace = true
 async-channel.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

@@ -2608,6 +2608,7 @@ dependencies = [
  "async-channel",
  "gtk4",
  "libadwaita",
+ "sha2",
  "tokio",
  "workstation-bench",
  "workstation-core",

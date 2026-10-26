@@ -9,15 +9,18 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
-use workstation_core::experiments::Settings;
+use workstation_core::experiments::{Settings, follow_up::observed_from_arguments};
 use workstation_runtimes::llamacpp::client::{ChatRequest, LlamaClient, LlamaError, StreamEvent};
 
 /// What a cold load reports: the time to Ready and the new process group, because a restart
 /// replaces the process the load sampler has to watch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ColdLoaded {
     pub ready_in: Duration,
     pub pgid: Option<i32>,
+    /// The restarted server answers to a new alias and may listen on a new port.
+    pub alias: String,
+    pub port: u16,
 }
 
 pub type ColdFuture = Pin<Box<dyn Future<Output = Result<ColdLoaded, String>> + Send>>;
@@ -47,6 +50,18 @@ impl LlamaTarget {
     }
 }
 
+/// Arguments (without the program) of the process whose id is the group leader's.
+fn read_arguments(pgid: i32) -> Option<Vec<String>> {
+    let raw = std::fs::read(format!("/proc/{pgid}/cmdline")).ok()?;
+    let args: Vec<String> = raw
+        .split(|b| *b == 0)
+        .skip(1)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect();
+    (!args.is_empty()).then_some(args)
+}
+
 fn map(error: LlamaError) -> PassError {
     match error {
         LlamaError::Cancelled => PassError::Cancelled,
@@ -60,10 +75,18 @@ impl LabTarget for LlamaTarget {
     }
 
     async fn cold_load(&mut self, cancel: &Arc<AtomicBool>) -> Result<Duration, PassError> {
-        let loaded = (self.cold)(cancel.clone())
-            .await
-            .map_err(PassError::Failed)?;
+        let loaded = (self.cold)(cancel.clone()).await.map_err(|message| {
+            // A restart the user cancelled is a cancellation, not a failed load.
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                PassError::Cancelled
+            } else {
+                PassError::Failed(message)
+            }
+        })?;
         self.pgid = loaded.pgid;
+        self.alias = loaded.alias;
+        self.client =
+            LlamaClient::new(loaded.port).map_err(|error| PassError::Failed(error.to_string()))?;
         Ok(loaded.ready_in)
     }
 
@@ -112,14 +135,19 @@ impl LabTarget for LlamaTarget {
         Ok(output)
     }
 
+    /// What the owned process was started with, read from its own command line. llama-server
+    /// does not report cache types or flash attention, so this is the evidence that a
+    /// setting reached the process. Anything unreadable stays unknown.
     async fn observed(&mut self) -> Settings {
-        let props = self.client.props().await.ok();
-        Settings {
-            context_length: props
-                .and_then(|p| p.n_ctx)
-                .and_then(|n| u32::try_from(n).ok()),
-            ..Settings::default()
-        }
+        let Some(pgid) = self.pgid else {
+            return Settings::default();
+        };
+        let args = tokio::task::spawn_blocking(move || read_arguments(pgid))
+            .await
+            .ok()
+            .flatten();
+        args.map(|args| observed_from_arguments(&args))
+            .unwrap_or_default()
     }
 }
 
@@ -173,10 +201,43 @@ mod tests {
                     Ok(ColdLoaded {
                         ready_in: Duration::from_millis(900),
                         pgid: Some(777),
+                        alias: "newalias".into(),
+                        port: 18999,
                     })
                 })
             }),
         )
+    }
+
+    #[tokio::test]
+    async fn a_restart_the_user_cancelled_is_a_cancellation_not_a_failed_load() {
+        let mut target = LlamaTarget::new(
+            LlamaClient::new(1).unwrap(),
+            "alias".into(),
+            Some(4242),
+            Box::new(|cancel| {
+                Box::pin(async move {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    Err("The restart was cancelled.".to_string())
+                })
+            }),
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        assert!(matches!(
+            target.cold_load(&cancel).await,
+            Err(PassError::Cancelled)
+        ));
+        let mut failing = LlamaTarget::new(
+            LlamaClient::new(1).unwrap(),
+            "alias".into(),
+            None,
+            Box::new(|_| Box::pin(async { Err("boom".to_string()) })),
+        );
+        let quiet = Arc::new(AtomicBool::new(false));
+        assert!(matches!(
+            failing.cold_load(&quiet).await,
+            Err(PassError::Failed(m)) if m == "boom"
+        ));
     }
 
     #[tokio::test]
@@ -236,5 +297,28 @@ mod tests {
             .await;
         assert_eq!(cancelled.unwrap_err(), PassError::Cancelled);
         assert_eq!(target.observed().await, Settings::default());
+    }
+
+    #[test]
+    fn arguments_are_read_from_a_real_process_command_line() {
+        // The test binary may run without arguments, so read a child that has some.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep starts");
+        let pid = child.id() as i32;
+        // Until the exec completes the child still shows the test binary's own command line.
+        let mut args = None;
+        for _ in 0..100 {
+            args = read_arguments(pid);
+            if args.as_deref() == Some(&["30".to_string()][..]) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(args, Some(vec!["30".to_string()]));
+        assert!(read_arguments(i32::MAX).is_none());
     }
 }

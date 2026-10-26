@@ -6,6 +6,8 @@ pub mod bench_lab;
 pub mod benchmark_history;
 pub mod catalog;
 pub mod downloads;
+pub mod lab;
+mod lab_text;
 pub mod managed;
 mod managed_editor;
 pub mod model_fit;
