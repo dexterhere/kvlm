@@ -45,11 +45,11 @@ const OBSERVE_DEADLINE: Duration = Duration::from_secs(10);
 /// What every pass asks the runtime to generate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Workload {
-    pub id: String,
-    pub prompt: String,
-    pub prompt_sha256: String,
-    pub seed: u32,
-    pub max_tokens: u32,
+    id: String,
+    prompt: String,
+    prompt_sha256: String,
+    seed: u32,
+    max_tokens: u32,
 }
 
 impl Workload {
@@ -67,7 +67,24 @@ impl Workload {
         }
     }
 
-    /// An experiment record must describe exactly the workload that will run.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+    pub fn prompt_sha256(&self) -> &str {
+        &self.prompt_sha256
+    }
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+    pub fn max_tokens(&self) -> u32 {
+        self.max_tokens
+    }
+
+    /// An experiment record must describe exactly the workload that will run. The fields are
+    /// private so the digest can never drift from the text.
     fn matches(&self, spec: &NewExperiment) -> bool {
         spec.workload_id == self.id
             && spec.prompt_sha256.eq_ignore_ascii_case(&self.prompt_sha256)
@@ -96,11 +113,17 @@ pub trait LabTarget: Send {
     /// Process group of a runtime this application owns; `None` for an attached one.
     fn owned_pgid(&self) -> Option<i32>;
     /// Unload the model, load it again and report the time until the runtime is ready.
-    fn cold_load(&mut self) -> impl Future<Output = Result<Duration, PassError>> + Send;
+    /// Not dropped on cancel or deadline: a restart already handed to a supervisor cannot be
+    /// recalled by dropping the future. The target must watch `cancel`, stop within
+    /// [`PASS_DEADLINE`] and report how it ended.
+    fn cold_load(
+        &mut self,
+        cancel: &Arc<AtomicBool>,
+    ) -> impl Future<Output = Result<Duration, PassError>> + Send;
     fn generate(
         &mut self,
         workload: &Workload,
-        cancel: &AtomicBool,
+        cancel: &Arc<AtomicBool>,
     ) -> impl Future<Output = Result<PassOutput, PassError>> + Send;
     /// What the runtime reports it actually loaded; anything unreported stays `None`.
     fn observed(&mut self) -> impl Future<Output = Settings> + Send;
@@ -263,14 +286,19 @@ async fn guarded<R>(
     deadline: Duration,
     work: impl Future<Output = Result<R, PassError>>,
 ) -> Result<R, PassError> {
-    tokio::select! {
+    let result = tokio::select! {
         biased;
         () = cancelled(cancel) => Err(PassError::Cancelled),
         r = tokio::time::timeout(deadline, work) => match r {
             Ok(result) => result,
             Err(_) => Err(PassError::Failed("The pass took too long and was stopped.".into())),
         },
+    };
+    // A result that arrived in the same instant as the user's cancel does not win.
+    if result.is_ok() && cancel.load(Ordering::Relaxed) {
+        return Err(PassError::Cancelled);
     }
+    result
 }
 
 fn into_result(error: PassError) -> PassResult {
@@ -280,9 +308,16 @@ fn into_result(error: PassError) -> PassResult {
     }
 }
 
-async fn cold_pass<T: LabTarget>(target: &mut T, cancel: &AtomicBool) -> PassResult {
+async fn cold_pass<T: LabTarget>(target: &mut T, cancel: &Arc<AtomicBool>) -> PassResult {
     let started = Instant::now();
-    match guarded(cancel, PASS_DEADLINE, target.cold_load()).await {
+    let loaded = target.cold_load(cancel).await.and_then(|loaded| {
+        if cancel.load(Ordering::Relaxed) {
+            Err(PassError::Cancelled)
+        } else {
+            Ok(loaded)
+        }
+    });
+    match loaded {
         Ok(loaded) => PassResult {
             state: State::Completed,
             metrics: Some(PassMetrics {
@@ -299,7 +334,7 @@ async fn cold_pass<T: LabTarget>(target: &mut T, cancel: &AtomicBool) -> PassRes
 async fn generate_pass<T: LabTarget>(
     target: &mut T,
     workload: &Workload,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     hardware: &HardwareProfile,
 ) -> PassResult {
     let aggregate = Arc::new(Mutex::new(LoadAggregate::default()));
@@ -482,23 +517,38 @@ pub async fn run<T: LabTarget>(
         .await
         .ok();
     let summary = summarize(&passes);
-    let state = match end.0 {
+    let decide = |summary: &Summary| match end.0 {
         State::Completed if summary.measured_ok == 0 => State::Failed,
         other => other,
     };
+    let state = decide(&summary);
     let failure = end.1.or_else(|| {
         (state == State::Failed && summary.measured_ok == 0)
             .then(|| "No measured pass completed.".to_string())
     });
-    let (stored_observed, stored_summary, stored_failure) =
-        (observed.clone(), summary.clone(), failure.clone());
+    // After a storage failure some passes exist only in memory, and the store closes the
+    // unsaved ones as interrupted. Summarize what was actually saved so the record agrees
+    // with its own passes.
+    let (stored_summary, stored_state) = if recorder.first_error.is_some() {
+        match db.call(move |s| s.load_experiment(id)).await {
+            Ok(Some(saved)) => {
+                let saved = summarize(&saved.passes);
+                let saved_state = decide(&saved);
+                (Some(saved), saved_state)
+            }
+            _ => (None, state),
+        }
+    } else {
+        (Some(summary.clone()), state)
+    };
+    let (stored_observed, stored_failure) = (observed.clone(), failure.clone());
     let finished = db
         .call(move |s| {
             s.finish_experiment(
                 id,
-                state,
+                stored_state,
                 stored_observed.as_ref(),
-                Some(&stored_summary),
+                stored_summary.as_ref(),
                 stored_failure.as_deref(),
                 now_ms(),
             )

@@ -43,10 +43,10 @@ fn spec(cold: bool, passes: u32) -> NewExperiment {
         ownership: Ownership::Managed,
         cold,
         passes_requested: passes,
-        workload_id: w.id,
-        prompt_sha256: w.prompt_sha256,
-        seed: w.seed,
-        max_tokens: w.max_tokens,
+        workload_id: w.id().into(),
+        prompt_sha256: w.prompt_sha256().into(),
+        seed: w.seed(),
+        max_tokens: w.max_tokens(),
         model_name: "tiny".into(),
         model_sha256: None,
         runtime_version: None,
@@ -106,14 +106,14 @@ impl LabTarget for Fake {
     fn owned_pgid(&self) -> Option<i32> {
         None
     }
-    async fn cold_load(&mut self) -> Result<Duration, PassError> {
+    async fn cold_load(&mut self, _cancel: &Arc<AtomicBool>) -> Result<Duration, PassError> {
         self.cold_loads += 1;
         self.cold_result.clone()
     }
     async fn generate(
         &mut self,
         _workload: &Workload,
-        _cancel: &AtomicBool,
+        _cancel: &Arc<AtomicBool>,
     ) -> Result<PassOutput, PassError> {
         self.generated += 1;
         match self.steps.pop_front().expect("script ran out") {
@@ -385,4 +385,61 @@ fn metrics_use_server_counters_and_say_why_itl_is_unknown() {
             .decode_tokens_per_s
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn a_result_that_lands_with_the_cancel_does_not_win() {
+    let cancel = AtomicBool::new(true);
+    let result = guarded(&cancel, Duration::from_secs(5), async {
+        Ok::<_, PassError>(1)
+    })
+    .await;
+    assert_eq!(result, Err(PassError::Cancelled));
+}
+
+#[tokio::test]
+async fn a_pass_that_could_not_be_saved_is_not_counted_in_the_stored_summary() {
+    let db = TempDb::new();
+    let handle = db.db();
+    // Saving a completed pass fails, so the store will close it as interrupted.
+    rusqlite::Connection::open(&db.0)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER refuse_completed BEFORE UPDATE ON experiment_passes
+             WHEN NEW.state = 'completed'
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        )
+        .unwrap();
+    let mut fake = Fake::new(vec![Step::Ok(output(10.0)), Step::Ok(output(40.0))]);
+    let (tx, _rx) = watch::channel(Progress::default());
+    let outcome = Box::pin(run(
+        handle,
+        &hardware(),
+        &mut fake,
+        spec(false, 1),
+        &Workload::standard(),
+        Arc::default(),
+        &tx,
+    ))
+    .await;
+    assert!(outcome.store_error.is_some());
+    assert_eq!(
+        outcome.state,
+        State::Completed,
+        "the shown result is complete"
+    );
+    assert_eq!(outcome.summary.measured_ok, 1);
+    let stored = db
+        .db()
+        .call(move |s| s.load_experiment(outcome.experiment_id.unwrap()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.summary.unwrap().measured_ok,
+        0,
+        "stored summary matches stored passes"
+    );
+    assert_eq!(stored.state, State::Failed);
+    assert!(stored.passes.iter().all(|p| p.state == State::Interrupted));
 }

@@ -16,9 +16,9 @@ The standard workload is `lab-fixed-v1`: a short fixed prompt, seed 42, temperat
 
 - A failed cold load or warm-up ends the experiment as failed before any measured pass.
 - A failed measured pass is stored as failed and left out of the medians, with a count. Two failed measured passes in a row end the experiment as failed.
-- A pass that runs longer than 180 seconds is stopped and recorded as failed.
+- A generation pass that runs longer than 180 seconds is stopped and recorded as failed. A cold load is never dropped half way, because a restart already handed to the supervisor cannot be recalled by dropping a future: the target must watch the cancel flag, finish within the same deadline and report how it ended. A result that arrives in the same instant as a cancel counts as cancelled.
 - Cancellation is checked before every pass and while one runs. The running pass is recorded as cancelled, the experiment as cancelled, and passes already finished keep their results.
-- If the database fails during a run the measurements are kept in the returned outcome and the first storage error is reported; the result is shown rather than lost. An experiment left unfinished is marked interrupted at the next start.
+- If the database fails during a run the measurements are kept in the returned outcome and the first storage error is reported; the result is shown rather than lost. The stored summary is then computed from the passes that were actually saved, so a stored record never contradicts its own passes. An experiment left unfinished is marked interrupted at the next start.
 
 ## What each pass records
 
@@ -26,7 +26,7 @@ Wall time, time to first token, prompt and generated token counts, prompt and de
 
 ## Targets
 
-`LabTarget` is the seam. `LlamaTarget` drives a managed llama.cpp server through the existing loopback client; the cold load is a callback supplied by the application, so this crate never reaches into process control. An Attached runtime is never started, stopped or modified by the protocol. Ollama (attached) joins in a later phase with its own cold-start consent.
+`LabTarget` is the seam. `LlamaTarget` drives a managed llama.cpp server through the existing loopback client; the cold load is a callback supplied by the application, so this crate never reaches into process control. The callback returns the new process group with the ready time, because a restart replaces the process the load sampler watches. The workload's text, digest, seed and token limit are private to `Workload`, so the recorded digest can never differ from the text that runs. An Attached runtime is never started, stopped or modified by the protocol. Ollama (attached) joins in a later phase with its own cold-start consent.
 
 ## Not in this phase
 

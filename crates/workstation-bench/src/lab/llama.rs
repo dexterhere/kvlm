@@ -6,20 +6,29 @@ use super::{LabTarget, PassError, PassOutput, Workload};
 use std::{
     future::Future,
     pin::Pin,
-    sync::atomic::AtomicBool,
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 use workstation_core::experiments::Settings;
 use workstation_runtimes::llamacpp::client::{ChatRequest, LlamaClient, LlamaError, StreamEvent};
 
-pub type ColdFuture = Pin<Box<dyn Future<Output = Result<Duration, String>> + Send>>;
+/// What a cold load reports: the time to Ready and the new process group, because a restart
+/// replaces the process the load sampler has to watch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColdLoaded {
+    pub ready_in: Duration,
+    pub pgid: Option<i32>,
+}
+
+pub type ColdFuture = Pin<Box<dyn Future<Output = Result<ColdLoaded, String>> + Send>>;
 
 pub struct LlamaTarget {
     client: LlamaClient,
     alias: String,
     pgid: Option<i32>,
-    /// Stop and start the owned runtime, returning the time until it reported Ready.
-    cold: Box<dyn FnMut() -> ColdFuture + Send>,
+    /// Stop and start the owned runtime. It must watch the flag, finish within the pass
+    /// deadline and return the time until Ready with the new process group.
+    cold: Box<dyn FnMut(Arc<AtomicBool>) -> ColdFuture + Send>,
 }
 
 impl LlamaTarget {
@@ -27,7 +36,7 @@ impl LlamaTarget {
         client: LlamaClient,
         alias: String,
         pgid: Option<i32>,
-        cold: Box<dyn FnMut() -> ColdFuture + Send>,
+        cold: Box<dyn FnMut(Arc<AtomicBool>) -> ColdFuture + Send>,
     ) -> Self {
         Self {
             client,
@@ -50,20 +59,24 @@ impl LabTarget for LlamaTarget {
         self.pgid
     }
 
-    async fn cold_load(&mut self) -> Result<Duration, PassError> {
-        (self.cold)().await.map_err(PassError::Failed)
+    async fn cold_load(&mut self, cancel: &Arc<AtomicBool>) -> Result<Duration, PassError> {
+        let loaded = (self.cold)(cancel.clone())
+            .await
+            .map_err(PassError::Failed)?;
+        self.pgid = loaded.pgid;
+        Ok(loaded.ready_in)
     }
 
     async fn generate(
         &mut self,
         workload: &Workload,
-        cancel: &AtomicBool,
+        cancel: &Arc<AtomicBool>,
     ) -> Result<PassOutput, PassError> {
         let request = ChatRequest {
             model: &self.alias,
-            prompt: &workload.prompt,
-            max_tokens: workload.max_tokens,
-            seed: workload.seed,
+            prompt: workload.prompt(),
+            max_tokens: workload.max_tokens(),
+            seed: workload.seed(),
             temperature: 0.0,
             // Re-process the prompt every time so passes are comparable.
             cache_prompt: false,
@@ -155,7 +168,14 @@ mod tests {
             LlamaClient::new(port).unwrap(),
             "alias".into(),
             Some(4242),
-            Box::new(|| Box::pin(async { Ok(Duration::from_millis(900)) })),
+            Box::new(|_| {
+                Box::pin(async {
+                    Ok(ColdLoaded {
+                        ready_in: Duration::from_millis(900),
+                        pgid: Some(777),
+                    })
+                })
+            }),
         )
     }
 
@@ -163,7 +183,7 @@ mod tests {
     async fn a_matching_stream_gives_counter_speeds_and_a_valid_itl() {
         let mut target = target(serve(sse(12, 12)).await);
         let output = target
-            .generate(&Workload::standard(), &AtomicBool::new(false))
+            .generate(&Workload::standard(), &Arc::new(AtomicBool::new(false)))
             .await
             .unwrap();
         assert_eq!(output.generated_tokens, Some(12));
@@ -172,14 +192,22 @@ mod tests {
         assert_eq!(output.stream.content_arrivals.len(), 12);
         assert!(output.stream.itl().is_ok());
         assert_eq!(target.owned_pgid(), Some(4242));
-        assert_eq!(target.cold_load().await, Ok(Duration::from_millis(900)));
+        assert_eq!(
+            target.cold_load(&Arc::default()).await,
+            Ok(Duration::from_millis(900))
+        );
+        assert_eq!(
+            target.owned_pgid(),
+            Some(777),
+            "a restart replaces the watched group"
+        );
     }
 
     #[tokio::test]
     async fn events_that_do_not_match_the_server_count_leave_itl_unknown() {
         let mut target = target(serve(sse(3, 9)).await);
         let output = target
-            .generate(&Workload::standard(), &AtomicBool::new(false))
+            .generate(&Workload::standard(), &Arc::new(AtomicBool::new(false)))
             .await
             .unwrap();
         assert_eq!(output.generated_tokens, Some(9));
@@ -200,11 +228,11 @@ mod tests {
         };
         let mut target = target(port);
         let failed = target
-            .generate(&Workload::standard(), &AtomicBool::new(false))
+            .generate(&Workload::standard(), &Arc::new(AtomicBool::new(false)))
             .await;
         assert!(matches!(failed, Err(PassError::Failed(_))));
         let cancelled = target
-            .generate(&Workload::standard(), &AtomicBool::new(true))
+            .generate(&Workload::standard(), &Arc::new(AtomicBool::new(true)))
             .await;
         assert_eq!(cancelled.unwrap_err(), PassError::Cancelled);
         assert_eq!(target.observed().await, Settings::default());
