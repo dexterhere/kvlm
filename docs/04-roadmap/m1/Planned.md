@@ -9,7 +9,7 @@ M0 answers "can my machine run the model I already have?". M1 answers "which mod
 should I get, will it fit, and do I already have it?". A developer opens the Model
 Explorer, searches public Hugging Face for GGUF models, browses them as
 **Family → Release → Artifact**, sees file size, quantization, license, revision and
-checksum, sees a conditional memory-fit estimate for their hardware, learns whether the
+checksum, sees a conditional memory-fit estimate for their hardware (for the architectures the fit engine supports today, LLaMA and Qwen2; others show Unknown), learns whether the
 same file already sits in their Ollama or Hugging Face storage, and can download what is
 missing with progress, pause, resume and integrity verification. Gated models work
 through a token the application keeps in the desktop keyring.
@@ -38,11 +38,11 @@ bandwidth, and they already have models from Ollama or other tools.
 
 ## Phases and pull requests
 
-Each phase is one reviewable pull request into `develop`, built in this order.
+Each phase is one or more reviewable pull requests into `develop`, built in this order. Search lists repositories; the artifacts of a repository load when the user expands it, to stay inside Hugging Face rate limits.
 
 | Phase | Deliverable | User-visible result |
 | --- | --- | --- |
-| 1 | Read-only Model Explorer | Search, Family → Release → Artifact browser, loading/error/retry/offline states |
+| 1 | Read-only Model Explorer (three PRs: data model, Hugging Face client, view) | Search repositories, expand one to see its artifacts, Family → Release → Artifact browser, loading/error/retry/offline states |
 | 2 | Artifact details | Size, quantization, license, revision, checksum, bounded GGUF metadata, conditional fit estimate |
 | 3 | Local discovery and deduplication | "Already on disk" with a verified content digest and the file location |
 | 4 | Resumable downloads | Progress, cancel, resume after interruption, checksum verification, safe partial files |

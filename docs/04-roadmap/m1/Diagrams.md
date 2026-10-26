@@ -8,13 +8,11 @@ Companion documents: [Planned](Planned.md) · [Implementation](Implementation.md
 erDiagram
     CATALOG_QUERY ||--o{ CATALOG_ARTIFACT : "returned"
     CATALOG_ARTIFACT ||--o| ARTIFACT_METADATA : "inspected"
-    CATALOG_ARTIFACT ||--o{ DOWNLOAD : "fetched by"
-    CATALOG_ARTIFACT ||--o{ LOCAL_MATCH : "found as"
-    LOCAL_FILE_DIGEST ||--o{ LOCAL_MATCH : "proves"
+    CATALOG_ARTIFACT ||--o{ DOWNLOAD : "copied into"
+    CATALOG_ARTIFACT }o--o{ LOCAL_FILE_DIGEST : "matched by sha256"
     CATALOG_QUERY {
         text query_key PK
         int fetched_at_unix_ms
-        text cursor_next
     }
     CATALOG_ARTIFACT {
         text artifact_id PK
@@ -37,8 +35,7 @@ erDiagram
         text artifact_id FK
         text state
         int bytes_done
-        text etag
-        text part_name
+        text expected_sha256
     }
     LOCAL_FILE_DIGEST {
         text path PK
@@ -46,10 +43,6 @@ erDiagram
         int mtime_ns
         int inode
         text sha256
-    }
-    LOCAL_MATCH {
-        text artifact_id FK
-        text path FK
     }
 ```
 
@@ -64,7 +57,7 @@ sequenceDiagram
     participant DB as SQLite cache
     U->>UI: Search "qwen coder"
     UI->>B: CoreCommand::SearchCatalog{id, query}
-    B->>H: GET /api/models (bounded, timeout)
+    B->>H: GET /api/models (repos only, bounded, timeout)
     alt success
         H-->>B: page of repos
         B->>DB: upsert cache (query_key, artifacts)
@@ -87,8 +80,8 @@ sequenceDiagram
     U->>UI: Inspect artifact
     UI->>B: InspectArtifact{id, artifact_id}
     B->>H: GET resolve/{revision}/{file} Range 0..16MiB
-    H-->>B: header bytes (or truncated)
-    B->>B: inspect_reader over bytes, assess fit
+    H-->>B: header bytes + Content-Range total
+    B->>B: total == catalog size? inspect_prefix, assess fit
     B-->>UI: ArtifactInspected{id, metadata, fit or Unknown}
 ```
 
@@ -121,9 +114,9 @@ sequenceDiagram
     participant H as Hugging Face
     U->>B: StartDownload{artifact_id}
     B->>D: begin (requires sha256, no shard)
-    D->>F: open <sha>.part, try_lock
+    D->>F: take models/.lock, open <sha>.part
     D->>D: hash existing prefix, set offset
-    D->>H: GET resolve/{rev}/{file} Range offset- If-Range etag
+    D->>H: GET resolve/{rev}/{file} Range offset-
     alt 206 and Content-Range matches
         H-->>D: stream
     else 200 (range ignored)
@@ -157,8 +150,9 @@ stateDiagram-v2
     Verifying --> Failed: digest mismatch
     Running --> Failed: network, disk, access
     Failed --> Queued: retry
-    Running --> Cancelled: user cancel
-    Cancelled --> [*]
+    Running --> Cancelled: user cancel (part file kept)
+    Cancelled --> Queued: restart
+    Cancelled --> [*]: discard part
     Completed --> [*]
 ```
 
@@ -174,7 +168,10 @@ sequenceDiagram
     U->>UI: Paste token
     UI->>B: StoreToken{secret}
     B->>K: store (attributes only, no label secrets)
-    B->>H: GET /api/whoami-v2 (explicit validate)
+    B-->>UI: TokenState{stored}
+    U->>UI: Validate (optional, explicit)
+    UI->>B: ValidateToken
+    B->>H: GET /api/whoami-v2
     H-->>B: ok or 401
     B-->>UI: TokenState{valid or invalid}
     Note over B,H: token attached only to huggingface.co requests

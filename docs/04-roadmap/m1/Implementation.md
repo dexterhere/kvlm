@@ -15,7 +15,8 @@ model, runtime, or internet.
 | | `models/dedup.rs` | Scan roots, size prefilter, streaming SHA-256, cancellable; digest cache lookups |
 | | `models/download.rs` | State machine types and pure resume/verify rules (no network) |
 | | `fit/` | Adapter running `assess_gguf_fit` from remote GGUF metadata for a default scenario |
-| | `db/` | Migration v1 → v2 and queries for catalog cache, digests, downloads |
+| | `models/gguf.rs` | New `inspect_prefix(bytes, declared_len)` entry point (see Artifact details) |
+| | `db/` | Ordered migration steps (0→1, 1→2) and queries for catalog cache, digests, downloads |
 | `workstation-runtimes` | `huggingface/` | HTTPS client, response parsing, size and time bounds, token header handling |
 | | `download.rs` | Streaming ranged downloader writing partial files |
 | | `secrets.rs` | Secret Service wrapper behind a small trait with a fake for tests |
@@ -30,9 +31,8 @@ crate description and `docs/02-architecture/README.md` accordingly.
 
 | Dependency | Where | Reason |
 | --- | --- | --- |
-| `reqwest` feature `rustls-tls` (webpki roots), `stream`, `json` | runtimes | HTTPS to Hugging Face; no system OpenSSL |
-| `futures-util` | runtimes | stream a response body chunk by chunk |
-| `oo7` | runtimes | Secret Service; choose its tokio and crypto features during the Phase 5 spike |
+| `reqwest` features `rustls-tls` (webpki roots) and `json` | runtimes | HTTPS to Hugging Face; no system OpenSSL. Bodies stream with `Response::chunk()`, so no `stream` feature or `futures-util` |
+| `oo7` | runtimes | Secret Service; tokio runtime and a pure-Rust crypto backend, chosen in the Phase 5 spike. No `zeroize` crate: the token wrapper overwrites its buffer on drop on a best-effort basis and the docs say so |
 | `sha2` | already in core | digests |
 
 Each new crate needs a license check against GPL-3.0-or-later compatibility before the
@@ -40,10 +40,15 @@ PR, recorded in the decision record. No other dependency is added.
 
 ## Data model
 
-`PRAGMA user_version` moves from 1 to 2 through one atomic `IMMEDIATE` transaction.
-The existing refusal of unrelated databases is kept. A database with version 2 is
-accepted; the older binary refuses it with the existing "Unsupported" message. Existing
-`benchmark_runs` rows are untouched. All tables are `STRICT`.
+`schema.rs` today creates the v1 table for a blank database and refuses any other
+version, so raising `VERSION` alone would break existing databases or skip the new
+tables. The migration becomes an ordered step list run inside one `IMMEDIATE`
+transaction: `application_id` is checked first (unrelated databases still refused);
+version 0 runs steps 0→1 then 1→2; version 1 runs 1→2; version 2 is a no-op; any higher
+version is refused with the existing "Unsupported" message and the file is kept. Each
+step either completes or the transaction rolls back. After migrating, the expected shape
+of every v1 and v2 table is checked, not only `benchmark_runs`. Existing run rows are
+untouched. All tables are `STRICT`.
 
 ```sql
 catalog_queries(
@@ -64,13 +69,15 @@ artifact_metadata(
   fetched_at_unix_ms INTEGER NOT NULL
 );
 local_file_digests(
-  path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
-  inode INTEGER NOT NULL, sha256 TEXT NOT NULL, verified_at_unix_ms INTEGER NOT NULL
+  path TEXT PRIMARY KEY, dev INTEGER NOT NULL, inode INTEGER NOT NULL, size INTEGER NOT NULL,
+  mtime_ns INTEGER NOT NULL, ctime_ns INTEGER NOT NULL, sha256 TEXT NOT NULL, verified_at_unix_ms INTEGER NOT NULL
 );
 downloads(
-  id INTEGER PRIMARY KEY, artifact_id TEXT NOT NULL REFERENCES catalog_artifacts(artifact_id),
+  id INTEGER PRIMARY KEY, artifact_id TEXT NOT NULL,       -- no foreign key: cache eviction must not touch downloads
+  repo_id TEXT NOT NULL, revision TEXT NOT NULL, filename TEXT NOT NULL,
+  expected_sha256 TEXT NOT NULL, expected_size INTEGER NOT NULL,   -- copied from the catalog at start
   state TEXT NOT NULL CHECK(state IN ('queued','running','paused','verifying','completed','failed','cancelled')),
-  bytes_done INTEGER NOT NULL, etag TEXT, failure_code TEXT,
+  bytes_done INTEGER NOT NULL, failure_code TEXT,
   created_at_unix_ms INTEGER NOT NULL, updated_at_unix_ms INTEGER NOT NULL
 );
 ```
@@ -82,26 +89,37 @@ Rules stated as invariants:
 - The spec's `catalog_artifacts` draft columns for architecture facts (`block_count`,
   `head_count_kv`, and so on) live only in `artifact_metadata`, because they come from a
   separate, user-triggered inspection and may be absent.
-- `local_file_digests` is a cache only. A row is used only if size, mtime, and inode all
-  match the current `stat`; otherwise the file is rehashed.
+- `local_file_digests` is a cache only. A row is used only if device, inode, size, mtime,
+  and ctime all match the current `stat` (ctime cannot be reset by users, so a restored
+  mtime does not hide an edit); otherwise the file is rehashed. Cached results are shown
+  as "verified at <time>".
+- The catalog cache is bounded: at most 200 `catalog_queries` rows and 16 MiB of cached
+  JSON in total, evicted oldest `fetched_at` first. `catalog_artifacts` rows not
+  referenced by a cached query are evicted the same way. `downloads` keeps its own copy
+  of what it needs and is never evicted.
 - `downloads` rows never store tokens, URLs, or remote filenames as paths.
 
 ## Hugging Face client
 
 - Base URL `https://huggingface.co`, fixed. A test-only constructor accepts a loopback
   `http://127.0.0.1:port` base; production code rejects any non-HTTPS base.
-- Search: `GET /api/models?filter=gguf&sort=downloads&direction=-1&limit=30&search=…`;
-  next page from the response `Link` header cursor. Parameters go through the query
-  builder, never string concatenation.
-- Detail: `GET /api/models/{repo}?blobs=true` for siblings with size and LFS SHA-256,
-  license, gating, base model, and the top-level `gguf` summary.
+- Search lists repositories only: `GET /api/models?filter=gguf&sort=downloads&direction=-1&limit=30&search=…`;
+  next page from the response `Link` header cursor, followed only if its origin equals
+  the configured base. Parameters go through the query builder. Search rows do not
+  carry siblings, sizes, or checksums, so they are not shown as artifacts.
+- Detail is fetched per repository on an explicit expand: `GET /api/models/{repo}?blobs=true`
+  for the commit `sha`, siblings with size and LFS SHA-256, license, gating, base model,
+  and the top-level `gguf` summary. At most one request is in flight; details are cached
+  so re-expanding is free. This avoids 30 detail calls per page and rate limits.
 - Limits: 10 s connect timeout, 30 s per-read idle timeout, at most 5 redirects,
   HTTPS-only redirects, search and detail bodies capped at 4 MiB, and an error body
   read only up to 4 KiB. `429` honors `Retry-After` up to a displayed maximum of one
   hour; no automatic retry loop.
-- `Authorization` is set with `HeaderValue::set_sensitive(true)` only on requests whose
-  host is `huggingface.co`. reqwest drops it on cross-host redirects, and the tests
-  assert that to CDN hosts it is absent.
+- `Authorization` is set with `HeaderValue::set_sensitive(true)` only on requests to the
+  configured base origin (`huggingface.co` in production). reqwest drops it on cross-host
+  redirects. A custom redirect policy allows HTTPS only; the loopback test base uses a
+  variant that also permits `http` to loopback. Tests check stripping with
+  `127.0.0.1` versus `localhost` as the two hosts.
 
 ### Normalization
 
@@ -110,6 +128,10 @@ Rules stated as invariants:
 - Family: `cardData.base_model` when present, otherwise the repo name with GGUF and
   quantization suffixes removed. A repo with neither becomes family "Ungrouped".
   Derivation source is stored so the UI can state it was derived.
+- Filename (`rfilename`) may contain `/` for repositories with folders. It is split on
+  `/` and each segment percent-encoded; empty, `.`, `..`, backslash, NUL, control
+  characters, `:` and names over 255 bytes make the entry invalid and it is dropped.
+  The artifact id is `hf:<repo>@<revision>:<filename>`; banning `:` keeps it unambiguous.
 - Release: repo + revision. Artifact: one `.gguf` sibling. Quantization comes from the
   filename token (`Q4_K_M`, `IQ3_XS`, `F16`, …); unrecognized becomes Unknown.
 - A filename matching `-NNNNN-of-NNNNN.gguf` is a shard; the group is one artifact with
@@ -121,22 +143,32 @@ Rules stated as invariants:
 ## Artifact details and fit
 
 - Inspection is a separate explicit command. It issues one ranged request for the first
-  16 MiB at the pinned revision (the existing `HEADER_LIMIT`) and runs
-  `inspect_reader` over the bytes. A truncated header yields "metadata not available",
-  not a guess. Results are cached in `artifact_metadata`.
-- Fit uses `assess_gguf_fit` with the file size as the explicit weight estimate and a
-  displayed default scenario: 8192 context, F16 K/V, microbatch 512, the uniform
-  attention assumption, against the current fresh hardware reading. It is shown as
-  conditional, only for the architectures the fit engine supports; otherwise Unknown.
+  16 MiB at the pinned revision and reads the total length from `Content-Range`, which
+  must equal the catalog `size_bytes`.
+- `inspect_reader` derives the file length by seeking to the end and rejects tensor ranges
+  beyond it, so it cannot run on a prefix. M1 adds `inspect_prefix(bytes, declared_len)`
+  in core: the same parser, with the declared total as the file length, erroring on any
+  read past the prefix. Truncated metadata yields "metadata not available", not a guess.
+  The 16 MiB bound reuses the existing `HEADER_LIMIT`, which becomes a public constant.
+  Results are cached in `artifact_metadata`.
+- Fit calls `assess_gguf_fit(metadata, scenario, target, layout)`; weights come from the
+  metadata's tensor bytes, not from the file size. The displayed default scenario is
+  8192 context, F16 K/V, microbatch 512, the uniform attention assumption, against the
+  current fresh hardware reading. It is conditional. The engine supports only `llama`
+  and `qwen2`, so other architectures (for example qwen3, gemma3, phi3) show Unknown;
+  the UI states this coverage limit.
 
 ## Deduplication
 
-- Roots: `$OLLAMA_MODELS/blobs` or `~/.ollama/models/blobs`; `$HF_HUB_CACHE`, else
+- Roots: `$OLLAMA_MODELS/blobs`, `~/.ollama/models/blobs`, and the system install path `/usr/share/ollama/.ollama/models/blobs` (reported as not scanned when unreadable); `$HF_HUB_CACHE`, else
   `$HF_HOME/hub`, else `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub`
   (the `models--*/blobs/*` entries). The app's own `models/blobs`. Missing or unreadable
   roots are reported as not scanned, not as empty.
 - Walk regular files only; do not follow symlinks; canonicalized path must stay under
-  its root. Candidates: size equals the artifact's published size. Only candidates are
+  its root. Files are opened with `O_NOFOLLOW | O_NONBLOCK` through
+  `OpenOptionsExt::custom_flags` (no `unsafe`), then `fstat` must still show a regular
+  file with the walk's device, inode, and size. This closes the swap-to-symlink or FIFO
+  race, as `inspect_file` already does. Candidates: size equals the artifact's published size. Only candidates are
   hashed, streaming in 1 MiB reads on `spawn_blocking`, checking a cancel flag between
   reads. A match requires digest equality; a filename claiming a digest is never trusted.
 - Output is a list of `LocalMatch{artifact_id, path, root}`. Nothing is copied, linked,
@@ -148,17 +180,22 @@ Rules stated as invariants:
   `partial/<sha256>.part` and final files `blobs/sha256-<hex>`, mode `0600`. File names
   derive only from the verified digest.
 - Preconditions: artifact has a SHA-256, size, valid `RepoId`/`Revision`, and is not a
-  shard. If a verified local match exists the UI offers "already available" instead.
+  shard. A verified local match is shown as information ("already on disk at …"); it
+  never blocks a download, because M1 cannot use Ollama blobs directly.
 - URL is `resolve/{revision}/{filename}` with the filename percent-encoded as a path
   segment from the catalog value; the filename never reaches the filesystem.
-- Single active download per application; the part file is opened and exclusively
-  locked with `File::try_lock` so a second instance cannot interleave writes.
+- Single active download per application. A lock file `models/.lock` is held with
+  `File::try_lock` for the whole download, discard, and rename, so a second instance can
+  neither interleave writes nor discard or rename the part file. A digest is validated as
+  exactly 64 lowercase hex characters before it is used in any path.
 - Resume: hash the existing part file from the start (one pass), then request
-  `Range: bytes=<offset>-` with `If-Range: <etag>`. Accept `206` only if
-  `Content-Range` starts at the offset and the total equals the expected size. A `200`
-  restarts from zero. Any other mismatch fails the download.
+  `Range: bytes=<offset>-`. There is no `If-Range`: the redirect target's ETag differs
+  from the origin's, so it would force a restart every time, and the pinned revision plus
+  the final SHA-256 already guarantee integrity. Accept `206` only if `Content-Range`
+  starts at the offset and the total equals the expected size. A `200` restarts from
+  zero. Any other mismatch fails the download.
 - Never write past the expected size; a longer stream fails the download.
-- Completion: flush, fsync, final digest compared in constant time to the expected
+- Completion: flush, fsync, final digest compared to the expected
   value, then rename into `blobs/` and fsync the directory. A mismatch deletes the part
   file and records `integrity`.
 - Progress events are throttled to at most 4 per second. Cancel keeps the part file;
@@ -174,8 +211,13 @@ Rules stated as invariants:
   where the dependency allows. It is never logged, put in an error string, an event
   payload, SQLite, or settings.
 - If the Secret Service is unavailable, locked, or denied, token features are disabled
-  with the reason shown. There is no file or environment-variable fallback.
-- Token validation (`GET /api/whoami-v2`) runs only on an explicit "Validate" action.
+  with the reason shown. There is no file or environment-variable fallback. Every call
+  runs off the UI thread with a 5 s timeout, because D-Bus activation on a desktop
+  without a keyring can hang and a locked collection can wait on a prompt nobody answers.
+  Availability is checked lazily when preferences open, never at startup. `oo7`'s
+  Flatpak portal file backend is not enabled in M1; sandboxed packaging decides this in
+  M4. The fake store tests the timeout path.
+- Token validation (`GET /api/whoami-v2`) runs only on an explicit "Validate" action, never as a side effect of storing.
 - Gated artifacts: `gated` is shown from the API. A `401`/`403` from search detail,
   inspect, or download becomes `AccessRequired`; the message explains accepting the
   license on the website and adding a token. The app never opens the license flow
@@ -222,6 +264,7 @@ Destructive actions (discard partial) need confirmation.
 | Secret Service locked or missing | Feature disabled with reason; public downloads continue |
 | Token revoked or expired | `401` becomes `AccessRequired`; no retry with a stale token |
 | Disk full | Write error preserved as retryable failure; part kept |
+| Cancel | State is `cancelled` but the part file stays until the user discards it; discard needs the lock |
 | Gated model, no token | `AccessRequired` with guidance |
 | Database v2 opened by an older binary | Refused with the existing message |
 
@@ -231,13 +274,13 @@ Destructive actions (discard partial) need confirmation.
 | --- | --- | --- |
 | Normalization | valid, invalid repo/revision, shard, non-GGUF, missing sha, family fallback | core unit |
 | Quantization parser | table of filenames | core unit |
-| Migration | v1 → v2 keeps runs; refuse unrelated; refuse v3; idempotent | core integration |
+| Migration | blank → v2; v1 → v2 keeps runs; v2 no-op; v3 refused; unrelated refused; failure mid-step rolls back | core integration |
 | DB queries | cache upsert, immutability by revision, size caps | core integration |
 | HF client | mock server: pagination, 429, 401/403, oversize, malformed, timeout, redirect to CDN drops token, HTTP base refused | runtimes integration |
-| Inspect | truncated header gives Unknown; supported arch gives conditional fit | core + runtimes |
-| Dedup | size prefilter; digest cache hit/invalidate; symlink escape; unreadable root; cancel; filename-claims-digest ignored | core integration |
-| Downloader | fresh, resume 206, server 200, bad Content-Range, over-long stream, digest mismatch deletes part, kill-and-resume, lock contention, ENOSPC | runtimes integration |
-| Secrets | fake store round trip; redaction in Debug; unavailable path | runtimes unit |
+| Inspect | `inspect_prefix` on a prefix of a real-shaped file; truncated header gives Unknown; supported arch gives conditional fit; unsupported arch gives Unknown | core + runtimes |
+| Dedup | size prefilter; digest cache hit/invalidate (including restored mtime); symlink or FIFO swap; symlink escape; unreadable root; cancel; filename-claims-digest ignored | core integration |
+| Downloader | fresh, resume 206, server 200, bad Content-Range, over-long stream, digest mismatch deletes part, kill-and-resume, lock contention, ENOSPC, subfolder filename, hostile filename | runtimes integration |
+| Secrets | fake store round trip; redaction in Debug; unavailable path; hang hits the 5 s timeout | runtimes unit |
 | Bridge | stale id dropped; progress throttle; cancel | app unit |
 | GTK smoke | browser states, details, downloads list, token row (Broadway) | app, ignored by default like M0 |
 | Acceptance | real search, real small download interrupted and resumed, real gated refusal, restart | opt-in, recorded |
@@ -251,11 +294,13 @@ Phase 6.
 
 | PR | Branch | Contents | Implementer | Reviewer |
 | --- | --- | --- | --- | --- |
-| 0 | `chore/m1-plan` | these documents, README index, milestone note, decision records | Opus (decisions) | Codex (security read) |
-| 1 | `feat/m1-catalog-explorer` | core types, HF client, cache + migration, view, states | Sonnet (client, migration, bridge); Haiku (fixtures, mock server, smoke scaffolding, docs) | Codex |
-| 2 | `feat/m1-artifact-details` | inspect command, fit adapter, details pane | Sonnet | Codex |
+| 0 | `chore/m1-plan` | these documents, README index, decision records | Opus (decisions) | Codex, Opus |
+| 1a | `feat/m1-catalog-model` | core types, normalization, migration steps, cache queries, tests | Sonnet; Haiku (fixtures) | Codex |
+| 1b | `feat/m1-hf-client` | rustls dependency, HF client, mock server, limits, redirect/token tests | Sonnet; Haiku (mock server scaffolding) | Codex |
+| 1c | `feat/m1-catalog-explorer` | bridge commands, three-tier view, states, smoke test | Sonnet; Haiku (smoke scaffolding, docs) | Codex |
+| 2 | `feat/m1-artifact-details` | `inspect_prefix`, inspect command, fit adapter, details pane | Sonnet | Codex |
 | 3 | `feat/m1-local-dedup` | scanner, digest cache, UI badge | Sonnet (scanner); OpenCode (tests, docs) | Codex |
-| 4 | `feat/m1-resumable-downloads` | downloader, state, UI | Sonnet (security-sensitive) | Codex + Opus final read |
+| 4 | `feat/m1-resumable-downloads` | downloader, lock, state, UI | Sonnet (security-sensitive) | Codex + Opus final read |
 | 5 | `feat/m1-gated-access` | secrets, token UI, access states | Sonnet | Codex + Opus final read |
 | 6 | `chore/m1-acceptance` | evidence, docs, milestone status | Haiku (draft), Opus (sign-off wording) | Opus |
 
