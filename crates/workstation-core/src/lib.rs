@@ -6,6 +6,7 @@ pub mod export;
 pub mod fit;
 pub mod hardware;
 pub mod models;
+pub mod runtime;
 
 /// Provisional application identifier from the master specification.
 pub const APP_ID: &str = "org.gnome.LocalAIWorkstation";
