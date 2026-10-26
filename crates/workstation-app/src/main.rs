@@ -2,6 +2,8 @@
 
 mod application;
 mod bridge;
+mod fit_state;
+mod fit_workflow;
 mod views;
 mod window;
 

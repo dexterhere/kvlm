@@ -19,3 +19,6 @@ __pycache__/
 *~
 *.swp
 .DS_Store
+
+# Generated graphify knowledge-graph output
+/graphify-out/

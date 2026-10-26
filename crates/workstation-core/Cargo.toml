@@ -7,5 +7,13 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[dependencies]
+libc.workspace = true
+serde.workspace = true
+sha2.workspace = true
+nvml-wrapper.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+
 [lints]
 workspace = true

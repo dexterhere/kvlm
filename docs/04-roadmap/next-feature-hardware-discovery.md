@@ -1,6 +1,9 @@
 # Next feature: hardware discovery in Overview
 
-Planned on 2026-10-24. Status: proposed implementation plan; no feature code added.
+Planned and implemented on 2026-10-24. Status: implementation and NVIDIA reference
+validation complete; live AMD and separate CPU-only validation remain outstanding.
+The code is submitted against `develop`; this does not complete the broader M0 milestone.
+See the [validation record](../03-development/hardware-validation.md).
 Scope: M0 Step 2 of the
 [master specification](../01-product/gnome_local_ai_workstation_master_specification.md#10-versioned-delivery-roadmap--milestone-acceptance-criteria).
 

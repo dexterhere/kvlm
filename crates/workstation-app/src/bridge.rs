@@ -1,56 +1,276 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Typed messages keep GTK objects out of Tokio workers.
+//! Typed messages keep GTK objects out of blocking hardware probes.
 
+use crate::fit_workflow::{FitReport, FitRequest, estimate};
+use std::sync::Arc;
 use tokio::sync::mpsc;
+use workstation_bench::{
+    history::{self, PersistedRun},
+    runner::BenchmarkOutcome,
+};
+use workstation_core::db::HistoryEntry;
+use workstation_core::hardware::{HardwareProfile, resources::ResourceSummary};
+use workstation_runtimes::ollama::{
+    Discovery, GenerationProgress, InstalledModel, ModelInspection, OllamaAdapter,
+};
 
 #[derive(Debug)]
 pub enum CoreCommand {
-    Initialize,
+    LoadBenchmarkHistory {
+        id: u64,
+    },
+    DetectHardware,
+    DiscoverOllama,
+    InspectOllama {
+        id: u64,
+        model: String,
+    },
+    EstimateFit(FitRequest),
+    RunQuickBenchmark {
+        id: u64,
+        model: InstalledModel,
+        cancel: tokio::sync::watch::Receiver<bool>,
+    },
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum UiEvent {
-    WorkerReady,
+    BenchmarkHistoryLoaded {
+        id: u64,
+        result: Result<Vec<HistoryEntry>, String>,
+    },
+    BenchmarkHistorySaved {
+        benchmark_id: u64,
+        result: Result<i64, String>,
+    },
+    BenchmarkFinished {
+        id: u64,
+        outcome: BenchmarkOutcome,
+        resources: Option<Box<ResourceSummary>>,
+    },
+    OllamaDiscovered(Box<Discovery>),
+    OllamaFailed(String),
+    OllamaInspected {
+        id: u64,
+        result: Result<Box<ModelInspection>, String>,
+    },
+    HardwareDetected(Box<HardwareProfile>),
+    HardwareFailed(String),
+    FitFinished {
+        id: u64,
+        result: Result<Box<FitReport>, String>,
+    },
 }
 
 pub fn start(
     runtime: &tokio::runtime::Handle,
-) -> (
-    mpsc::UnboundedSender<CoreCommand>,
-    async_channel::Receiver<UiEvent>,
-) {
-    let (commands, mut command_rx) = mpsc::unbounded_channel();
-    let (events, event_rx) = async_channel::bounded(8);
+) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
+    start_with_workers(runtime, HardwareProfile::detect, estimate)
+}
 
+#[cfg(test)]
+fn start_with_probe(
+    runtime: &tokio::runtime::Handle,
+    probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
+) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
+    start_with_workers(runtime, probe, estimate)
+}
+
+fn start_with_workers(
+    runtime: &tokio::runtime::Handle,
+    probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
+    fit: impl Fn(FitRequest) -> Result<FitReport, String> + Send + Sync + 'static,
+) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
+    start_with_runtime_workers(
+        runtime,
+        probe,
+        fit,
+        || async { OllamaAdapter::new()?.discover().await },
+        |model| async move { OllamaAdapter::new()?.inspect_model(&model).await },
+    )
+}
+
+fn start_with_runtime_workers<D, I>(
+    runtime: &tokio::runtime::Handle,
+    probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
+    fit: impl Fn(FitRequest) -> Result<FitReport, String> + Send + Sync + 'static,
+    discover: impl Fn() -> D + Send + 'static,
+    inspect: impl Fn(String) -> I + Send + 'static,
+) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>)
+where
+    D: std::future::Future<Output = Result<Discovery, String>> + Send,
+    I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
+{
+    start_with_all_workers(
+        runtime,
+        probe,
+        fit,
+        discover,
+        inspect,
+        history::run,
+        history::load_default,
+    )
+}
+
+fn start_with_all_workers<D, I, B>(
+    runtime: &tokio::runtime::Handle,
+    probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
+    fit: impl Fn(FitRequest) -> Result<FitReport, String> + Send + Sync + 'static,
+    discover: impl Fn() -> D + Send + 'static,
+    inspect: impl Fn(String) -> I + Send + 'static,
+    run_benchmark: impl Fn(InstalledModel, tokio::sync::watch::Receiver<bool>) -> B + Send + 'static,
+    load_history: impl Fn() -> Result<Vec<HistoryEntry>, String> + Send + Sync + 'static,
+) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>)
+where
+    D: std::future::Future<Output = Result<Discovery, String>> + Send,
+    I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
+    B: std::future::Future<Output = PersistedRun> + Send + 'static,
+{
+    let (commands, mut command_rx) = mpsc::channel(1);
+    let (events, event_rx) = async_channel::bounded(1);
+    let probe = Arc::new(probe);
+    let fit = Arc::new(fit);
+    let load_history = Arc::new(load_history);
     runtime.spawn(async move {
-        while let Some(command) = command_rx.recv().await {
-            let event = match command {
-                CoreCommand::Initialize => UiEvent::WorkerReady,
-            };
-            if events.send(event).await.is_err() {
-                break;
+        let mut pending = None;
+        let mut benchmark_jobs = tokio::task::JoinSet::new();
+        let mut benchmark_id = 0;
+        loop {
+            if events.is_closed() { break; }
+            let command = if let Some(command) = pending.take() { command } else { tokio::select! {
+                _ = events.closed() => break,
+                result = benchmark_jobs.join_next(), if !benchmark_jobs.is_empty() => {
+                    let PersistedRun { outcome, saved, resources } = match result {
+                        Some(Ok(result)) => result,
+                        _ => PersistedRun { outcome: BenchmarkOutcome::Failed { message: "Benchmark worker failed. Try again.".into(), partial: GenerationProgress::default() }, saved: Err("Benchmark worker stopped; reload history to inspect unfinished runs.".into()), resources: None },
+                    };
+                    if events.send(UiEvent::BenchmarkFinished { id: benchmark_id, outcome, resources: resources.map(Box::new) }).await.is_err() { break; }
+                    if events.send(UiEvent::BenchmarkHistorySaved { benchmark_id, result: saved }).await.is_err() { break; }
+                    continue;
+                }
+                command = command_rx.recv() => match command { Some(command) => command, None => break },
+            }};
+            match command {
+                CoreCommand::LoadBenchmarkHistory { id } => {
+                    let load = Arc::clone(&load_history);
+                    let result = tokio::select! {
+                        _ = events.closed() => break,
+                        result = tokio::task::spawn_blocking(move || load()) => result,
+                    }.unwrap_or_else(|_| Err("History worker failed. Reload to retry.".into()));
+                    if events.send(UiEvent::BenchmarkHistoryLoaded { id, result }).await.is_err() { break; }
+                }
+                CoreCommand::RunQuickBenchmark { id, model, cancel } => {
+                    if benchmark_jobs.is_empty() {
+                        benchmark_id = id;
+                        benchmark_jobs.spawn(run_benchmark(model, cancel));
+                    } else {
+                        let outcome = BenchmarkOutcome::Failed { message: "Another quick benchmark is still active. Retry after it finishes.".into(), partial: GenerationProgress::default() };
+                        if events.send(UiEvent::BenchmarkFinished { id, outcome, resources: None }).await.is_err() { break; }
+                    }
+                }
+                CoreCommand::DetectHardware => {
+                    let probe = Arc::clone(&probe);
+                    let result = tokio::select! {
+                        _ = events.closed() => break,
+                        result = tokio::task::spawn_blocking(move || probe()) => result,
+                    };
+                    // Coalesce only refreshes; a queued fit request must not be discarded.
+                    while let Ok(command) = command_rx.try_recv() {
+                        if matches!(command, CoreCommand::DetectHardware) { continue; }
+                        pending = Some(command);
+                        break;
+                    }
+                    let event = match result {
+                        Ok(profile) if profile.has_readings() => UiEvent::HardwareDetected(Box::new(profile)),
+                        Ok(profile) => UiEvent::HardwareFailed(profile.issues.iter()
+                            .map(|issue| format!("{}: {}", issue.component, issue.message))
+                            .collect::<Vec<_>>().join("\n")),
+                        Err(error) => UiEvent::HardwareFailed(format!("Hardware worker failed: {error}")),
+                    };
+                    if events.send(event).await.is_err() { break; }
+                }
+                CoreCommand::DiscoverOllama => {
+                    let result = tokio::select! {
+                        _ = events.closed() => break,
+                        result = discover() => result,
+                    };
+                    let event = match result {
+                        Ok(discovery) => UiEvent::OllamaDiscovered(Box::new(discovery)),
+                        Err(message) => UiEvent::OllamaFailed(message),
+                    };
+                    if events.send(event).await.is_err() { break; }
+                }
+                CoreCommand::InspectOllama { id, model } => {
+                    let result = tokio::select! {
+                        _ = events.closed() => break,
+                        result = inspect(model) => result.map(Box::new),
+                    };
+                    if events.send(UiEvent::OllamaInspected { id, result }).await.is_err() { break; }
+                }
+                CoreCommand::EstimateFit(request) => {
+                    let id = request.id;
+                    let fit = Arc::clone(&fit);
+                    let result = tokio::select! {
+                        _ = events.closed() => break,
+                        result = tokio::task::spawn_blocking(move || fit(request)) => result,
+                    };
+                    let result = result
+                        .map_err(|_| "Model inspection worker failed. Try again with a local GGUF file.".into())
+                        .and_then(|result| result)
+                        .map(Box::new);
+                    if events.send(UiEvent::FitFinished { id, result }).await.is_err() { break; }
+                }
             }
         }
     });
-
     (commands, event_rx)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::{
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+    use workstation_core::hardware::{MemoryPool, ProbeIssue};
 
-    #[tokio::test]
-    async fn delivers_event_and_closes_after_commands_are_dropped() {
-        let (commands, events) = start(&tokio::runtime::Handle::current());
-        commands.send(CoreCommand::Initialize).unwrap();
-        let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+    fn snapshot() -> HardwareProfile {
+        HardwareProfile {
+            profile_hash: None,
+            cpu: None,
+            system_ram: Some(MemoryPool {
+                total_bytes: 1024,
+                available_bytes: Some(512),
+            }),
+            gpus: Vec::new(),
+            issues: vec![ProbeIssue {
+                component: "CPU".into(),
+                message: "Fixture partial failure".into(),
+            }],
+            captured_at_unix_ms: 1,
+        }
+    }
+
+    async fn receive(events: &async_channel::Receiver<UiEvent>) -> UiEvent {
+        tokio::time::timeout(Duration::from_secs(2), events.recv())
             .await
             .unwrap()
-            .unwrap();
-        assert_eq!(event, UiEvent::WorkerReady);
+            .unwrap()
+    }
 
+    #[tokio::test]
+    async fn delivers_partial_readings_and_closes_with_commands() {
+        let (commands, events) = start_with_probe(&tokio::runtime::Handle::current(), snapshot);
+        commands.try_send(CoreCommand::DetectHardware).unwrap();
+        let UiEvent::HardwareDetected(profile) = receive(&events).await else {
+            panic!("Expected usable partial readings");
+        };
+        assert_eq!(profile.issues.len(), 1);
+        assert_eq!(profile.system_ram.unwrap().available_bytes, Some(512));
         drop(commands);
         assert!(
             tokio::time::timeout(Duration::from_secs(2), events.recv())
@@ -61,10 +281,474 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closed_event_channel_does_not_panic_worker() {
-        let (commands, events) = start(&tokio::runtime::Handle::current());
+    async fn empty_readings_and_panics_become_failure_events() {
+        let (commands, events) = start_with_probe(&tokio::runtime::Handle::current(), || {
+            let mut profile = snapshot();
+            profile.system_ram = None;
+            profile
+        });
+        commands.try_send(CoreCommand::DetectHardware).unwrap();
+        assert!(
+            matches!(receive(&events).await, UiEvent::HardwareFailed(message) if message.contains("Fixture partial"))
+        );
+        let (commands, events) = start_with_probe(&tokio::runtime::Handle::current(), || {
+            panic!("fixture probe panic")
+        });
+        commands.try_send(CoreCommand::DetectHardware).unwrap();
+        assert!(
+            matches!(receive(&events).await, UiEvent::HardwareFailed(message) if message.contains("Hardware worker failed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn coalesces_queued_refreshes_without_blocking_the_async_worker() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&calls);
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let gate = Mutex::new(gate);
+        let (commands, events) = start_with_probe(&tokio::runtime::Handle::current(), move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            started.send(()).unwrap();
+            gate.lock().unwrap().recv().unwrap();
+            snapshot()
+        });
+        commands.try_send(CoreCommand::DetectHardware).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        commands.try_send(CoreCommand::DetectHardware).unwrap();
+        assert!(commands.try_send(CoreCommand::DetectHardware).is_err());
+        release.send(()).unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::HardwareDetected(_)
+        ));
+        drop(commands);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), events.recv())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn closing_window_releases_command_channel_during_a_probe() {
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let gate = Mutex::new(gate);
+        let (commands, events) = start_with_probe(&tokio::runtime::Handle::current(), move || {
+            started.send(()).unwrap();
+            let _ = gate.lock().unwrap().recv();
+            snapshot()
+        });
+        commands.try_send(CoreCommand::DetectHardware).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         events.close();
-        commands.send(CoreCommand::Initialize).unwrap();
+        let closed = tokio::time::timeout(Duration::from_secs(2), commands.closed()).await;
+        release.send(()).unwrap();
+        assert!(closed.is_ok());
+    }
+
+    fn fit_request(id: u64) -> CoreCommand {
+        use workstation_core::fit::{gguf_fit::LayoutAssumption, memory_math::KvCacheType};
+        CoreCommand::EstimateFit(FitRequest {
+            id,
+            path: "unused-fixture-path".into(),
+            scenario: crate::fit_workflow::parse_scenario(
+                "4096",
+                "512",
+                KvCacheType::F16,
+                KvCacheType::F16,
+            )
+            .unwrap(),
+            layout: LayoutAssumption::Unconfirmed,
+        })
+    }
+
+    #[tokio::test]
+    async fn hardware_coalescing_preserves_a_queued_fit_request() {
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let gate = Mutex::new(gate);
+        let (commands, events) = start_with_workers(
+            &tokio::runtime::Handle::current(),
+            move || {
+                started.send(()).unwrap();
+                gate.lock().unwrap().recv().unwrap();
+                snapshot()
+            },
+            |_| Err("Fixture inspection failure".into()),
+        );
+        commands.try_send(CoreCommand::DetectHardware).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        commands.try_send(fit_request(42)).unwrap();
+        release.send(()).unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::HardwareDetected(_)
+        ));
+        assert!(matches!(receive(&events).await,
+            UiEvent::FitFinished { id: 42, result: Err(message) } if message == "Fixture inspection failure"));
+    }
+
+    #[tokio::test]
+    async fn fit_jobs_are_not_coalesced_and_do_not_block_the_async_executor() {
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let gate = Mutex::new(gate);
+        let (commands, events) = start_with_workers(
+            &tokio::runtime::Handle::current(),
+            snapshot,
+            move |request| {
+                started.send(request.id).unwrap();
+                gate.lock().unwrap().recv().unwrap();
+                Err("Fixture fit result".into())
+            },
+        );
+        commands.try_send(fit_request(1)).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+                .await
+                .unwrap(),
+            Some(1)
+        );
+        commands.try_send(fit_request(2)).unwrap();
+        release.send(()).unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::FitFinished { id: 1, .. }
+        ));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+                .await
+                .unwrap(),
+            Some(2)
+        );
+        release.send(()).unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::FitFinished { id: 2, .. }
+        ));
+        drop(commands);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), events.recv())
+                .await
+                .unwrap()
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_window_releases_commands_during_fit_and_panics_are_reported() {
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let gate = Mutex::new(gate);
+        let (commands, events) =
+            start_with_workers(&tokio::runtime::Handle::current(), snapshot, move |_| {
+                started.send(()).unwrap();
+                let _ = gate.lock().unwrap().recv();
+                Err("Fixture ended".into())
+            });
+        commands.try_send(fit_request(9)).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        events.close();
+        let closed = tokio::time::timeout(Duration::from_secs(2), commands.closed()).await;
+        release.send(()).unwrap();
+        assert!(closed.is_ok());
+
+        let (commands, events) =
+            start_with_workers(&tokio::runtime::Handle::current(), snapshot, |_| {
+                panic!("Fixture inspection panic")
+            });
+        commands.try_send(fit_request(10)).unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::FitFinished { id: 10, result: Err(message) } if message.contains("Model inspection worker failed")));
+    }
+    #[tokio::test]
+    async fn preserves_partial_runtime_results_and_inspection_request_identity() {
+        let (commands, events) = start_with_runtime_workers(
+            &tokio::runtime::Handle::current(),
+            snapshot,
+            |_| Err("unused fit".into()),
+            || async {
+                Ok(Discovery {
+                    version: "fixture".into(),
+                    installed: Ok(vec![]),
+                    running: Err("fixture inventory failure".into()),
+                })
+            },
+            |model| async move {
+                if model == "missing" {
+                    return Err("fixture model removed".into());
+                }
+                assert_eq!(model, "chosen:latest");
+                Ok(ModelInspection {
+                    metadata: Err("fixture metadata failure".into()),
+                    running: Ok(vec![]),
+                })
+            },
+        );
+        commands.try_send(CoreCommand::DiscoverOllama).unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::OllamaDiscovered(snapshot) if snapshot.installed.is_ok() && snapshot.running.is_err()));
+        commands
+            .try_send(CoreCommand::InspectOllama {
+                id: 17,
+                model: "chosen:latest".into(),
+            })
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::OllamaInspected { id: 17, result: Ok(report) }
+                if report.metadata.is_err() && report.running.is_ok()));
+        commands
+            .try_send(CoreCommand::InspectOllama {
+                id: 18,
+                model: "missing".into(),
+            })
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::OllamaInspected { id: 18, result: Err(message) } if message == "fixture model removed"));
+        drop(commands);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), events.recv())
+                .await
+                .unwrap()
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_window_cancels_pending_discovery_and_model_inspection() {
+        for inspection in [false, true] {
+            let (started, mut started_rx) = mpsc::unbounded_channel();
+            let inspection_started = started.clone();
+            let (commands, events) = start_with_runtime_workers(
+                &tokio::runtime::Handle::current(),
+                snapshot,
+                |_| Err("unused fit".into()),
+                move || {
+                    started.send(()).unwrap();
+                    std::future::pending()
+                },
+                move |_| {
+                    inspection_started.send(()).unwrap();
+                    std::future::pending()
+                },
+            );
+            commands
+                .try_send(if inspection {
+                    CoreCommand::InspectOllama {
+                        id: 1,
+                        model: "fixture".into(),
+                    }
+                } else {
+                    CoreCommand::DiscoverOllama
+                })
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            events.close();
+            tokio::time::timeout(Duration::from_secs(2), commands.closed())
+                .await
+                .unwrap();
+        }
+    }
+    fn benchmark_model() -> InstalledModel {
+        InstalledModel {
+            name: "fixture".into(),
+            digest: None,
+            size: None,
+            details: None,
+            remote_model: None,
+            remote_host: None,
+        }
+    }
+
+    fn with_benchmark<B>(
+        run: impl Fn(InstalledModel, tokio::sync::watch::Receiver<bool>) -> B + Send + 'static,
+    ) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>)
+    where
+        B: std::future::Future<Output = BenchmarkOutcome> + Send + 'static,
+    {
+        start_with_all_workers(
+            &tokio::runtime::Handle::current(),
+            snapshot,
+            |_| Err("unused fit".into()),
+            || async { Err("fixture discovery failure".into()) },
+            |_| async { Err("unused inspection".into()) },
+            move |model, cancel| {
+                let future = run(model, cancel);
+                async move {
+                    PersistedRun {
+                        outcome: future.await,
+                        saved: Ok(1),
+                        resources: Some(ResourceSummary {
+                            samples: 2,
+                            ..ResourceSummary::default()
+                        }),
+                    }
+                }
+            },
+            || Ok(vec![]),
+        )
+    }
+
+    #[tokio::test]
+    async fn benchmark_does_not_block_other_commands_and_duplicate_runs_are_rejected() {
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (commands, events) = with_benchmark(move |_, mut cancel| {
+            started.send(()).unwrap();
+            async move {
+                cancel.changed().await.unwrap();
+                BenchmarkOutcome::Cancelled(GenerationProgress::default())
+            }
+        });
+        let (cancel, cancellation) = tokio::sync::watch::channel(false);
+        commands
+            .try_send(CoreCommand::RunQuickBenchmark {
+                id: 71,
+                model: benchmark_model(),
+                cancel: cancellation,
+            })
+            .unwrap();
+        started_rx.recv().await.unwrap();
+        commands.try_send(CoreCommand::DiscoverOllama).unwrap();
+        assert!(matches!(receive(&events).await, UiEvent::OllamaFailed(_)));
+        let (_other, cancellation) = tokio::sync::watch::channel(false);
+        commands
+            .try_send(CoreCommand::RunQuickBenchmark {
+                id: 72,
+                model: benchmark_model(),
+                cancel: cancellation,
+            })
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::BenchmarkFinished {
+                id: 72,
+                outcome: BenchmarkOutcome::Failed { .. },
+                ..
+            }
+        ));
+        cancel.send(true).unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::BenchmarkFinished {
+                id: 71,
+                outcome: BenchmarkOutcome::Cancelled(_),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn history_is_loaded_by_request_and_result_precedes_save_feedback() {
+        let (commands, events) = with_benchmark(|_, _| async {
+            BenchmarkOutcome::Cancelled(GenerationProgress::default())
+        });
+        commands
+            .send(CoreCommand::LoadBenchmarkHistory { id: 10 })
+            .await
+            .unwrap();
+        assert!(
+            matches!(receive(&events).await, UiEvent::BenchmarkHistoryLoaded { id: 10, result: Ok(rows) } if rows.is_empty())
+        );
+        let (_cancel, cancel) = tokio::sync::watch::channel(false);
+        commands
+            .send(CoreCommand::RunQuickBenchmark {
+                id: 11,
+                model: benchmark_model(),
+                cancel,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::BenchmarkFinished { id: 11, resources: Some(readings), .. } if readings.samples == 2
+        ));
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::BenchmarkHistorySaved {
+                benchmark_id: 11,
+                result: Ok(1)
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn benchmark_worker_panics_become_retryable_failures() {
+        let (commands, events) = with_benchmark(|_, _| async { panic!("fixture benchmark panic") });
+        for id in [81, 82] {
+            let (_cancel, cancellation) = tokio::sync::watch::channel(false);
+            commands
+                .try_send(CoreCommand::RunQuickBenchmark {
+                    id,
+                    model: benchmark_model(),
+                    cancel: cancellation,
+                })
+                .unwrap();
+            assert!(
+                matches!(receive(&events).await, UiEvent::BenchmarkFinished { id: reply_id, outcome: BenchmarkOutcome::Failed { .. }, .. } if reply_id == id)
+            );
+            assert!(
+                matches!(receive(&events).await, UiEvent::BenchmarkHistorySaved { benchmark_id, result: Err(_) } if benchmark_id == id)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn closing_window_drops_active_benchmark_future() {
+        struct Dropped(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+        let (started, mut started_rx) = mpsc::unbounded_channel();
+        let (dropped, mut dropped_rx) = mpsc::unbounded_channel();
+        let (commands, events) = with_benchmark(move |_, _| {
+            let started = started.clone();
+            let dropped = dropped.clone();
+            async move {
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                dropped.send(receiver).unwrap();
+                let _guard = Dropped(Some(sender));
+                started.send(()).unwrap();
+                std::future::pending().await
+            }
+        });
+        let (_cancel, cancellation) = tokio::sync::watch::channel(false);
+        commands
+            .try_send(CoreCommand::RunQuickBenchmark {
+                id: 91,
+                model: benchmark_model(),
+                cancel: cancellation,
+            })
+            .unwrap();
+        started_rx.recv().await.unwrap();
+        let dropped = dropped_rx.recv().await.unwrap();
+        events.close();
+        tokio::time::timeout(Duration::from_secs(2), dropped)
+            .await
+            .unwrap()
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(2), commands.closed())
             .await
             .unwrap();
