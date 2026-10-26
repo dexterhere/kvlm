@@ -21,11 +21,12 @@ use workstation_runtimes::llamacpp::{
 use super::managed_editor;
 use crate::{
     bridge::{CoreCommand, UiEvent},
-    managed::{Live, ManagedCommand, ManagedEvent, Snapshot},
+    managed::{Live, ManagedCommand, ManagedEvent, Snapshot, holds_process},
 };
 
 const MAX_TEXT: usize = 300;
 const LOG_REFRESH_MS: u32 = 1000;
+const LOAD_RETRIES: u32 = 20;
 
 /// Which actions the current state allows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,12 +36,22 @@ pub(super) struct Controls {
     pub restart: bool,
 }
 
-pub(super) fn controls(state: RuntimeLifecycleState, has_build: bool) -> Controls {
+pub(super) fn controls(live: Option<&Live>, has_build: bool) -> Controls {
     use RuntimeLifecycleState as S;
+    let Some(live) = live else {
+        return Controls {
+            start: has_build,
+            stop: false,
+            restart: false,
+        };
+    };
+    let state = live.state();
+    // A child that a failed stop could not reap is still ours: offer Stop again, never Start.
+    let stuck = holds_process(&live.status) && !state.is_live();
     Controls {
-        start: has_build && matches!(state, S::Stopped | S::Failed),
-        stop: matches!(state, S::Starting | S::Ready | S::Busy),
-        restart: matches!(state, S::Ready | S::Busy | S::Failed),
+        start: has_build && matches!(state, S::Stopped | S::Failed) && !stuck,
+        stop: matches!(state, S::Starting | S::Ready | S::Busy) || stuck,
+        restart: matches!(state, S::Ready | S::Busy | S::Failed) && !stuck,
     }
 }
 
@@ -122,7 +133,7 @@ fn clip(text: &str) -> String {
 #[derive(Default)]
 struct State {
     next_id: u64,
-    /// Newest snapshot request already applied; older answers arriving later are dropped.
+    /// Highest snapshot revision shown; an older one arriving later is dropped.
     applied: u64,
     load: Option<u64>,
     builds_request: Option<u64>,
@@ -144,10 +155,10 @@ impl State {
         self.next_id
     }
 
-    fn live_state(&self) -> RuntimeLifecycleState {
+    fn holds_process(&self) -> bool {
         self.live
             .as_ref()
-            .map_or(RuntimeLifecycleState::Stopped, Live::state)
+            .is_some_and(|live| holds_process(&live.status))
     }
 
     fn build(&self) -> Option<&str> {
@@ -238,10 +249,7 @@ impl ManagedCard {
 
     /// Reads saved state and starts supervision (local files only; no network).
     pub fn load(&self) {
-        let id = self.inner.state.borrow_mut().id();
-        if send(&self.inner, ManagedCommand::Load { id }) {
-            self.inner.state.borrow_mut().load = Some(id);
-        }
+        try_load(&self.inner, 0);
     }
 
     pub fn receive(&self, event: &UiEvent) {
@@ -256,15 +264,14 @@ impl ManagedCard {
                     if state.load == Some(*id) {
                         state.load = None;
                     }
-                    if *id >= state.applied {
-                        match result {
-                            Ok(snapshot) => {
-                                state.applied = *id;
-                                state.notice = snapshot.supervisor_error.clone();
-                                state.snapshot = Some((**snapshot).clone());
-                            }
-                            Err(message) => state.notice = Some(message.clone()),
+                    match result {
+                        Ok(snapshot) if snapshot.revision > state.applied => {
+                            state.applied = snapshot.revision;
+                            state.notice = snapshot.supervisor_error.clone();
+                            state.snapshot = Some((**snapshot).clone());
                         }
+                        Ok(_) => {}
+                        Err(message) => state.notice = Some(message.clone()),
                     }
                 }
                 ManagedEvent::Builds { id, result } if state.builds_request == Some(*id) => {
@@ -289,8 +296,10 @@ impl ManagedCard {
                         Ok(snapshot) => {
                             state.notice = None;
                             state.builds = None;
-                            state.applied = state.applied.max(*id);
-                            state.snapshot = Some((**snapshot).clone());
+                            if snapshot.revision > state.applied {
+                                state.applied = snapshot.revision;
+                                state.snapshot = Some((**snapshot).clone());
+                            }
                         }
                         Err(message) => state.notice = Some(message.clone()),
                     }
@@ -311,6 +320,32 @@ impl ManagedCard {
         }
         render(inner);
     }
+}
+
+/// The command queue holds one request, and the page opens while other startup work is
+/// queued, so a refused Load is retried shortly instead of being lost.
+fn try_load(inner: &Rc<Inner>, attempt: u32) {
+    let id = inner.state.borrow_mut().id();
+    if inner
+        .commands
+        .try_send(CoreCommand::Managed(ManagedCommand::Load { id }))
+        .is_ok()
+    {
+        inner.state.borrow_mut().load = Some(id);
+        return;
+    }
+    if attempt >= LOAD_RETRIES {
+        inner.state.borrow_mut().notice =
+            Some("The runtime state could not be loaded. Restart the application.".into());
+        render(inner);
+        return;
+    }
+    let weak = Rc::downgrade(inner);
+    gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+        if let Some(inner) = weak.upgrade() {
+            try_load(&inner, attempt + 1);
+        }
+    });
 }
 
 fn clip_lines(lines: &[String]) -> String {
@@ -363,7 +398,7 @@ fn render(inner: &Rc<Inner>) {
         .use_markup(false)
         .subtitle_lines(0)
         .build();
-    let allowed = controls(state.live_state(), state.build().is_some());
+    let allowed = controls(state.live.as_ref(), state.build().is_some());
     let busy = state.action.is_some();
     let mut server_buttons = Vec::new();
     for (label, on, command) in [
@@ -423,8 +458,7 @@ fn render(inner: &Rc<Inner>) {
         row.add_prefix(&pick);
         let remove = gtk::Button::with_mnemonic("Re_move");
         remove.set_valign(gtk::Align::Center);
-        remove
-            .set_sensitive(!installing && !state.live_state().is_live() && state.action.is_none());
+        remove.set_sensitive(!installing && !state.holds_process() && state.action.is_none());
         remove.add_css_class("destructive-action");
         let weak = Rc::downgrade(inner);
         let dir = install.dir_name.clone();
@@ -760,7 +794,7 @@ mod tests {
     #[test]
     fn controls_follow_the_lifecycle() {
         use RuntimeLifecycleState as S;
-        let c = |state, build| controls(state, build);
+        let c = |state, build| controls(Some(&live(state)), build);
         assert_eq!(
             c(S::Stopped, true),
             Controls {
@@ -782,6 +816,27 @@ mod tests {
                 restart: false
             }
         );
+        // Before the supervisor has reported anything, a build is enough to start.
+        assert!(controls(None, true).start && !controls(None, false).start);
+    }
+
+    #[test]
+    fn a_child_kept_after_a_failed_stop_can_only_be_stopped_again() {
+        let mut stuck = live(RuntimeLifecycleState::Failed);
+        stuck.status.failure = Some(Failure {
+            kind: FailureKind::StuckOnStop,
+            exit_code: None,
+            last_lines: vec![],
+        });
+        assert_eq!(
+            controls(Some(&stuck), true),
+            Controls {
+                start: false,
+                stop: true,
+                restart: false
+            }
+        );
+        assert!(holds_process(&stuck.status));
     }
 
     #[test]

@@ -707,7 +707,9 @@ where
         let mut managed_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         let mut install_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         let mut install_cancel = Arc::new(AtomicBool::new(false));
-        let (install_tx, mut install_rx) = mpsc::unbounded_channel::<workstation_runtimes::llamacpp::install::Progress>();
+        // Latest reading only, so a slow consumer can never build a backlog.
+        let (install_tx, mut install_rx) = tokio::sync::watch::channel::<Option<workstation_runtimes::llamacpp::install::Progress>>(None);
+        let install_tx = Arc::new(install_tx);
         let mut live_rx = managed.live();
         let mut live_open = true;
         loop {
@@ -772,14 +774,18 @@ where
                     continue;
                 }
                 result = install_jobs.join_next(), if !install_jobs.is_empty() => {
-                    while install_rx.try_recv().is_ok() {}
+                    // A reading from before the end would only be stale.
+                    install_tx.send_replace(None);
+                    install_rx.borrow_and_update();
                     if let Some(Ok(event)) = result
                         && events.send(event).await.is_err() { break; }
                     continue;
                 }
-                Some(mut latest) = install_rx.recv() => {
-                    while let Ok(next) = install_rx.try_recv() { latest = next; }
-                    if events.send(UiEvent::Managed(ManagedEvent::InstallProgress(latest))).await.is_err() { break; }
+                changed = install_rx.changed() => {
+                    if changed.is_err() { continue; }
+                    let latest = *install_rx.borrow_and_update();
+                    if let Some(latest) = latest
+                        && events.send(UiEvent::Managed(ManagedEvent::InstallProgress(latest))).await.is_err() { break; }
                     continue;
                 }
                 changed = live_rx.changed(), if live_open => {
@@ -935,9 +941,9 @@ where
                     ManagedCommand::Install { id, candidate } => {
                         if install_jobs.is_empty() {
                             install_cancel = Arc::new(AtomicBool::new(false));
-                            let (managed, cancel, tx) = (Arc::clone(&managed), Arc::clone(&install_cancel), install_tx.clone());
+                            let (managed, cancel, tx) = (Arc::clone(&managed), Arc::clone(&install_cancel), Arc::clone(&install_tx));
                             install_jobs.spawn(guarded(id, managed_failed, async move {
-                                let report = Box::new(move |p| { let _ = tx.send(p); });
+                                let report = Box::new(move |p| { tx.send_replace(Some(p)); });
                                 let result = managed.install(*candidate, cancel, report).await.map(Box::new);
                                 UiEvent::Managed(ManagedEvent::Installed { id, result })
                             }));

@@ -23,7 +23,7 @@ use workstation_runtimes::{
         install::{Installer, Progress, remove_install},
         release::{Backend, Candidate, detect_backends},
     },
-    supervisor::{StartSpec, Status, Supervisor, record::Reclaim},
+    supervisor::{FailureKind, StartSpec, Status, Supervisor, record::Reclaim},
 };
 
 use crate::bridge::BoxFuture;
@@ -38,6 +38,8 @@ pub struct Snapshot {
     pub profiles: Vec<LaunchProfile>,
     /// Builds worth offering on this machine (reads loader files; runs nothing).
     pub backends: Vec<Backend>,
+    /// Grows with every committed change; a viewer keeps only the highest one it has seen.
+    pub revision: u64,
     /// Why supervision is unavailable (for example another instance manages the runtime).
     pub supervisor_error: Option<String>,
 }
@@ -49,6 +51,16 @@ pub struct Live {
     /// `Busy` is derived here from the server's own counters, never invented.
     pub busy: Option<bool>,
     pub props: Option<Props>,
+}
+
+/// Whether a child may still exist that must be stopped first: running, or kept after a
+/// stop that could not reap it.
+pub fn holds_process(status: &Status) -> bool {
+    status.state.is_live()
+        || status
+            .failure
+            .as_ref()
+            .is_some_and(|f| f.kind == FailureKind::StuckOnStop)
 }
 
 impl Live {
@@ -170,10 +182,10 @@ pub fn live() -> Arc<LiveManaged> {
 pub fn shutdown_blocking(runtime: &tokio::runtime::Handle) {
     if let Some(host) = LIVE.get() {
         let host = Arc::clone(host);
-        let _ = runtime.block_on(tokio::time::timeout(
-            Duration::from_secs(15),
-            host.shutdown(),
-        ));
+        // The timer must be created inside the runtime, hence the async block.
+        let _ = runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(15), host.shutdown()).await
+        });
     }
 }
 
@@ -189,8 +201,11 @@ struct Core {
     logs: Mutex<Option<workstation_runtimes::supervisor::log::LogBuffer>>,
     live_tx: watch::Sender<Option<Live>>,
     live_rx: watch::Receiver<Option<Live>>,
-    /// The build directory the current process runs from, so it is never removed.
-    running_dir: Mutex<Option<String>>,
+    /// Serializes changes to saved state and to the installed builds (and their use by a
+    /// start), so a removal can never overlap a start and snapshots carry a true order.
+    /// Lock order: `ops`, then `sup`.
+    ops: tokio::sync::Mutex<()>,
+    revision: std::sync::atomic::AtomicU64,
     forwarder: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -235,9 +250,10 @@ fn open_store() -> Result<HistoryStore, String> {
     HistoryStore::open(&default_database_path()?)
 }
 
-fn read_snapshot() -> Result<Snapshot, String> {
+fn read_snapshot(revision: u64) -> Result<Snapshot, String> {
     let store = open_store()?;
     Ok(Snapshot {
+        revision,
         installs: store.list_installs()?,
         profiles: store.list_profiles()?,
         backends: detect_backends(),
@@ -253,7 +269,8 @@ impl Core {
             logs: Mutex::new(None),
             live_tx,
             live_rx,
-            running_dir: Mutex::new(None),
+            ops: tokio::sync::Mutex::new(()),
+            revision: std::sync::atomic::AtomicU64::new(0),
             forwarder: Mutex::new(None),
         }
     }
@@ -390,28 +407,17 @@ impl ManagedBackend for LiveManaged {
         cancel: Arc<AtomicBool>,
         progress: Box<dyn FnMut(Progress) + Send>,
     ) -> BoxFuture<Result<Snapshot, String>> {
-        Box::pin(async move { install(candidate, cancel, progress).await })
+        let core = Arc::clone(&self.0);
+        Box::pin(async move { core.install(candidate, cancel, progress).await })
     }
     fn remove_install(&self, dir_name: String) -> BoxFuture<Result<Snapshot, String>> {
         delegate!(self, remove_install(dir_name))
     }
     fn save_profile(&self, profile: LaunchProfile) -> BoxFuture<Result<Snapshot, String>> {
-        Box::pin(async move {
-            blocking(move || {
-                open_store()?.save_profile(&profile, now_ms())?;
-                read_snapshot()
-            })
-            .await
-        })
+        delegate!(self, save_profile(profile))
     }
     fn delete_profile(&self, name: String) -> BoxFuture<Result<Snapshot, String>> {
-        Box::pin(async move {
-            blocking(move || {
-                open_store()?.delete_profile(&name)?;
-                read_snapshot()
-            })
-            .await
-        })
+        delegate!(self, delete_profile(name))
     }
     fn start(&self, profile: String, dir_name: String) -> BoxFuture<Result<(), String>> {
         delegate!(self, start(profile, dir_name))
@@ -450,52 +456,77 @@ async fn builds(backends: Vec<Backend>) -> Result<Vec<Candidate>, String> {
         .map_err(|e| e.to_string())
 }
 
-async fn install(
-    candidate: Candidate,
-    cancel: Arc<AtomicBool>,
-    progress: Box<dyn FnMut(Progress) + Send>,
-) -> Result<Snapshot, String> {
-    let paths = blocking(paths).await?;
-    let installed = Installer::new()
-        .map_err(|e| e.to_string())?
-        .install(&paths.install_root, &candidate, &cancel, progress)
-        .await
-        .map_err(|e| e.to_string())?;
-    blocking(move || {
-        open_store()?.record_install(&InstallRow {
-            version: installed.tag,
-            backend: installed.backend.as_str().into(),
-            dir_name: installed.dir_name,
-            sha256: installed.sha256,
-            installed_at_unix_ms: now_ms(),
-        })?;
-        read_snapshot()
-    })
-    .await
-}
-
 impl Core {
     /// Reads the saved state and starts supervision, which also stops a child left over
     /// from a crashed run. Local files only.
     async fn snapshot(&self) -> Result<Snapshot, String> {
         let supervisor_error = self.up().await.err();
-        let mut snapshot = blocking(read_snapshot).await?;
+        let _ops = self.ops.lock().await;
+        let mut snapshot = self.read().await?;
         snapshot.supervisor_error = supervisor_error;
         Ok(snapshot)
     }
 
+    /// Call with `ops` held, so the revision matches the committed state.
+    async fn read(&self) -> Result<Snapshot, String> {
+        let revision = self
+            .revision
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        blocking(move || read_snapshot(revision)).await
+    }
+
+    async fn save_profile(&self, profile: LaunchProfile) -> Result<Snapshot, String> {
+        let _ops = self.ops.lock().await;
+        blocking(move || open_store()?.save_profile(&profile, now_ms())).await?;
+        self.read().await
+    }
+
+    async fn delete_profile(&self, name: String) -> Result<Snapshot, String> {
+        let _ops = self.ops.lock().await;
+        blocking(move || open_store()?.delete_profile(&name)).await?;
+        self.read().await
+    }
+
+    /// The download and extraction run outside `ops`, so profiles stay editable meanwhile;
+    /// only the final record is serialized.
+    async fn install(
+        &self,
+        candidate: Candidate,
+        cancel: Arc<AtomicBool>,
+        progress: Box<dyn FnMut(Progress) + Send>,
+    ) -> Result<Snapshot, String> {
+        let paths = blocking(paths).await?;
+        let installed = Installer::new()
+            .map_err(|e| e.to_string())?
+            .install(&paths.install_root, &candidate, &cancel, progress)
+            .await
+            .map_err(|e| e.to_string())?;
+        let _ops = self.ops.lock().await;
+        blocking(move || {
+            open_store()?.record_install(&InstallRow {
+                version: installed.tag,
+                backend: installed.backend.as_str().into(),
+                dir_name: installed.dir_name,
+                sha256: installed.sha256,
+                installed_at_unix_ms: now_ms(),
+            })
+        })
+        .await?;
+        self.read().await
+    }
+
     async fn remove_install(&self, dir_name: String) -> Result<Snapshot, String> {
-        let running = self
-            .running_dir
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let live = self.live_rx.borrow().as_ref().map(|l| l.status.state);
-        // A live process may still be using the build; name it so it is never removed.
-        let in_use = live
-            .is_some_and(RuntimeLifecycleState::is_live)
-            .then_some(running)
-            .flatten();
+        let _ops = self.ops.lock().await;
+        // Ask the supervisor itself, not a cached copy: while `ops` is held no start can
+        // begin, so what it reports now stays true until the removal is done.
+        let holds = match &*self.sup.lock().await {
+            Sup::Up(supervisor) => holds_process(&supervisor.status()),
+            _ => false,
+        };
+        if holds {
+            return Err("Stop the server before removing a build.".into());
+        }
         let paths = blocking(paths).await?;
         blocking(move || {
             let store = open_store()?;
@@ -504,15 +535,15 @@ impl Core {
                 .into_iter()
                 .find(|r| r.dir_name == dir_name)
                 .ok_or("That build is not one of the installed runtimes.")?;
-            remove_install(&paths.install_root, &dir_name, in_use.as_deref())
-                .map_err(|e| e.to_string())?;
-            store.delete_install(&row.version, &row.backend)?;
-            read_snapshot()
+            remove_install(&paths.install_root, &dir_name, None).map_err(|e| e.to_string())?;
+            store.delete_install(&row.version, &row.backend)
         })
-        .await
+        .await?;
+        self.read().await
     }
 
     async fn start(&self, profile: String, dir_name: String) -> Result<(), String> {
+        let _ops = self.ops.lock().await;
         let (profile, row) = blocking(move || {
             let store = open_store()?;
             let profile = store
@@ -534,7 +565,6 @@ impl Core {
         let mut spec = StartSpec::new(paths.install_root, row.dir_name.clone(), profile);
         spec.auto_restart = true;
         supervisor.start(spec).await.map_err(|e| e.to_string())?;
-        *self.running_dir.lock().unwrap_or_else(|e| e.into_inner()) = Some(row.dir_name);
         Ok(())
     }
 
@@ -591,6 +621,7 @@ pub(crate) mod fake {
             Self {
                 calls: Mutex::default(),
                 snapshot: Mutex::new(Snapshot {
+                    revision: 0,
                     installs: Vec::new(),
                     profiles: Vec::new(),
                     backends: vec![Backend::Cpu],
@@ -629,7 +660,9 @@ pub(crate) mod fake {
             }));
         }
         fn current(&self) -> Snapshot {
-            self.snapshot.lock().unwrap().clone()
+            let mut snapshot = self.snapshot.lock().unwrap();
+            snapshot.revision += 1;
+            snapshot.clone()
         }
     }
 
@@ -681,6 +714,7 @@ pub(crate) mod fake {
             let mut snapshot = self.snapshot.lock().unwrap();
             snapshot.profiles.retain(|p| p.name != profile.name);
             snapshot.profiles.push(profile);
+            snapshot.revision += 1;
             let copy = snapshot.clone();
             Box::pin(async move { Ok(copy) })
         }
@@ -688,6 +722,7 @@ pub(crate) mod fake {
             self.note(format!("delete {name}"));
             let mut snapshot = self.snapshot.lock().unwrap();
             snapshot.profiles.retain(|p| p.name != name);
+            snapshot.revision += 1;
             let copy = snapshot.clone();
             Box::pin(async move { Ok(copy) })
         }

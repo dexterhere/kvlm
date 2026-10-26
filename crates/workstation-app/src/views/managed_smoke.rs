@@ -65,6 +65,7 @@ fn snapshot() -> Snapshot {
         }],
         backends: vec![Backend::Cpu],
         supervisor_error: None,
+        revision: 1,
     }
 }
 
@@ -164,25 +165,6 @@ fn start_stop_and_install_flow() {
         CoreCommand::Managed(ManagedCommand::Stop { .. })
     ));
 
-    // A full channel is reported instead of dropping the click.
-    let (tiny, _keep) = tokio::sync::mpsc::channel(1);
-    let busy = ManagedCard::new(tiny.clone());
-    tiny.try_send(CoreCommand::DetectHardware).unwrap();
-    busy.load();
-    pump();
-    let mut texts = Vec::new();
-    fn walk(w: &gtk::Widget, out: &mut Vec<String>) {
-        if let Ok(l) = w.clone().downcast::<gtk::Label>() {
-            out.push(l.label().to_string());
-        }
-        let mut c = w.first_child();
-        while let Some(n) = c {
-            walk(&n, out);
-            c = n.next_sibling();
-        }
-    }
-    walk(&busy.widget.clone().upcast(), &mut texts);
-    assert!(texts.iter().any(|t| t.contains("busy or closing")));
     window.close();
     find_install_progress_and_cancel_flow();
 }
@@ -200,6 +182,7 @@ fn find_install_progress_and_cancel_flow() {
         other => panic!("unexpected {other:?}"),
     };
     let mut empty = snapshot();
+    empty.revision = 1;
     empty.installs.clear();
     card.receive(&UiEvent::Managed(ManagedEvent::Snapshot {
         id: load_id,
