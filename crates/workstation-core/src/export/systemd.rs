@@ -36,10 +36,10 @@ pub fn user_unit(profile: &LaunchProfile, program: &str) -> Result<String, Strin
         || program.split('/').any(|part| part == "..")
         || program
             .chars()
-            .any(|c| c.is_control() || "\"'\\$%".contains(c))
+            .any(|c| c.is_control() || "\"'\\$%:;".contains(c))
     {
         return Err(
-            "The llama-server path must be absolute, without '..', quotes, backslashes, '$' or '%'."
+            "The llama-server path must be absolute, without '..', quotes, backslashes, ':', ';', '$' or '%'."
                 .into(),
         );
     }

@@ -68,6 +68,8 @@ fn unit_text_escapes_specifiers_variables_and_quotes() {
     assert!(systemd::user_unit(&profile(HOSTILE), "llama-server").is_err());
     assert!(systemd::user_unit(&profile(HOSTILE), "/opt/../llama-server").is_err());
     assert!(systemd::user_unit(&profile(HOSTILE), "/opt/a%h/llama-server").is_err());
+    assert!(systemd::user_unit(&profile(HOSTILE), "/opt/a:b/llama-server").is_err());
+    assert!(systemd::user_unit(&profile(HOSTILE), "/opt/a;b/llama-server").is_err());
 }
 
 #[test]
