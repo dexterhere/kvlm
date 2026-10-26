@@ -11,6 +11,8 @@ const FEED: &str = "https://api.github.com/repos/dexterhere/kvlm/releases/latest
 const RELEASES: &str = "https://github.com/dexterhere/kvlm/releases/tag/";
 const MAX_BODY: usize = 256 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// GitHub requires a user agent. It names the program only, never the installed version.
+const USER_AGENT: &str = "local-ai-workstation";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UpdateError {
@@ -67,7 +69,7 @@ async fn check_at(url: &str, current: &str) -> Result<Outcome, UpdateError> {
         .referer(false)
         .timeout(TIMEOUT)
         .connect_timeout(TIMEOUT)
-        .user_agent(concat!("local-ai-workstation/", env!("CARGO_PKG_VERSION")))
+        .user_agent(USER_AGENT)
         .build()
         .map_err(|_| UpdateError::BadResponse)?;
     let mut response = client
@@ -135,6 +137,11 @@ mod tests {
     async fn run(reply: crate::test_server::Reply, current: &str) -> Result<Outcome, UpdateError> {
         let server = Server::start(move |_| vec![route(FEED_LINE, reply.clone())]);
         check_at(&format!("http://127.0.0.1:{}/feed", server.port()), current).await
+    }
+
+    #[test]
+    fn the_user_agent_does_not_reveal_the_installed_version() {
+        assert!(!USER_AGENT.chars().any(|c| c.is_ascii_digit() || c == '/'));
     }
 
     #[test]

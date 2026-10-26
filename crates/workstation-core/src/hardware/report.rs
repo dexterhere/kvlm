@@ -25,22 +25,59 @@ fn pool(pool: Option<MemoryPool>) -> String {
     }
 }
 
-/// Free text from a probe is cut and stripped so a report cannot smuggle control characters,
-/// and every known device identifier is removed from it, because names and error messages
-/// can carry a bus address.
+/// Free text from a probe is cut and stripped so a report cannot smuggle control characters.
+/// Known device identifiers (in raw and normalized forms) are replaced, and so is any word
+/// that looks like a path, an address, a timestamp or a UUID, because names and error
+/// messages can carry them.
 fn text(value: &str, secrets: &[String]) -> String {
     let mut clean: String = value.chars().filter(|c| !c.is_control()).collect();
     for secret in secrets {
         clean = clean.replace(secret.as_str(), "[redacted]");
     }
-    clean.chars().take(120).collect()
+    let words: Vec<&str> = clean
+        .split(' ')
+        .map(|word| {
+            if looks_private(word) {
+                "[redacted]"
+            } else {
+                word
+            }
+        })
+        .collect();
+    words.join(" ").chars().take(120).collect()
+}
+
+fn looks_private(word: &str) -> bool {
+    let word = word.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | '.' | '\'' | '"'));
+    word.starts_with(['/', '~'])
+        || word.matches('/').count() >= 2
+        || word.contains(['\\', '@'])
+        || (word.contains(':') && word.bytes().any(|b| b.is_ascii_digit()))
+        || (word.len() >= 16
+            && word
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            && word.bytes().any(|b| b.is_ascii_digit()))
+}
+
+/// An identifier and the forms it may appear in elsewhere: without a `pci:` prefix, and
+/// without the PCI domain.
+fn forms(id: &str) -> Vec<String> {
+    let bare = id.strip_prefix("pci:").unwrap_or(id);
+    let short = bare.split_once(':').map_or(bare, |(_, rest)| rest);
+    let mut out = vec![id.to_string(), bare.to_string()];
+    if short.contains(':') {
+        out.push(short.to_string());
+    }
+    out
 }
 
 pub fn redacted_report(profile: &HardwareProfile, app_version: &str) -> String {
     let secrets: Vec<String> = profile
         .gpus
         .iter()
-        .filter_map(|gpu| gpu.id.clone())
+        .filter_map(|gpu| gpu.id.as_deref())
+        .flat_map(forms)
         .chain(profile.profile_hash.clone())
         .filter(|secret| !secret.is_empty())
         .collect();
@@ -154,7 +191,7 @@ mod tests {
         let mut profile = HardwareProfile::detect_linux(&root.join("proc"), &root.join("drm"));
         profile.gpus.truncate(1);
         let mut gpu = profile.gpus.remove(0);
-        gpu.id = Some("0000:03:00.0".into());
+        gpu.id = Some("pci:0000:03:00.0".into());
         gpu.name = "Some GPU 0000:03:00.0".into();
         profile.gpus.push(gpu);
         profile.issues.push(super::super::ProbeIssue::new(
@@ -162,8 +199,23 @@ mod tests {
             "failed on 0000:03:00.0",
         ));
         let report = redacted_report(&profile, "0.1.0");
-        assert!(!report.contains("0000:03:00.0"), "{report}");
+        assert!(!report.contains("03:00.0"), "{report}");
         assert!(report.contains("Some GPU [redacted]"));
+    }
+
+    #[test]
+    fn paths_uuids_and_addresses_in_notices_are_removed() {
+        let mut profile =
+            HardwareProfile::detect_linux(Path::new("/nonexistent"), Path::new("/nonexistent"));
+        profile.issues.push(super::super::ProbeIssue::new(
+            "NVIDIA NVML",
+            "cannot load /home/alice/driver/libnvidia-ml.so.1 for GPU-3b1e4c3a-9f0d-4c1e-8a77-0123456789ab at 12:30:45 on box@lan",
+        ));
+        let report = redacted_report(&profile, "0.1.0");
+        for leak in ["alice", "3b1e4c3a", "12:30", "box@lan"] {
+            assert!(!report.contains(leak), "{leak} leaked: {report}");
+        }
+        assert!(report.contains("cannot load"));
     }
 
     #[test]
