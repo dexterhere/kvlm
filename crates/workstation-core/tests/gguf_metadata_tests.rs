@@ -11,7 +11,9 @@ use workstation_core::models::gguf::{GgufError, LayoutWarning, inspect_file, ins
 
 const GGUF: &[u8; 4] = b"GGUF";
 const VERSION: u32 = 3;
+const TYPE_U16: u32 = 2;
 const TYPE_U32: u32 = 4;
+const TYPE_I32: u32 = 5;
 const TYPE_BOOL: u32 = 7;
 const TYPE_STRING: u32 = 8;
 const TYPE_ARRAY: u32 = 9;
@@ -97,6 +99,25 @@ fn one_f32_tensor() -> Vec<u8> {
     output
 }
 
+fn split_metadata(no: u16, count: u16, tensors: i32) -> Vec<Vec<u8>> {
+    vec![
+        metadata(b"split.no", TYPE_U16, &no.to_le_bytes()),
+        metadata(b"split.count", TYPE_U16, &count.to_le_bytes()),
+        metadata(b"split.tensors.count", TYPE_I32, &tensors.to_le_bytes()),
+    ]
+}
+
+fn qwen_fixture(mut entries: Vec<Vec<u8>>) -> Vec<u8> {
+    entries.push(metadata(
+        b"general.architecture",
+        TYPE_STRING,
+        &string_value(b"qwen2"),
+    ));
+    let mut output = aligned(header(&entries, &[tensor(b"weight", &[1], 0, 0)]), 32);
+    output.extend(0f32.to_le_bytes());
+    output
+}
+
 fn one_block_tensor(type_id: u32, block_elements: u64, block_bytes: usize) -> Vec<u8> {
     let mut output = aligned(
         header(&[], &[tensor(b"weight", &[block_elements], type_id, 0)]),
@@ -149,6 +170,70 @@ fn accepts_minimal_header_and_unknown_architecture_without_fit_claims() {
     let unknown_result = inspect_reader(&mut Cursor::new(unknown)).unwrap();
     assert_eq!(unknown_result.architecture.as_deref(), Some("future-net"));
     assert_eq!(unknown_result.llama, None);
+}
+
+#[test]
+fn accepts_merged_and_single_file_split_markers_without_reading_payload() {
+    for count in [0, 1] {
+        let mut entries = split_metadata(0, count, 1);
+        entries.reverse();
+        let bytes = qwen_fixture(entries);
+        let payload_start = bytes.len() as u64 - 4;
+        let mut source = PayloadGuard::new(bytes, payload_start);
+        let result = inspect_reader(&mut source).unwrap();
+        assert_eq!(result.tensor_count, 1);
+        assert_eq!(result.tensor_bytes, 4);
+        assert_eq!(result.architecture.as_deref(), Some("qwen2"));
+        assert_eq!(result.llama, None);
+        assert!(!source.read_payload);
+    }
+}
+
+#[test]
+fn rejects_shards_and_inconsistent_split_markers() {
+    for no in [0, 1] {
+        unsupported(&qwen_fixture(split_metadata(no, 2, 2)));
+    }
+    for (no, count, tensors) in [(1, 0, 1), (1, 1, 1), (0, 0, -1), (0, 1, 0), (0, 0, 2)] {
+        invalid(&qwen_fixture(split_metadata(no, count, tensors)));
+    }
+    for index in 0..3 {
+        let mut missing = split_metadata(0, 0, 1);
+        missing.remove(index);
+        invalid(&qwen_fixture(missing));
+
+        let mut wrong_type = split_metadata(0, 0, 1);
+        let key = [
+            b"split.no".as_slice(),
+            b"split.count",
+            b"split.tensors.count",
+        ][index];
+        wrong_type[index] = metadata(key, TYPE_U32, &u32_value(1));
+        invalid(&qwen_fixture(wrong_type));
+    }
+    let mut unknown = split_metadata(0, 0, 1);
+    unknown.push(metadata(b"split.future", TYPE_U32, &u32_value(0)));
+    unsupported(&qwen_fixture(unknown));
+}
+
+#[test]
+fn split_markers_do_not_bypass_truncation_or_tensor_layout_checks() {
+    let valid = qwen_fixture(split_metadata(0, 0, 1));
+    for prefix in 0..valid.len() {
+        assert!(
+            inspect_reader(&mut Cursor::new(&valid[..prefix])).is_err(),
+            "prefix {prefix}"
+        );
+    }
+    let mut overlap = aligned(
+        header(
+            &split_metadata(0, 0, 2),
+            &[tensor(b"one", &[1], 0, 0), tensor(b"two", &[1], 0, 0)],
+        ),
+        32,
+    );
+    overlap.extend(0f32.to_le_bytes());
+    invalid(&overlap);
 }
 
 #[test]
@@ -260,11 +345,6 @@ fn rejects_hostile_metadata_shapes_and_values() {
     u64(1, &mut nested_array);
     unsupported(&header(
         &[metadata(b"nested", TYPE_ARRAY, &nested_array)],
-        &[],
-    ));
-
-    unsupported(&header(
-        &[metadata(b"split.count", TYPE_U32, &u32_value(2))],
         &[],
     ));
 }
