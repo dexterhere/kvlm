@@ -13,6 +13,7 @@ use workstation_bench::{
     runner::BenchmarkOutcome,
 };
 use workstation_core::db::HistoryEntry;
+use workstation_core::db::downloads::DownloadRow;
 use workstation_core::hardware::{HardwareProfile, resources::ResourceSummary};
 use workstation_core::{
     fit::{gguf_fit::LayoutAssumption, memory_math::KvCacheType},
@@ -23,6 +24,9 @@ use workstation_core::{
 };
 use workstation_runtimes::catalog_service::{
     CatalogLoad, CatalogService, InspectLoad, LoadSource, ReleaseLoad,
+};
+use workstation_runtimes::downloader::{
+    DownloadEnd, DownloadOutcome, Downloader, Progress, Stop as DownloadStop,
 };
 use workstation_runtimes::ollama::{
     Discovery, GenerationProgress, InstalledModel, ModelInspection, OllamaAdapter,
@@ -71,6 +75,24 @@ pub enum CoreCommand {
     InspectArtifact {
         id: u64,
         artifact: Box<ModelArtifact>,
+    },
+    /// Explicit download of one verified-size, checksummed file. One at a time.
+    StartDownload {
+        id: u64,
+        artifact: Box<ModelArtifact>,
+    },
+    /// Keep the partial file; the user can resume.
+    PauseDownload,
+    /// Keep the partial file; the user decides separately whether to discard it.
+    CancelDownload,
+    /// Delete an unfinished download's partial file and row, then list again.
+    DiscardDownload {
+        id: u64,
+        download_id: i64,
+    },
+    /// Saved downloads only; reads local state and never touches the network.
+    LoadDownloads {
+        id: u64,
     },
     RunQuickBenchmark {
         id: u64,
@@ -126,6 +148,16 @@ pub enum UiEvent {
     LocalScanned {
         id: u64,
         result: Result<Box<ScanReport>, String>,
+    },
+    /// Latest progress only; older readings are dropped, never queued.
+    DownloadProgress(Progress),
+    DownloadFinished {
+        id: u64,
+        outcome: DownloadOutcome,
+    },
+    DownloadsLoaded {
+        id: u64,
+        result: Result<Vec<DownloadRow>, String>,
     },
 }
 
@@ -191,15 +223,32 @@ pub trait CatalogBackend: Send + Sync + 'static {
     fn inspect(&self, artifact: ModelArtifact) -> BoxFuture<Result<InspectLoad, String>>;
     /// Blocking, cancellable file scan; the caller runs it on a blocking thread.
     fn scan_local(&self, wanted: Vec<Wanted>, cancel: &AtomicBool) -> Result<ScanReport, String>;
+    fn download(
+        &self,
+        artifact: ModelArtifact,
+        stop: tokio::sync::watch::Receiver<Option<DownloadStop>>,
+        progress: Box<dyn Fn(Progress) + Send>,
+    ) -> BoxFuture<DownloadOutcome>;
+    fn list_downloads(&self) -> BoxFuture<Result<Vec<DownloadRow>, String>>;
+    fn discard_download(&self, download_id: i64) -> BoxFuture<Result<(), String>>;
 }
 
 /// Builds the real service on first use, so startup does no catalog work.
-struct LiveCatalog(std::sync::OnceLock<Result<Arc<CatalogService>, String>>);
+#[derive(Default)]
+struct LiveCatalog {
+    service: std::sync::OnceLock<Result<Arc<CatalogService>, String>>,
+    downloader: std::sync::OnceLock<Result<Arc<Downloader>, String>>,
+}
 
 impl LiveCatalog {
     fn service(&self) -> Result<Arc<CatalogService>, String> {
-        self.0
+        self.service
             .get_or_init(|| CatalogService::new().map(Arc::new))
+            .clone()
+    }
+    fn downloader(&self) -> Result<Arc<Downloader>, String> {
+        self.downloader
+            .get_or_init(|| Downloader::new().map(Arc::new))
             .clone()
     }
 }
@@ -242,6 +291,36 @@ impl CatalogBackend for LiveCatalog {
             &Limits::default(),
         ))
     }
+    fn download(
+        &self,
+        artifact: ModelArtifact,
+        stop: tokio::sync::watch::Receiver<Option<DownloadStop>>,
+        progress: Box<dyn Fn(Progress) + Send>,
+    ) -> BoxFuture<DownloadOutcome> {
+        let downloader = self.downloader();
+        Box::pin(async move {
+            match downloader {
+                Ok(downloader) => downloader.run(artifact, stop, progress).await,
+                Err(message) => failed_outcome("storage", message),
+            }
+        })
+    }
+    fn list_downloads(&self) -> BoxFuture<Result<Vec<DownloadRow>, String>> {
+        let downloader = self.downloader();
+        Box::pin(async move { downloader?.list().await })
+    }
+    fn discard_download(&self, download_id: i64) -> BoxFuture<Result<(), String>> {
+        let downloader = self.downloader();
+        Box::pin(async move { downloader?.discard(download_id).await })
+    }
+}
+
+fn failed_outcome(code: &'static str, message: String) -> DownloadOutcome {
+    DownloadOutcome {
+        download_id: None,
+        bytes_done: 0,
+        end: DownloadEnd::Failed { code, message },
+    }
 }
 
 /// Aborts the wrapped task when the guarding job is dropped or aborted.
@@ -282,6 +361,23 @@ fn scan_failed(id: u64) -> UiEvent {
     UiEvent::LocalScanned {
         id,
         result: Err("Local file check failed. Retry.".into()),
+    }
+}
+
+fn download_failed(id: u64) -> UiEvent {
+    UiEvent::DownloadFinished {
+        id,
+        outcome: failed_outcome(
+            "internal",
+            "The download worker stopped unexpectedly. Resume to retry.".into(),
+        ),
+    }
+}
+
+fn downloads_failed(id: u64) -> UiEvent {
+    UiEvent::DownloadsLoaded {
+        id,
+        result: Err("Downloads worker failed. Retry.".into()),
     }
 }
 
@@ -364,7 +460,7 @@ where
         inspect,
         run_benchmark,
         load_history,
-        Arc::new(LiveCatalog(std::sync::OnceLock::new())),
+        Arc::new(LiveCatalog::default()),
     )
 }
 
@@ -407,6 +503,13 @@ where
         // A replaced scan keeps running until it notices the flag; its permit travels with
         // the blocking thread so the replacement starts only after it has stopped.
         let scan_gate = Arc::new(tokio::sync::Semaphore::new(1));
+        // One download at a time. The sender lives as long as the job so that closing the
+        // application (dropping it) pauses the transfer instead of leaving it running.
+        let mut download_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let mut download_stop: Option<tokio::sync::watch::Sender<Option<DownloadStop>>> = None;
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<Progress>();
+        // Short bookkeeping reads and discards; never aborted, so a discard always finishes.
+        let mut download_list_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
@@ -443,6 +546,25 @@ where
                 result = scan_jobs.join_next(), if !scan_jobs.is_empty() => {
                     if let Some(Ok(event)) = result
                         && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = download_jobs.join_next(), if !download_jobs.is_empty() => {
+                    download_stop = None;
+                    // Readings queued before the end would only be stale.
+                    while progress_rx.try_recv().is_ok() {}
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = download_list_jobs.join_next(), if !download_list_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                Some(mut latest) = progress_rx.recv() => {
+                    // Keep only the newest reading.
+                    while let Ok(next) = progress_rx.try_recv() { latest = next; }
+                    if events.send(UiEvent::DownloadProgress(latest)).await.is_err() { break; }
                     continue;
                 }
                 command = command_rx.recv() => match command { Some(command) => command, None => break },
@@ -505,6 +627,41 @@ where
                             .unwrap_or_else(|_| Err("Local file check failed. Retry.".into()))
                             .map(Box::new);
                         UiEvent::LocalScanned { id, result }
+                    }));
+                }
+                CoreCommand::StartDownload { id, artifact } => {
+                    if download_jobs.is_empty() {
+                        let (stop, stop_rx) = tokio::sync::watch::channel(None);
+                        download_stop = Some(stop);
+                        let (catalog, progress) = (Arc::clone(&catalog), progress_tx.clone());
+                        download_jobs.spawn(guarded(id, download_failed, async move {
+                            let report = Box::new(move |p| { let _ = progress.send(p); });
+                            let outcome = catalog.download(*artifact, stop_rx, report).await;
+                            UiEvent::DownloadFinished { id, outcome }
+                        }));
+                    } else {
+                        let outcome = failed_outcome("busy", "Another download is still active. Pause or cancel it first.".into());
+                        if events.send(UiEvent::DownloadFinished { id, outcome }).await.is_err() { break; }
+                    }
+                }
+                CoreCommand::PauseDownload | CoreCommand::CancelDownload => {
+                    let stop = if matches!(command, CoreCommand::PauseDownload) { DownloadStop::Pause } else { DownloadStop::Cancel };
+                    if let Some(sender) = &download_stop { let _ = sender.send(Some(stop)); }
+                }
+                CoreCommand::DiscardDownload { id, download_id } => {
+                    let catalog = Arc::clone(&catalog);
+                    download_list_jobs.spawn(guarded(id, downloads_failed, async move {
+                        let result = match catalog.discard_download(download_id).await {
+                            Ok(()) => catalog.list_downloads().await,
+                            Err(message) => Err(message),
+                        };
+                        UiEvent::DownloadsLoaded { id, result }
+                    }));
+                }
+                CoreCommand::LoadDownloads { id } => {
+                    let catalog = Arc::clone(&catalog);
+                    download_list_jobs.spawn(guarded(id, downloads_failed, async move {
+                        UiEvent::DownloadsLoaded { id, result: catalog.list_downloads().await }
                     }));
                 }
                 CoreCommand::InspectArtifact { id, artifact } => {
@@ -817,6 +974,52 @@ mod tests {
             }
             scan_local_fake(&wanted, cancel)
         }
+        fn download(
+            &self,
+            artifact: ModelArtifact,
+            mut stop: tokio::sync::watch::Receiver<Option<DownloadStop>>,
+            progress: Box<dyn Fn(Progress) + Send>,
+        ) -> BoxFuture<DownloadOutcome> {
+            Box::pin(async move {
+                let ended = |end| DownloadOutcome {
+                    download_id: Some(1),
+                    bytes_done: 5,
+                    end,
+                };
+                match artifact.filename.as_str() {
+                    "slow.gguf" => {
+                        progress(Progress {
+                            download_id: 1,
+                            bytes_done: 5,
+                            total: 10,
+                        });
+                        let _ = stop.changed().await;
+                        let request = *stop.borrow();
+                        ended(match request {
+                            Some(DownloadStop::Cancel) => DownloadEnd::Cancelled,
+                            _ => DownloadEnd::Paused {
+                                code: None,
+                                message: None,
+                            },
+                        })
+                    }
+                    "panic.gguf" => panic!("fixture download panic"),
+                    _ => ended(DownloadEnd::Completed),
+                }
+            })
+        }
+        fn list_downloads(&self) -> BoxFuture<Result<Vec<DownloadRow>, String>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn discard_download(&self, download_id: i64) -> BoxFuture<Result<(), String>> {
+            Box::pin(async move {
+                if download_id == 13 {
+                    Err("fixture discard failure".into())
+                } else {
+                    Ok(())
+                }
+            })
+        }
         fn inspect(&self, artifact: ModelArtifact) -> BoxFuture<Result<InspectLoad, String>> {
             Box::pin(async move {
                 match artifact.filename.as_str() {
@@ -1118,6 +1321,67 @@ mod tests {
             .unwrap();
         assert!(matches!(receive(&events).await,
             UiEvent::LocalScanned { id: 3, result: Ok(report) } if report.matches.is_empty() && report.stopped.is_none()));
+    }
+
+    #[tokio::test]
+    async fn downloads_report_progress_pause_busy_panic_and_discard() {
+        let (commands, events) = start_catalog();
+        let start = |id, name| CoreCommand::StartDownload {
+            id,
+            artifact: artifact_named(name),
+        };
+        commands.send(start(1, "slow.gguf")).await.unwrap();
+        assert!(
+            matches!(receive(&events).await, UiEvent::DownloadProgress(p) if p.bytes_done == 5)
+        );
+        commands.send(start(2, "ok.gguf")).await.unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::DownloadFinished { id: 2, outcome } if matches!(outcome.end, DownloadEnd::Failed { code: "busy", .. })));
+        commands.send(CoreCommand::PauseDownload).await.unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::DownloadFinished { id: 1, outcome } if matches!(outcome.end, DownloadEnd::Paused { .. })));
+        commands.send(start(3, "slow.gguf")).await.unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::DownloadProgress(_)
+        ));
+        commands.send(CoreCommand::CancelDownload).await.unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::DownloadFinished { id: 3, outcome } if outcome.end == DownloadEnd::Cancelled));
+        commands.send(start(4, "panic.gguf")).await.unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::DownloadFinished { id: 4, outcome } if matches!(outcome.end, DownloadEnd::Failed { code: "internal", .. })));
+        commands.send(start(5, "ok.gguf")).await.unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::DownloadFinished { id: 5, outcome } if outcome.end == DownloadEnd::Completed));
+        for (id, download_id) in [(6, 2), (7, 13)] {
+            commands
+                .send(CoreCommand::DiscardDownload { id, download_id })
+                .await
+                .unwrap();
+        }
+        let mut results = [receive(&events).await, receive(&events).await];
+        results.sort_by_key(|event| match event {
+            UiEvent::DownloadsLoaded { id, .. } => *id,
+            _ => 0,
+        });
+        assert!(
+            matches!(&results[0], UiEvent::DownloadsLoaded { id: 6, result: Ok(rows) } if rows.is_empty())
+        );
+        assert!(
+            matches!(&results[1], UiEvent::DownloadsLoaded { id: 7, result: Err(m) } if m.contains("fixture discard"))
+        );
+        commands
+            .send(CoreCommand::LoadDownloads { id: 8 })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::DownloadsLoaded {
+                id: 8,
+                result: Ok(_)
+            }
+        ));
     }
 
     #[tokio::test]

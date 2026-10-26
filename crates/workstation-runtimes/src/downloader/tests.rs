@@ -450,3 +450,30 @@ async fn listing_reconciles_and_discard_removes_the_partial_and_the_row() {
     assert!(dl.list().await.unwrap().is_empty());
     assert!(!part(&dir, &bytes).exists());
 }
+
+#[tokio::test]
+async fn a_dropped_stop_sender_pauses_instead_of_spinning() {
+    let dir = Dir::new();
+    let bytes = content(150_000);
+    let body = Reply::Bytes {
+        code: 200,
+        body: bytes.clone(),
+        headers: vec![],
+    };
+    let server = Server::start(|_| vec![route(FILE_LINE, body)]);
+    let (tx, rx) = watch::channel(None);
+    drop(tx);
+    let (outcome, _) = tokio::time::timeout(
+        Duration::from_secs(20),
+        run_with(&downloader(&server, &dir), &artifact(&bytes), rx),
+    )
+    .await
+    .expect("must not hang");
+    assert!(
+        matches!(
+            outcome.end,
+            DownloadEnd::Paused { .. } | DownloadEnd::Completed
+        ),
+        "{outcome:?}"
+    );
+}

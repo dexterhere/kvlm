@@ -359,7 +359,13 @@ impl Transfer<'_> {
                     }
                 });
                 let chunk = match next {
-                    None => continue, // a stop request arrived; handled at the loop top
+                    None => {
+                        // A dropped sender (the app is closing) pauses instead of spinning.
+                        if stop.has_changed().is_err() {
+                            return self.stopped(Stop::Pause, done);
+                        }
+                        continue; // a stop request arrived; handled at the loop top
+                    }
                     Some(Err(error)) => return self.network_failed(done, &error),
                     Some(Ok(None)) => break,
                     Some(Ok(Some(chunk))) => chunk,
