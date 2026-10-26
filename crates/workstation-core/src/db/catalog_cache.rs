@@ -48,7 +48,10 @@ fn timestamp(ms: u64) -> Result<i64, String> {
 impl HistoryStore {
     /// One short writer transaction, so lookup, conflict checks, upsert and eviction
     /// cannot interleave with another application instance.
-    fn write<T>(&self, work: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
+    pub(super) fn write<T>(
+        &self,
+        work: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
         let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
             .map_err(|_| "Catalog cache is locked. Retry after other writers finish.")?;
         let value = work(&tx)?;

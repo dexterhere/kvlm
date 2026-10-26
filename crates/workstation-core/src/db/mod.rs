@@ -9,6 +9,7 @@ use std::{
 };
 
 pub mod catalog_cache;
+pub mod digests;
 pub mod queries;
 pub mod schema;
 pub use queries::HistoryStore;
