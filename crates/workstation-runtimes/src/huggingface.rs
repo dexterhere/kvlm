@@ -78,7 +78,7 @@ impl HuggingFaceClient {
     }
 
     #[cfg(test)]
-    fn for_test(port: u16) -> Self {
+    pub(crate) fn for_test(port: u16) -> Self {
         Self::build(
             Url::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
             false,
@@ -372,7 +372,8 @@ fn parse_detail(
         })
         .collect();
     Ok(RawRepoDetail {
-        repo_id: id.to_owned(),
+        // The caller's spelling keeps cache keys and offline lookups consistent.
+        repo_id: requested.to_owned(),
         revision: revision.to_owned(),
         license,
         gated: detail

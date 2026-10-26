@@ -15,6 +15,28 @@ const MAX_RELEASE_ROWS: i64 = 2_000;
 const MAX_RELEASE_BYTES: i64 = 64 * 1024 * 1024;
 const MAX_KEY: usize = 512;
 
+/// Returned when a revision would be stored with a size or checksum that differs from
+/// what is already saved. Callers must reject the new data, not the cache.
+pub const REVISION_CONFLICT: &str =
+    "Cached revision conflicts with newly fetched data. Keep the cache and retry later.";
+
+/// Stable cache key for a search page: digests of the lowercased trimmed query and of
+/// the cursor, so any permitted query and cursor length fits the key limit.
+pub fn page_key(query: &str, cursor: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    let hex = |text: &str| -> String {
+        Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    format!(
+        "search:v2:{}:{}",
+        hex(&query.trim().to_lowercase()),
+        cursor.map_or(String::new(), hex)
+    )
+}
+
 fn timestamp(ms: u64) -> Result<i64, String> {
     i64::try_from(ms).map_err(|_| "Catalog timestamp exceeds the supported range.".into())
 }
@@ -46,7 +68,8 @@ impl HistoryStore {
         self.write(|c| {
             c.execute(
                 "INSERT INTO catalog_queries(query_key,result_json,fetched_at_unix_ms) VALUES (?1,?2,?3)
-                 ON CONFLICT(query_key) DO UPDATE SET result_json=excluded.result_json, fetched_at_unix_ms=excluded.fetched_at_unix_ms",
+                 ON CONFLICT(query_key) DO UPDATE SET result_json=excluded.result_json, fetched_at_unix_ms=excluded.fetched_at_unix_ms
+                 WHERE excluded.fetched_at_unix_ms >= catalog_queries.fetched_at_unix_ms",
                 params![key, json, at],
             )
             .map_err(|_| "Cannot cache catalog page. The page may be too large or the disk full.")?;
@@ -93,18 +116,40 @@ impl HistoryStore {
                         }
                     };
                     if conflict {
-                        return Err("Cached revision conflicts with newly fetched data. Keep the cache and retry later.".into());
+                        return Err(REVISION_CONFLICT.into());
                     }
                 }
             }
             c.execute(
                 "INSERT INTO catalog_releases(repo_id,revision,release_json,fetched_at_unix_ms) VALUES (?1,?2,?3,?4)
-                 ON CONFLICT(repo_id,revision) DO UPDATE SET release_json=excluded.release_json, fetched_at_unix_ms=excluded.fetched_at_unix_ms",
+                 ON CONFLICT(repo_id,revision) DO UPDATE SET release_json=excluded.release_json, fetched_at_unix_ms=excluded.fetched_at_unix_ms
+                 WHERE excluded.fetched_at_unix_ms >= catalog_releases.fetched_at_unix_ms",
                 params![release.repo_id, release.revision, json, at],
             )
             .map_err(|_| "Cannot cache release. It may be too large or the disk full.")?;
             evict(c, "catalog_releases", MAX_RELEASE_ROWS, MAX_RELEASE_BYTES, "release_json")
         })
+    }
+
+    /// The most recently cached release of a repository, whatever its revision. Used when
+    /// the network is unavailable and no commit has been learned yet.
+    pub fn cached_latest_release(
+        &self,
+        repo_id: &str,
+    ) -> Result<Option<(ModelRelease, u64)>, String> {
+        let revision: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT revision FROM catalog_releases WHERE repo_id=?1 ORDER BY fetched_at_unix_ms DESC, rowid DESC LIMIT 1",
+                [repo_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|_| "Cannot read cached release.")?;
+        match revision {
+            Some(revision) => read_release(&self.connection, repo_id, &revision),
+            None => Ok(None),
+        }
     }
 
     pub fn cached_release(

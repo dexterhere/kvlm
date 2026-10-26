@@ -405,3 +405,76 @@ fn table_without_its_primary_key_is_refused() {
     drop(connection);
     assert!(HistoryStore::open(&path.0).is_err());
 }
+
+#[test]
+fn page_keys_normalize_the_query_and_bound_long_cursors() {
+    use workstation_core::db::catalog_cache::page_key;
+    assert_eq!(
+        page_key("  Qwen Coder ", None),
+        page_key("qwen coder", None)
+    );
+    assert_ne!(page_key("q", None), page_key("q", Some("abc")));
+    assert_ne!(page_key("q", Some("abc")), page_key("q", Some("abd")));
+    let long = "a".repeat(1024);
+    assert!(page_key(&"q".repeat(128), Some(&long)).len() <= 512);
+}
+
+#[test]
+fn latest_cached_release_prefers_the_newest_fetch() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    assert!(store.cached_latest_release("o/n-GGUF").unwrap().is_none());
+    store.cache_release(&release(), 5).unwrap();
+    let mut newer = release();
+    let other_rev = "fedcba9876543210fedcba9876543210fedcba98";
+    newer.revision = other_rev.into();
+    for a in &mut newer.artifacts {
+        a.revision = other_rev.into();
+        a.artifact_id = format!("hf:o/n-GGUF@{other_rev}:{}", a.filename);
+    }
+    store.cache_release(&newer, 9).unwrap();
+    let (latest, at) = store.cached_latest_release("o/n-GGUF").unwrap().unwrap();
+    assert_eq!((latest.revision.as_str(), at), (other_rev, 9));
+}
+
+#[test]
+fn an_older_fetch_never_replaces_a_newer_page_or_release() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    store
+        .cache_catalog_page("k", &page("a/new", None), 20)
+        .unwrap();
+    store
+        .cache_catalog_page("k", &page("a/old", None), 10)
+        .unwrap();
+    let (cached, at) = store.cached_catalog_page("k").unwrap().unwrap();
+    assert_eq!((cached.repos[0].repo_id.as_str(), at), ("a/new", 20));
+
+    store
+        .cache_release(&release_with(Some(10), Some(SHA)), 20)
+        .unwrap();
+    store
+        .cache_release(&release_with(Some(10), Some(SHA)), 10)
+        .unwrap();
+    assert_eq!(
+        store.cached_release("o/n-GGUF", REV).unwrap().unwrap().1,
+        20
+    );
+}
+
+#[test]
+fn conflicts_use_the_published_constant_and_long_unicode_queries_fit() {
+    use workstation_core::db::catalog_cache::{REVISION_CONFLICT, page_key};
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    store.cache_release(&release(), 1).unwrap();
+    let error = store
+        .cache_release(&release_with(Some(11), Some(SHA)), 2)
+        .unwrap_err();
+    assert_eq!(error, REVISION_CONFLICT);
+    let key = page_key(&"é".repeat(128), Some(&"a".repeat(1024)));
+    assert!(key.len() <= 512, "{}", key.len());
+    store
+        .cache_catalog_page(&key, &page("a/b", None), 1)
+        .unwrap();
+}

@@ -331,7 +331,8 @@ Phase 6.
 | 0 | `chore/m1-plan` | these documents, README index, decision records | Opus (decisions) | Codex, Opus |
 | 1a | `feat/m1-catalog-model` | core types, normalization, migration steps, cache queries, tests | Sonnet; Haiku (fixtures) | Codex |
 | 1b | `feat/m1-hf-client` | rustls dependency, HF client, mock server, limits, no-redirect tests (token and CDN-redirect tests arrive with phases 4 and 5) | Sonnet; Haiku (mock server scaffolding) | Codex |
-| 1c | `feat/m1-catalog-explorer` | bridge commands, three-tier view, states, smoke test | Sonnet; Haiku (smoke scaffolding, docs) | Codex |
+| 1c | `feat/m1-catalog-service` | catalog service with offline fallback, bridge commands and events, single-flight search and release jobs | Sonnet; Haiku (service tests) | Codex |
+| 1d | `feat/m1-catalog-explorer` | three-tier view, loading/error/retry/offline states, smoke test | Sonnet; Haiku (smoke scaffolding, docs) | Codex |
 | 2 | `feat/m1-artifact-details` | `inspect_prefix`, inspect command, fit adapter, details pane | Sonnet | Codex |
 | 3 | `feat/m1-local-dedup` | scanner, digest cache, UI badge | Sonnet (scanner); OpenCode (tests, docs) | Codex |
 | 4 | `feat/m1-resumable-downloads` | downloader, lock, state, UI | Sonnet (security-sensitive) | Codex + Opus final read |

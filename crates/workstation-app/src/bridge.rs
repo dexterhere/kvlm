@@ -2,7 +2,7 @@
 //! Typed messages keep GTK objects out of blocking hardware probes.
 
 use crate::fit_workflow::{FitReport, FitRequest, estimate};
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 use tokio::sync::mpsc;
 use workstation_bench::{
     history::{self, PersistedRun},
@@ -10,6 +10,7 @@ use workstation_bench::{
 };
 use workstation_core::db::HistoryEntry;
 use workstation_core::hardware::{HardwareProfile, resources::ResourceSummary};
+use workstation_runtimes::catalog_service::{CatalogLoad, CatalogService, ReleaseLoad};
 use workstation_runtimes::ollama::{
     Discovery, GenerationProgress, InstalledModel, ModelInspection, OllamaAdapter,
 };
@@ -31,6 +32,44 @@ pub enum CoreCommand {
         model: String,
     },
     EstimateFit(FitRequest),
+    /// Explicit network search; falls back to saved results when offline.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "constructed by the catalog view in the next change"
+        )
+    )]
+    SearchCatalog {
+        id: u64,
+        query: String,
+        cursor: Option<String>,
+    },
+    /// Saved first page only; never touches the network.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "constructed by the catalog view in the next change"
+        )
+    )]
+    LoadCachedCatalog {
+        id: u64,
+        query: String,
+    },
+    /// Explicit network fetch of one repository's files; `pinned` is a commit id.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "constructed by the catalog view in the next change"
+        )
+    )]
+    ExpandRelease {
+        id: u64,
+        repo_id: String,
+        pinned: Option<String>,
+    },
     RunQuickBenchmark {
         id: u64,
         model: InstalledModel,
@@ -69,6 +108,108 @@ pub enum UiEvent {
         id: u64,
         result: Result<Box<FitReport>, String>,
     },
+    /// `Ok(None)` means a cache-only request found nothing saved.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the catalog view in the next change")
+    )]
+    CatalogLoaded {
+        id: u64,
+        result: Result<Option<Box<CatalogLoad>>, String>,
+    },
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the catalog view in the next change")
+    )]
+    ReleaseLoaded {
+        id: u64,
+        result: Result<Box<ReleaseLoad>, String>,
+    },
+}
+
+pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+
+/// Source of catalog data. Production uses [`CatalogService`]; tests inject fakes.
+pub trait CatalogBackend: Send + Sync + 'static {
+    fn search(
+        &self,
+        query: String,
+        cursor: Option<String>,
+    ) -> BoxFuture<Result<CatalogLoad, String>>;
+    fn cached_search(&self, query: String) -> BoxFuture<Result<Option<CatalogLoad>, String>>;
+    fn release(
+        &self,
+        repo_id: String,
+        pinned: Option<String>,
+    ) -> BoxFuture<Result<ReleaseLoad, String>>;
+}
+
+/// Builds the real service on first use, so startup does no catalog work.
+struct LiveCatalog(std::sync::OnceLock<Result<Arc<CatalogService>, String>>);
+
+impl LiveCatalog {
+    fn service(&self) -> Result<Arc<CatalogService>, String> {
+        self.0
+            .get_or_init(|| CatalogService::new().map(Arc::new))
+            .clone()
+    }
+}
+
+impl CatalogBackend for LiveCatalog {
+    fn search(
+        &self,
+        query: String,
+        cursor: Option<String>,
+    ) -> BoxFuture<Result<CatalogLoad, String>> {
+        let service = self.service();
+        Box::pin(async move { service?.search(&query, cursor.as_deref()).await })
+    }
+    fn cached_search(&self, query: String) -> BoxFuture<Result<Option<CatalogLoad>, String>> {
+        let service = self.service();
+        Box::pin(async move { service?.cached_search(&query, None).await })
+    }
+    fn release(
+        &self,
+        repo_id: String,
+        pinned: Option<String>,
+    ) -> BoxFuture<Result<ReleaseLoad, String>> {
+        let service = self.service();
+        Box::pin(async move { service?.release(&repo_id, pinned.as_deref()).await })
+    }
+}
+
+/// Aborts the wrapped task when the guarding job is dropped or aborted.
+struct AbortOnDrop(tokio::task::AbortHandle);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Runs a catalog job so a panic is reported for its own request id; aborting the
+/// guarding job (a newer request) aborts the work too and produces no event.
+async fn guarded(
+    id: u64,
+    failed: fn(u64) -> UiEvent,
+    work: impl std::future::Future<Output = UiEvent> + Send + 'static,
+) -> UiEvent {
+    let task = tokio::spawn(work);
+    let _abort = AbortOnDrop(task.abort_handle());
+    task.await.unwrap_or_else(|_| failed(id))
+}
+
+fn catalog_failed(id: u64) -> UiEvent {
+    UiEvent::CatalogLoaded {
+        id,
+        result: Err("Catalog worker failed. Retry.".into()),
+    }
+}
+
+fn release_failed(id: u64) -> UiEvent {
+    UiEvent::ReleaseLoaded {
+        id,
+        result: Err("Catalog worker failed. Retry.".into()),
+    }
 }
 
 pub fn start(
@@ -135,6 +276,35 @@ where
     I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
     B: std::future::Future<Output = PersistedRun> + Send + 'static,
 {
+    start_with_catalog(
+        runtime,
+        probe,
+        fit,
+        discover,
+        inspect,
+        run_benchmark,
+        load_history,
+        Arc::new(LiveCatalog(std::sync::OnceLock::new())),
+    )
+}
+
+/// Every worker is injectable so tests never touch hardware, Ollama, or the network.
+#[allow(clippy::too_many_arguments)]
+fn start_with_catalog<D, I, B>(
+    runtime: &tokio::runtime::Handle,
+    probe: impl Fn() -> HardwareProfile + Send + Sync + 'static,
+    fit: impl Fn(FitRequest) -> Result<FitReport, String> + Send + Sync + 'static,
+    discover: impl Fn() -> D + Send + 'static,
+    inspect: impl Fn(String) -> I + Send + 'static,
+    run_benchmark: impl Fn(InstalledModel, tokio::sync::watch::Receiver<bool>) -> B + Send + 'static,
+    load_history: impl Fn() -> Result<Vec<HistoryEntry>, String> + Send + Sync + 'static,
+    catalog: Arc<dyn CatalogBackend>,
+) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>)
+where
+    D: std::future::Future<Output = Result<Discovery, String>> + Send,
+    I: std::future::Future<Output = Result<ModelInspection, String>> + Send,
+    B: std::future::Future<Output = PersistedRun> + Send + 'static,
+{
     let (commands, mut command_rx) = mpsc::channel(1);
     let (events, event_rx) = async_channel::bounded(1);
     let probe = Arc::new(probe);
@@ -144,6 +314,11 @@ where
         let mut pending = None;
         let mut benchmark_jobs = tokio::task::JoinSet::new();
         let mut benchmark_id = 0;
+        // One live search, one saved-page read and one release fetch at a time; a newer
+        // request of the same kind aborts the older. Saved-page reads never cancel a search.
+        let mut search_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let mut cached_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let mut release_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
@@ -155,6 +330,21 @@ where
                     };
                     if events.send(UiEvent::BenchmarkFinished { id: benchmark_id, outcome, resources: resources.map(Box::new) }).await.is_err() { break; }
                     if events.send(UiEvent::BenchmarkHistorySaved { benchmark_id, result: saved }).await.is_err() { break; }
+                    continue;
+                }
+                result = search_jobs.join_next(), if !search_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = cached_jobs.join_next(), if !cached_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = release_jobs.join_next(), if !release_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
                     continue;
                 }
                 command = command_rx.recv() => match command { Some(command) => command, None => break },
@@ -174,6 +364,30 @@ where
                         result = tokio::task::spawn_blocking(move || load()) => result,
                     }.unwrap_or_else(|_| Err("History worker failed. Reload to retry.".into()));
                     if events.send(UiEvent::BenchmarkHistoryLoaded { id, result }).await.is_err() { break; }
+                }
+                CoreCommand::SearchCatalog { id, query, cursor } => {
+                    search_jobs.abort_all();
+                    let catalog = Arc::clone(&catalog);
+                    search_jobs.spawn(guarded(id, catalog_failed, async move {
+                        let result = catalog.search(query, cursor).await.map(|load| Some(Box::new(load)));
+                        UiEvent::CatalogLoaded { id, result }
+                    }));
+                }
+                CoreCommand::LoadCachedCatalog { id, query } => {
+                    cached_jobs.abort_all();
+                    let catalog = Arc::clone(&catalog);
+                    cached_jobs.spawn(guarded(id, catalog_failed, async move {
+                        let result = catalog.cached_search(query).await.map(|load| load.map(Box::new));
+                        UiEvent::CatalogLoaded { id, result }
+                    }));
+                }
+                CoreCommand::ExpandRelease { id, repo_id, pinned } => {
+                    release_jobs.abort_all();
+                    let catalog = Arc::clone(&catalog);
+                    release_jobs.spawn(guarded(id, release_failed, async move {
+                        let result = catalog.release(repo_id, pinned).await.map(Box::new);
+                        UiEvent::ReleaseLoaded { id, result }
+                    }));
                 }
                 CoreCommand::RunQuickBenchmark { id, model, cancel } => {
                     if benchmark_jobs.is_empty() {
@@ -406,6 +620,249 @@ mod tests {
         let closed = tokio::time::timeout(Duration::from_secs(2), commands.closed()).await;
         release.send(()).unwrap();
         assert!(closed.is_ok());
+    }
+
+    /// Catalog fake: "slow" never finishes, "panic" panics, anything else succeeds.
+    struct FakeCatalog;
+    fn page_for(query: &str) -> workstation_core::models::catalog::CatalogPage {
+        use workstation_core::models::{catalog::RepoSummary, release::GatedAccess};
+        workstation_core::models::catalog::CatalogPage {
+            repos: vec![RepoSummary {
+                repo_id: format!("o/{query}"),
+                downloads: Some(1),
+                likes: None,
+                gated: GatedAccess::Open,
+            }],
+            next_cursor: None,
+        }
+    }
+    impl CatalogBackend for FakeCatalog {
+        fn search(
+            &self,
+            query: String,
+            _cursor: Option<String>,
+        ) -> BoxFuture<Result<CatalogLoad, String>> {
+            Box::pin(async move {
+                match query.as_str() {
+                    "slow" => std::future::pending().await,
+                    "panic" => panic!("fixture catalog panic"),
+                    "fail" => Err("fixture failure".into()),
+                    _ => Ok(CatalogLoad {
+                        page: page_for(&query),
+                        source: workstation_runtimes::catalog_service::LoadSource::Live,
+                        notice: None,
+                    }),
+                }
+            })
+        }
+        fn cached_search(&self, query: String) -> BoxFuture<Result<Option<CatalogLoad>, String>> {
+            Box::pin(async move {
+                Ok((query != "empty").then(|| CatalogLoad {
+                    page: page_for(&query),
+                    source: workstation_runtimes::catalog_service::LoadSource::Cached {
+                        fetched_at_unix_ms: 7,
+                    },
+                    notice: None,
+                }))
+            })
+        }
+        fn release(
+            &self,
+            repo_id: String,
+            _pinned: Option<String>,
+        ) -> BoxFuture<Result<ReleaseLoad, String>> {
+            Box::pin(async move {
+                if repo_id == "slow/slow" {
+                    std::future::pending::<()>().await;
+                }
+                Err("fixture release failure".into())
+            })
+        }
+    }
+
+    fn start_catalog() -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
+        start_with_catalog(
+            &tokio::runtime::Handle::current(),
+            snapshot,
+            |_| Err("unused".into()),
+            || async { Err("unused".into()) },
+            |_| async { Err("unused".into()) },
+            |_, _| async { unreachable!("no benchmark in catalog tests") },
+            || Ok(Vec::new()),
+            Arc::new(FakeCatalog),
+        )
+    }
+
+    #[tokio::test]
+    async fn catalog_commands_return_live_cached_and_failed_results() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 1,
+                query: "qwen".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::CatalogLoaded { id: 1, result: Ok(Some(load)) } if load.page.repos[0].repo_id == "o/qwen"));
+        commands
+            .send(CoreCommand::LoadCachedCatalog {
+                id: 2,
+                query: "qwen".into(),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::CatalogLoaded { id: 2, result: Ok(Some(load)) } if matches!(load.source, workstation_runtimes::catalog_service::LoadSource::Cached { fetched_at_unix_ms: 7 })));
+        commands
+            .send(CoreCommand::LoadCachedCatalog {
+                id: 3,
+                query: "empty".into(),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::CatalogLoaded {
+                id: 3,
+                result: Ok(None)
+            }
+        ));
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 4,
+                query: "fail".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::CatalogLoaded { id: 4, result: Err(message) } if message == "fixture failure"));
+        commands
+            .send(CoreCommand::ExpandRelease {
+                id: 5,
+                repo_id: "o/n".into(),
+                pinned: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::ReleaseLoaded {
+                id: 5,
+                result: Err(_)
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_newer_search_aborts_the_stuck_older_one() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 1,
+                query: "slow".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 2,
+                query: "next".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::CatalogLoaded {
+                id: 2,
+                result: Ok(Some(_))
+            }
+        ));
+        // The aborted request never reports; other commands still flow.
+        commands
+            .send(CoreCommand::ExpandRelease {
+                id: 3,
+                repo_id: "o/n".into(),
+                pinned: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::ReleaseLoaded { id: 3, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_stuck_search_does_not_block_other_work() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 1,
+                query: "slow".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        commands
+            .send(CoreCommand::ExpandRelease {
+                id: 2,
+                repo_id: "o/n".into(),
+                pinned: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&events).await,
+            UiEvent::ReleaseLoaded { id: 2, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_catalog_panic_becomes_a_failure_for_that_request() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 9,
+                query: "panic".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::CatalogLoaded { id: 9, result: Err(message) } if message.contains("Catalog worker failed")));
+    }
+
+    #[tokio::test]
+    async fn a_saved_page_read_does_not_cancel_a_live_search() {
+        let (commands, events) = start_catalog();
+        commands
+            .send(CoreCommand::SearchCatalog {
+                id: 1,
+                query: "fail".into(),
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        commands
+            .send(CoreCommand::LoadCachedCatalog {
+                id: 2,
+                query: "".into(),
+            })
+            .await
+            .unwrap();
+        let mut seen = vec![];
+        for _ in 0..2 {
+            if let UiEvent::CatalogLoaded { id, .. } = receive(&events).await {
+                seen.push(id);
+            }
+        }
+        seen.sort();
+        assert_eq!(seen, [1, 2]);
     }
 
     fn fit_request(id: u64) -> CoreCommand {
