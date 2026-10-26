@@ -14,6 +14,7 @@ use crate::{
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
     let (commands, events) = bridge::start(runtime);
     let overview = views::overview::Overview::new(commands.clone());
+    overview.append(&views::updates::new(runtime));
     let runtimes = views::runtimes::Runtimes::new(commands.clone());
     let (attached_commands, attached_events) = attached::start(runtime);
     let other_runtimes = views::attached::Attached::new(attached_commands);

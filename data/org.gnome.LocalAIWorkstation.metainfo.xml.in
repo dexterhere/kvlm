@@ -12,9 +12,13 @@
   <url type="homepage">https://github.com/dexterhere/kvlm</url>
   <url type="bugtracker">https://github.com/dexterhere/kvlm/issues</url>
   <description>
-    <p>A community project building a native desktop control plane for local AI inference.</p>
-    <p>This development foundation provides the application shell. Hardware discovery,
-    model catalogs, runtime management, and benchmarking are planned features.</p>
+    <p>Local AI Workstation explains whether a local model fits your computer's memory, shows
+    the inference runtimes you already run, and measures them with quick, explicit benchmarks.</p>
+    <p>It can browse the public Hugging Face GGUF catalog, download models you choose, and manage
+    a llama.cpp server it installs and owns. LM Studio, vLLM and Ollama are only read, never
+    started, stopped or changed.</p>
+    <p>Nothing runs in the background and nothing is sent anywhere unless you press a button.
+    There is no telemetry, no account and no need for administrator rights.</p>
   </description>
   <launchable type="desktop-id">org.gnome.LocalAIWorkstation.desktop</launchable>
   <provides>
@@ -24,9 +28,19 @@
     <category>Development</category>
   </categories>
   <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-27" type="development">
+      <description>
+        <p>Pre-release for testing. Hardware validation is still in progress.</p>
+      </description>
+    </release>
+  </releases>
   <supports>
     <control>keyboard</control>
     <control>pointing</control>
     <control>touch</control>
   </supports>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
 </component>

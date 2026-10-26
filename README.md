@@ -82,8 +82,13 @@ prompt through a cold/warm protocol, stores each experiment with its measurement
 shows diagnostic findings, and compares two runs, including a controlled follow-up that changes
 exactly one setting. A live run is in the
 [M3 acceptance evidence](docs/03-development/m3-acceptance.md); only the CPU build and a toy model
-were used. LM Studio and vLLM adapters and more hardware matrices come in M4; the
-[roadmap](docs/04-roadmap/milestones.md) tracks them.
+were used.
+
+**M4 is implemented on `develop`, validation pending.** Read-only LM Studio and vLLM discovery,
+keyboard shortcuts and an accessibility audit, packaging, an opt-in update check and a redacted
+`--report-hardware` mode exist. Real-hardware, GNOME-session and screen-reader validation, the
+application ID decision and the release itself are not done; see
+[beta status](docs/03-development/beta-status.md).
 
 This is an independent community project; it is not an official GNOME application or a
 GNOME Circle member.

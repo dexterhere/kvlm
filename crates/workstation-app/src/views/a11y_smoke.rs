@@ -137,6 +137,8 @@ fn every_page_has_named_controls_and_fits_the_minimum_width() {
     let (other, _other_rx) = mpsc::channel(8);
 
     let overview = super::overview::Overview::new(commands.clone());
+    let tokio = tokio::runtime::Runtime::new().expect("test runtime");
+    overview.append(&super::updates::new(tokio.handle()));
     check("Overview", overview.widget.upcast_ref());
     let runtimes = super::runtimes::Runtimes::new(commands.clone());
     let attached = super::attached::Attached::new(other);
