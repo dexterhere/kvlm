@@ -77,7 +77,12 @@ check passed. See the [M1 plan](docs/04-roadmap/m1/Planned.md).
 llama.cpp build (checksum verified, no root), save launch profiles, start, stop and restart
 a managed server on `127.0.0.1`, and show its log. A live run with the real server is in the
 [M2 acceptance evidence](docs/03-development/m2-acceptance.md); only the CPU build was served.
-Controlled benchmark comparisons and more hardware matrices come in M3 and M4; the
+**M3 is implemented on `develop` for the managed llama.cpp server.** The Lab page runs a fixed
+prompt through a cold/warm protocol, stores each experiment with its measurements and coverage,
+shows diagnostic findings, and compares two runs, including a controlled follow-up that changes
+exactly one setting. A live run is in the
+[M3 acceptance evidence](docs/03-development/m3-acceptance.md); only the CPU build and a toy model
+were used. LM Studio and vLLM adapters and more hardware matrices come in M4; the
 [roadmap](docs/04-roadmap/milestones.md) tracks them.
 
 This is an independent community project; it is not an official GNOME application or a

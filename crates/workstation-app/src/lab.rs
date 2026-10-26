@@ -289,6 +289,9 @@ fn recover_once(store: &workstation_core::db::HistoryStore) {
 
 /// What a request resolves to against the running server.
 struct Prepared {
+    /// Whether the run times a cold load. A follow-up repeats its baseline's cache state,
+    /// because a comparison across cold and warm is refused.
+    cold: bool,
     active: managed::Active,
     status: workstation_runtimes::supervisor::Status,
     /// The baseline experiment and the profile with its one declared change.
@@ -316,6 +319,7 @@ impl LiveLab {
         }
         let Some((baseline_id, variable)) = request.follow_up else {
             return Ok(Prepared {
+                cold: request.cold,
                 active,
                 status,
                 follow_up: None,
@@ -348,6 +352,7 @@ impl LiveLab {
             Workload::standard().max_tokens(),
         )?;
         Ok(Prepared {
+            cold: baseline.spec.cold,
             active,
             status,
             follow_up: Some((baseline, variable, derived)),
@@ -389,15 +394,16 @@ impl LabBackend for LiveLab {
                 prepared.active.install.version,
                 prepared.active.install.backend,
             );
-            if request.cold {
+            if prepared.cold {
                 text.push_str(
                     " The server is restarted once first so the model load is timed from cold.",
                 );
             }
             if let Some((_, variable, _)) = &prepared.follow_up {
                 text.push_str(&format!(
-                    " The server is restarted with one setting changed ({}) and restored to this profile afterwards.",
-                    variable.as_str()
+                    " The server is restarted with one setting changed ({}) and restored to this profile afterwards. The cache state stays that of the baseline ({}).",
+                    variable.as_str(),
+                    if prepared.cold { "cold" } else { "warm" }
                 ));
             }
             Ok(Checked {
@@ -429,7 +435,12 @@ impl LiveLab {
         progress: watch::Sender<Progress>,
     ) -> Result<RunDone, String> {
         let prepared = self.prepare(&request).await?;
+        let request = LabRequest {
+            cold: prepared.cold,
+            ..request
+        };
         let Prepared {
+            cold: _,
             active,
             status,
             follow_up,
@@ -813,5 +824,7 @@ pub(crate) mod fake {
     }
 }
 
+#[cfg(test)]
+mod acceptance;
 #[cfg(test)]
 mod tests;
