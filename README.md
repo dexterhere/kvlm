@@ -71,7 +71,7 @@ in Ollama, the Hugging Face cache or the application's store, downloads with pau
 and checksum verification, and keeps a gated-model token in your desktop keyring. A live run
 on the reference machine is recorded in the
 [M1 acceptance evidence](docs/03-development/m1-acceptance.md); the stored-token restart
-check is still pending. See the [M1 plan](docs/04-roadmap/m1/Planned.md). Managed runtimes,
+check passed. See the [M1 plan](docs/04-roadmap/m1/Planned.md). Managed runtimes,
 controlled benchmark comparisons, and more hardware matrices come in M2 to M4; the
 [roadmap](docs/04-roadmap/milestones.md) tracks them.
 
