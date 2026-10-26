@@ -58,7 +58,6 @@ pub enum LabCommand {
         experiment: i64,
     },
     Delete {
-        id: u64,
         experiment: i64,
     },
     Check {
@@ -95,7 +94,6 @@ pub enum LabEvent {
         result: Result<Option<Box<Experiment>>, String>,
     },
     Deleted {
-        id: u64,
         experiment: i64,
         result: Result<(), String>,
     },
@@ -196,8 +194,7 @@ pub fn start(
                                     .await
                                     .map(|found| found.map(Box::new)),
                             },
-                            LabCommand::Delete { id, experiment } => LabEvent::Deleted {
-                                id,
+                            LabCommand::Delete { experiment } => LabEvent::Deleted {
                                 experiment,
                                 result: backend.delete(experiment).await,
                             },
@@ -673,11 +670,13 @@ pub(crate) mod fake {
                     done: 1,
                     of: request.passes,
                 });
-                while hang {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Err("The run was cancelled.".into());
+                if hang {
+                    loop {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Err("The run was cancelled.".into());
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
                     }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
                 stored
                     .map(|e| RunDone {

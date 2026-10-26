@@ -265,9 +265,24 @@ mod tests {
 
     #[test]
     fn arguments_are_read_from_a_real_process_command_line() {
-        let own = std::process::id() as i32;
-        let args = read_arguments(own).expect("this test process has arguments");
-        assert!(!args.iter().any(|a| a.contains('\0')));
+        // The test binary may run without arguments, so read a child that has some.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep starts");
+        let pid = child.id() as i32;
+        // Until the exec completes the child still shows the test binary's own command line.
+        let mut args = None;
+        for _ in 0..100 {
+            args = read_arguments(pid);
+            if args.as_deref() == Some(&["30".to_string()][..]) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(args, Some(vec!["30".to_string()]));
         assert!(read_arguments(i32::MAX).is_none());
     }
 }
