@@ -13,4 +13,5 @@ pub mod supervisor;
 #[cfg(test)]
 mod test_server;
 pub mod traits;
+pub mod update;
 pub mod vllm;
