@@ -55,3 +55,17 @@ impl RuntimeLifecycleState {
         )
     }
 }
+
+/// `bytes * 2` lowercase hex characters from the kernel's random source. Used for launch
+/// aliases and staging names, never for secrets that must survive a restart.
+pub fn random_hex(bytes: usize) -> Result<String, String> {
+    use std::{fmt::Write, io::Read};
+    let mut buffer = vec![0u8; bytes];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buffer))
+        .map_err(|_| "Cannot read the system random source.".to_string())?;
+    Ok(buffer.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    }))
+}

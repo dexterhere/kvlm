@@ -16,6 +16,9 @@ tokio.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
 oo7.workspace = true
+flate2.workspace = true
+tar.workspace = true
+rustix.workspace = true
 
 [lints]
 workspace = true
