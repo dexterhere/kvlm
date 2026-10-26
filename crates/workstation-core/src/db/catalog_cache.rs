@@ -4,7 +4,9 @@
 
 use super::queries::HistoryStore;
 use crate::models::{
-    catalog::{CatalogPage, validate_release},
+    artifact::valid_remote_filename,
+    catalog::{CatalogPage, valid_repo_id, valid_revision, validate_release},
+    gguf::GgufMetadata,
     release::ModelRelease,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -13,6 +15,8 @@ const MAX_QUERY_ROWS: i64 = 200;
 const MAX_QUERY_BYTES: i64 = 16 * 1024 * 1024;
 const MAX_RELEASE_ROWS: i64 = 2_000;
 const MAX_RELEASE_BYTES: i64 = 64 * 1024 * 1024;
+const MAX_METADATA_ROWS: i64 = 4000;
+const MAX_METADATA_BYTES: i64 = 64 * 1024 * 1024;
 const MAX_KEY: usize = 512;
 
 /// Returned when a revision would be stored with a size or checksum that differs from
@@ -150,6 +154,58 @@ impl HistoryStore {
             Some(revision) => read_release(&self.connection, repo_id, &revision),
             None => Ok(None),
         }
+    }
+
+    /// Cache what a file's header declared. A revision is immutable, so a stored row
+    /// stays valid; a differing second parse of the same file is refused.
+    pub fn cache_artifact_metadata(
+        &self,
+        repo_id: &str,
+        revision: &str,
+        filename: &str,
+        metadata: &GgufMetadata,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        if !valid_repo_id(repo_id) || !valid_revision(revision) || !valid_remote_filename(filename)
+        {
+            return Err("Artifact identity is invalid.".into());
+        }
+        let json = serde_json::to_string(metadata).map_err(|_| "Cannot encode file metadata.")?;
+        let at = timestamp(now_ms)?;
+        self.write(|c| {
+            c.execute(
+                "INSERT INTO artifact_metadata(repo_id,revision,filename,gguf_json,fetched_at_unix_ms) VALUES (?1,?2,?3,?4,?5)
+                 ON CONFLICT(repo_id,revision,filename) DO UPDATE SET gguf_json=excluded.gguf_json, fetched_at_unix_ms=excluded.fetched_at_unix_ms
+                 WHERE excluded.fetched_at_unix_ms >= artifact_metadata.fetched_at_unix_ms",
+                params![repo_id, revision, filename, json, at],
+            )
+            .map_err(|_| "Cannot cache file metadata. It may be too large or the disk full.")?;
+            evict(c, "artifact_metadata", MAX_METADATA_ROWS, MAX_METADATA_BYTES, "gguf_json")
+        })
+    }
+
+    /// Saved header facts for a file at a pinned revision; unreadable rows read as absent.
+    pub fn cached_artifact_metadata(
+        &self,
+        repo_id: &str,
+        revision: &str,
+        filename: &str,
+    ) -> Result<Option<(GgufMetadata, u64)>, String> {
+        let row: Option<(String, i64)> = self
+            .connection
+            .query_row(
+                "SELECT gguf_json, fetched_at_unix_ms FROM artifact_metadata WHERE repo_id=?1 AND revision=?2 AND filename=?3",
+                params![repo_id, revision, filename],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| "Cannot read cached file metadata.")?;
+        Ok(row.and_then(|(json, at)| {
+            Some((
+                serde_json::from_str(&json).ok()?,
+                u64::try_from(at).unwrap_or(0),
+            ))
+        }))
     }
 
     pub fn cached_release(

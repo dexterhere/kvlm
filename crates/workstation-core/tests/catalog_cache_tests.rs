@@ -478,3 +478,49 @@ fn conflicts_use_the_published_constant_and_long_unicode_queries_fit() {
         .cache_catalog_page(&key, &page("a/b", None), 1)
         .unwrap();
 }
+
+fn gguf_facts(tensor_bytes: u64) -> workstation_core::models::gguf::GgufMetadata {
+    workstation_core::models::gguf::GgufMetadata {
+        file_bytes: 1000,
+        tensor_count: 1,
+        tensor_bytes,
+        alignment: 32,
+        architecture: Some("qwen2".into()),
+        attention: None,
+        warnings: vec![],
+    }
+}
+
+#[test]
+fn artifact_metadata_round_trips_and_rejects_bad_identities() {
+    let path = TempDb::new();
+    let store = HistoryStore::open(&path.0).unwrap();
+    assert!(
+        store
+            .cached_artifact_metadata("o/n", REV, "m.gguf")
+            .unwrap()
+            .is_none()
+    );
+    store
+        .cache_artifact_metadata("o/n", REV, "m.gguf", &gguf_facts(5), 10)
+        .unwrap();
+    store
+        .cache_artifact_metadata("o/n", REV, "m.gguf", &gguf_facts(6), 5)
+        .unwrap();
+    let (facts, at) = store
+        .cached_artifact_metadata("o/n", REV, "m.gguf")
+        .unwrap()
+        .unwrap();
+    assert_eq!((facts.tensor_bytes, at), (5, 10));
+    for (repo, revision, name) in [
+        ("bad", REV, "m.gguf"),
+        ("o/n", "main", "m.gguf"),
+        ("o/n", REV, "../m.gguf"),
+    ] {
+        assert!(
+            store
+                .cache_artifact_metadata(repo, revision, name, &gguf_facts(1), 1)
+                .is_err()
+        );
+    }
+}
