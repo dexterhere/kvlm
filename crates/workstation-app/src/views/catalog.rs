@@ -155,6 +155,11 @@ impl Explorer {
         }
     }
 
+    /// The search field, for the quick-search shortcut.
+    pub fn search_entry(&self) -> gtk::SearchEntry {
+        self.entry.clone()
+    }
+
     /// Startup read of the saved first page. Never reaches the network.
     pub fn load_saved(&self) {
         let id = next_id(&self.state);

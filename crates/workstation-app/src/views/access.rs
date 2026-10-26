@@ -45,7 +45,16 @@ impl Access {
                 .use_markup(false)
                 .build(),
         );
+        // A flow box wraps the four buttons so the row fits the narrowest window.
+        let flow = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .max_children_per_line(4)
+            .column_spacing(6)
+            .row_spacing(6)
+            .valign(gtk::Align::Center)
+            .build();
         let buttons_row = adw::ActionRow::builder().title("Actions").build();
+        buttons_row.add_suffix(&flow);
         let buttons: Vec<gtk::Button> = ["Save", "Use saved", "Check", "Remove"]
             .into_iter()
             .map(|label| {
@@ -56,7 +65,11 @@ impl Access {
                 button.update_property(&[gtk::accessible::Property::Label(&format!(
                     "{label} Hugging Face token"
                 ))]);
-                buttons_row.add_suffix(&button);
+                flow.append(&button);
+                // The button is the tab stop; its wrapper must not be a second one.
+                if let Some(wrapper) = flow.last_child() {
+                    wrapper.set_focusable(false);
+                }
                 button
             })
             .collect();
