@@ -11,6 +11,7 @@ use std::{
 
 pub mod amd_sysfs;
 pub mod cpu;
+pub mod load;
 pub mod nvml;
 pub mod resources;
 pub mod vulkan;
