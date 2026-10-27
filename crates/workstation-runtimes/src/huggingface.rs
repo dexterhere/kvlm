@@ -461,7 +461,7 @@ impl HuggingFaceClient {
 
 /// Resolver that refuses to hand out loopback, private, link-local or otherwise
 /// non-public addresses, so an allowed host name cannot be pointed at the local network.
-struct PublicOnly;
+pub(crate) struct PublicOnly;
 
 impl reqwest::dns::Resolve for PublicOnly {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {

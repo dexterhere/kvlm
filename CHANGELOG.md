@@ -6,6 +6,10 @@ Changes worth knowing about are recorded here. There is no published release yet
 
 ### Added
 
+- Opt-in update check (one request when asked), AppStream release and description updates, and a
+  release checklist.
+- Ctrl+K quick search and an opt-in accessibility audit of every page.
+- Read-only LM Studio and vLLM discovery on the Runtimes page.
 - Qwen2 architecture metadata and conditional CPU/CUDA memory-policy classes with
   fresh budgets, four-part breakdowns, and explicit layout assumptions.
 - Exact Ollama manifest/hardware benchmark verification restored after restart,
