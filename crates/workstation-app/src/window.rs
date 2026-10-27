@@ -63,6 +63,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     let title = adw::WindowTitle::new(APP_NAME, concat!("Beta ", env!("CARGO_PKG_VERSION")));
     let header = adw::HeaderBar::builder().title_widget(&switcher).build();
     let menu = gio::Menu::new();
+    menu.append(Some("Setup guide"), Some("win.setup"));
     menu.append(Some("Quit"), Some("app.quit"));
     header.pack_end(
         &gtk::MenuButton::builder()
@@ -134,6 +135,29 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     });
     window.add_action(&search);
     app.set_accels_for_action("win.search", &["<Primary>k"]);
+
+    let setup = gio::SimpleAction::new("setup", None);
+    let weak_window = window.downgrade();
+    let weak_stack = stack.downgrade();
+    setup.connect_activate(move |_, _| {
+        let (Some(window), stack) = (weak_window.upgrade(), weak_stack.clone()) else {
+            return;
+        };
+        views::setup::present(&window, move |page| {
+            if let Some(stack) = stack.upgrade() {
+                stack.set_visible_child_name(page);
+            }
+        });
+    });
+    window.add_action(&setup);
+    if views::setup::needed() {
+        let window = window.downgrade();
+        glib::idle_add_local_once(move || {
+            if let Some(window) = window.upgrade() {
+                gtk::prelude::ActionGroupExt::activate_action(&window, "setup", None);
+            }
+        });
+    }
 
     let refresh = gio::SimpleAction::new("refresh", None);
     let weak_stack = stack.downgrade();
