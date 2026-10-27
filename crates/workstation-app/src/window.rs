@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::{cell::RefCell, rc::Rc};
+
 use adw::prelude::*;
 use gtk::{gio, glib};
 use workstation_core::APP_NAME;
@@ -136,14 +138,16 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     window.add_action(&search);
     app.set_accels_for_action("win.search", &["<Primary>k"]);
 
+    let latest_hardware = Rc::new(RefCell::new(None));
     let setup = gio::SimpleAction::new("setup", None);
+    let setup_hardware = latest_hardware.clone();
     let weak_window = window.downgrade();
     let weak_stack = stack.downgrade();
     setup.connect_activate(move |_, _| {
         let (Some(window), stack) = (weak_window.upgrade(), weak_stack.clone()) else {
             return;
         };
-        views::setup::present(&window, move |page| {
+        views::setup::present(&window, setup_hardware.clone(), move |page| {
             if let Some(stack) = stack.upgrade() {
                 stack.set_visible_child_name(page);
             }
@@ -223,6 +227,9 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
             let Some(status) = weak_status.upgrade() else {
                 break;
             };
+            if let UiEvent::HardwareDetected(profile) = &event {
+                *latest_hardware.borrow_mut() = Some((**profile).clone());
+            }
             overview.receive(&event);
             runtimes.receive(&event);
             benchmarks.receive(&event);
