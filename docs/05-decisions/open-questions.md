@@ -18,7 +18,7 @@ the affected feature; they do not block the directory foundation.
 | Runtime import (§6.3) | Validate version-specific Ollama create/import semantics and which process can access a local blob path. |
 | Runtime downloads (§5.1) | Confirm available official bundles, checksum provenance, backend support, and archive extraction protections. |
 | Local-only mode (§5.4, §9.2) | [0009](0009-quick-benchmark.md) requires affirmative server cloud-disable status plus immutable local digest references for Quick Benchmark. Other runtimes, older protocols, and OS-level network isolation remain unresolved. |
-| Distribution (§9) | Confirm the application namespace; `org.gnome.LocalAIWorkstation` is provisional and does not imply GNOME affiliation. Options and the mechanical rename are in [ADR 0019](0019-application-id.md); the owner decides. The selected repository is `https://github.com/dexterhere/kvlm`, configured as origin on 2026-10-24. |
+| Distribution (§9) | Confirm the application namespace; `io.github.dexterhere.Kvlm` is provisional and does not imply GNOME affiliation. Options and the mechanical rename are in [ADR 0019](0019-application-id.md); the owner decides. The selected repository is `https://github.com/dexterhere/kvlm`, configured as origin on 2026-10-24. |
 | Public contribution | Configure real private security/conduct contacts and verify hosting/reporting settings before publication. |
 
 Treat runtime flags, wire formats, third-party integrations, and packaging examples

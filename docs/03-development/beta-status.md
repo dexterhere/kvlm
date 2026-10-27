@@ -22,9 +22,8 @@ Nothing below is marked validated unless a record says so.
 
 ## Needs the owner
 
-- Application ID and namespace ([ADR 0019](../05-decisions/0019-application-id.md)); `scripts/rename_app_id.py`
-  applies the decision, and a saved token under the old ID is not carried over.
-- Real security and conduct contact addresses.
+- Flathub registration of `io.github.dexterhere.Kvlm` ([ADR 0019](../05-decisions/0019-application-id.md), decided).
+  A Hugging Face token saved under the old placeholder ID is not carried over.
 - Version, tag, release notes and any store or Flathub submission
   ([release checklist](release-checklist.md)).
 - The machines and sessions in [hardware validation procedures](hardware-validation-procedures.md).

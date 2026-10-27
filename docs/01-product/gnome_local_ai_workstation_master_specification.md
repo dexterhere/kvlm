@@ -10,7 +10,7 @@
 ## 1. Executive Summary & Agent Directives
 
 ### 1.1 Project Identity
-**GNOME Local AI Workstation** (`org.gnome.LocalAIWorkstation` / binary: `local-ai-workstation`) is a developer-first, open-source GNOME control plane for discovering, configuring, running, benchmarking, and optimizing local AI inference engines.
+**GNOME Local AI Workstation** (`io.github.dexterhere.Kvlm` / binary: `local-ai-workstation`) is a developer-first, open-source GNOME control plane for discovering, configuring, running, benchmarking, and optimizing local AI inference engines.
 
 **What It Is:**
 - A hardware-aware model fit analyzer, runtime lifecycle manager, empirical benchmark lab, and developer endpoint configurator.
@@ -132,9 +132,9 @@ local-ai-workstation/
 ├── Cargo.toml                      # Workspace root with unified dependency versions
 ├── meson.build                     # GNOME standard build & desktop file integration
 ├── data/
-│   ├── org.gnome.LocalAIWorkstation.desktop.in
-│   ├── org.gnome.LocalAIWorkstation.metainfo.xml.in
-│   ├── org.gnome.LocalAIWorkstation.gschema.xml
+│   ├── io.github.dexterhere.Kvlm.desktop.in
+│   ├── io.github.dexterhere.Kvlm.metainfo.xml.in
+│   ├── io.github.dexterhere.Kvlm.gschema.xml
 │   └── icons/
 ├── crates/
 │   ├── workstation-core/           # Domain types, hardware probing, fit math, SQLite, exporters
@@ -601,7 +601,7 @@ ON benchmark_runs(artifact_id, hardware_profile_hash);
 - **Primary Development & Power-User Target:** Native Linux package (`.deb`, `.rpm`, Arch `PKGBUILD`, Nix flake) and AppImage/tarball so the application has direct, unthrottled access to `/sys/class/drm`, `libnvidia-ml.so.1`, local ports, and user processes.
 - **Flatpak Compatibility Design:**
   - The UI (`workstation-app`) communicates with runtimes over localhost HTTP (`--share=network`) and reads GPU info via `/dev/dri` (`--device=dri`).
-  - For spawning managed `llama-server` processes or inspecting host processes from inside a Flatpak sandbox, implement an optional D-Bus bridge (`org.gnome.LocalAIWorkstation.HostAgent`) running as a rootless `systemd --user` unit on the host, rather than requesting blanket `org.freedesktop.Flatpak.Development` permissions that violate Flathub policy.
+  - For spawning managed `llama-server` processes or inspecting host processes from inside a Flatpak sandbox, implement an optional D-Bus bridge (`io.github.dexterhere.Kvlm.HostAgent`) running as a rootless `systemd --user` unit on the host, rather than requesting blanket `org.freedesktop.Flatpak.Development` permissions that violate Flathub policy.
 
 ### 9.2 Network & Local-Only Privacy Guarantees
 - **Loopback Binding Default:** Every managed runtime launched by the application binds strictly to `127.0.0.1`. Exposing an endpoint on `0.0.0.0` (LAN) requires toggling an explicit security switch with a warning banner.

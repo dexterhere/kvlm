@@ -63,7 +63,7 @@ cargo test --workspace --locked
 python3 scripts/check_repository.py
 python3 -m unittest discover -s tests -p 'test_*.py'
 glib-compile-schemas --strict --dry-run data
-appstreamcli validate --no-net data/org.gnome.LocalAIWorkstation.metainfo.xml.in
+appstreamcli validate --no-net data/io.github.dexterhere.Kvlm.metainfo.xml.in
 ```
 
 `Cargo.lock` is committed because this workspace ships an application. Use `--locked`

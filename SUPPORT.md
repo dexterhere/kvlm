@@ -14,5 +14,7 @@ versions, reproduction steps, expected behavior, and reviewed logs. Include GPU 
 runtime versions when relevant. Remove access tokens and private machine details.
 
 The configured repository is [dexterhere/kvlm](https://github.com/dexterhere/kvlm).
-Private security reporting and a private conduct contact remain publication
-prerequisites. There are no official chat rooms or support addresses yet.
+Security reports go through GitHub private vulnerability reporting or the address in
+[SECURITY.md](SECURITY.md); conduct concerns use the address in
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). There are no official chat rooms or support
+addresses.

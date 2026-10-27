@@ -34,6 +34,11 @@ title, launcher and AppStream name) and its program is `local-ai-workstation`. T
 (`dexterhere/kvlm`) and the `KVLM_*` environment variables used by the opt-in acceptance tests
 use the short name.
 
+**The name.** Kvlm reads as **KV** + **LM**: the *key-value cache* and the *language model*. The
+KV cache is the part of local inference that grows with context length and quietly decides
+whether a model fits, so it is what this project is built to explain. (A maintainer-chosen
+reading of the name, not a formal acronym.)
+
 Running a local model starts with guesswork: will a 7B Q4_K_M fit in 6 GB of VRAM, what
 happens at 32K context, and is Ollama already holding the file you are about to download?
 Kvlm answers those questions on your own hardware, with the arithmetic shown, and then lets
