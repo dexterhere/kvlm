@@ -60,7 +60,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         .stack(&stack)
         .policy(adw::ViewSwitcherPolicy::Wide)
         .build();
-    let title = adw::WindowTitle::new(APP_NAME, "Development preview");
+    let title = adw::WindowTitle::new(APP_NAME, concat!("Beta ", env!("CARGO_PKG_VERSION")));
     let header = adw::HeaderBar::builder().title_widget(&switcher).build();
     let menu = gio::Menu::new();
     menu.append(Some("Quit"), Some("app.quit"));
