@@ -76,7 +76,7 @@ pub struct Explorer {
 impl Explorer {
     pub fn new(commands: mpsc::Sender<CoreCommand>) -> Self {
         let entry = gtk::SearchEntry::builder()
-            .placeholder_text("Search Hugging Face GGUF models")
+            .placeholder_text("Search models, for example qwen or llama")
             .hexpand(true)
             .build();
         let search = gtk::Button::with_label("Search");
@@ -84,7 +84,9 @@ impl Explorer {
         bar.append(&entry);
         bar.append(&search);
         let status = gtk::Label::builder()
-            .label("Search runs only when you ask. Nothing has been loaded yet.")
+            .label(
+                "Type a name and press Search. Nothing is loaded from the internet until you do.",
+            )
             .xalign(0.0)
             .wrap(true)
             .css_classes(["dim-label"])
@@ -98,8 +100,21 @@ impl Explorer {
         let access = Access::new(commands.clone());
         let downloads = Downloads::new(commands.clone());
         let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let heading = gtk::Label::builder()
+            .label("Find models")
+            .xalign(0.0)
+            .css_classes(["title-1"])
+            .build();
+        let intro = gtk::Label::builder()
+            .label("Search Hugging Face for models in the GGUF format that llama.cpp runs, see whether each one fits this computer, and download the ones you want.")
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .build();
         for child in [
-            bar.upcast_ref::<gtk::Widget>(),
+            heading.upcast_ref::<gtk::Widget>(),
+            intro.upcast_ref(),
+            bar.upcast_ref(),
             access.widget.upcast_ref(),
             downloads.widget.upcast_ref(),
             status.upcast_ref(),

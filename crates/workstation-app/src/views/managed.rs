@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The "llama.cpp (Managed)" card on the Runtimes page: install, launch profiles, one
+//! The "Run models with llama.cpp" card on the Runtimes page: install, launch profiles, one
 //! supervised server. All work goes through `CoreCommand::Managed`; nothing here blocks.
 
 use std::{
@@ -196,12 +196,12 @@ pub struct ManagedCard {
 impl ManagedCard {
     pub fn new(commands: Sender<CoreCommand>) -> Self {
         let title = gtk::Label::builder()
-            .label("llama.cpp (Managed)")
+            .label("Run models with llama.cpp")
             .xalign(0.0)
             .css_classes(["title-2"])
             .build();
         let intro = gtk::Label::builder()
-            .label("The official portable build, run as your user and reachable only from this computer. Closing the application stops it.")
+            .label("llama.cpp is a free engine that loads a model file and answers questions on your own computer. It is what many other apps, including Ollama and LM Studio, run underneath. Here Kvlm can install the official build for you and run it as your user, reachable only from this computer. Kvlm owns this copy, so it can start and stop it; closing Kvlm stops it. It does not touch Ollama, LM Studio or vLLM.")
             .wrap(true)
             .xalign(0.0)
             .css_classes(["dim-label"])
@@ -213,12 +213,16 @@ impl ManagedCard {
             .css_classes(["error"])
             .selectable(true)
             .build();
-        let server = adw::PreferencesGroup::builder().title("Server").build();
+        let server = adw::PreferencesGroup::builder().title("Server")
+            .description("Start or stop the engine. It needs an engine version and a saved way to run a model.")
+            .build();
         let builds = adw::PreferencesGroup::builder()
-            .title("Installed builds")
+            .title("Engine versions installed")
+            .description("Pick the build for your hardware: CUDA for NVIDIA, Vulkan for most GPUs, CPU if you have none.")
             .build();
         let profiles = adw::PreferencesGroup::builder()
-            .title("Launch profiles")
+            .title("Saved ways to run a model")
+            .description("A profile remembers the model file, port, context length and how much goes on the GPU.")
             .build();
         let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
         for widget in [

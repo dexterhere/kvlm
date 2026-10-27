@@ -7,6 +7,7 @@ mod fit_state;
 mod fit_workflow;
 mod lab;
 mod managed;
+mod prefs;
 mod views;
 mod window;
 
