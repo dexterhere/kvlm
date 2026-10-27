@@ -17,4 +17,5 @@ pub mod model_fit;
 pub mod overview;
 pub(super) mod resource_summary;
 pub mod runtimes;
+pub mod setup;
 pub mod updates;
