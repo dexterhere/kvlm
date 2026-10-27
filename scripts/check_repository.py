@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_ID = "org.gnome.LocalAIWorkstation"
+APP_ID = "io.github.dexterhere.Kvlm"
 
 
 def markdown_errors(root: Path) -> list[str]:

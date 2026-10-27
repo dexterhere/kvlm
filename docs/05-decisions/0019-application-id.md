@@ -1,7 +1,8 @@
 # 0019: Application ID and public contacts
 
-Date: 2026-10-27. Status: **open, owner decision required.** The software side is done; nothing here has been
-registered or published.
+Date: 2026-10-27. Status: **decided: `io.github.dexterhere.Kvlm`** (2026-10-27, owner delegated the choice). The `org.gnome.*` form suggested
+by the owner is refused by `rename_app_id.py` on purpose: that namespace belongs to the GNOME project. Nothing is
+registered with Flathub yet; the ID is only verifiable there while the repository stays `dexterhere/kvlm`.
 
 ## Problem
 
