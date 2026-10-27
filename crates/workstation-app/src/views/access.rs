@@ -37,7 +37,36 @@ impl Access {
         let entry = adw::PasswordEntryRow::builder()
             .title("Access token")
             .build();
+        row.add_prefix(&gtk::Image::from_icon_name("channel-secure-symbolic"));
         row.add_row(&entry);
+        let how = adw::ExpanderRow::builder()
+            .title("How to get a token")
+            .subtitle("Four short steps. It is free.")
+            .use_markup(false)
+            .build();
+        how.add_prefix(&gtk::Image::from_icon_name("help-about-symbolic"));
+        let guide = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        guide.set_margin_top(6);
+        guide.set_margin_bottom(12);
+        guide.set_margin_start(12);
+        guide.set_margin_end(12);
+        guide.append(&super::token_help::steps_list());
+        guide.append(
+            &gtk::Label::builder()
+                .label(super::token_help::NOTE)
+                .wrap(true)
+                .xalign(0.0)
+                .css_classes(["dim-label"])
+                .build(),
+        );
+        guide.append(&super::token_help::open_button());
+        let guide_row = gtk::ListBoxRow::builder()
+            .activatable(false)
+            .selectable(false)
+            .child(&guide)
+            .build();
+        how.add_row(&guide_row);
+        row.add_row(&how);
         row.add_row(
             &adw::ActionRow::builder()
                 .title("Where the token goes")

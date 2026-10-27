@@ -35,6 +35,7 @@ pub struct Overview {
     pub refresh: gtk::Button,
     spinner: gtk::Spinner,
     status: gtk::Label,
+    summary: gtk::Label,
     readings: gtk::Box,
     state: Rc<RefCell<LoadState>>,
     commands: tokio::sync::mpsc::Sender<CoreCommand>,
@@ -58,7 +59,7 @@ impl Overview {
             .hexpand(true)
             .build();
         let heading = gtk::Label::builder()
-            .label("Overview & Monitor")
+            .label("My computer")
             .xalign(0.0)
             .css_classes(["title-1"])
             .build();
@@ -67,6 +68,17 @@ impl Overview {
         controls.append(&status);
         controls.append(&refresh);
         let readings = gtk::Box::new(gtk::Orientation::Vertical, 24);
+        let summary = gtk::Label::builder()
+            .label("Reading your hardware…")
+            .wrap(true)
+            .xalign(0.0)
+            .margin_top(14)
+            .margin_bottom(14)
+            .margin_start(14)
+            .margin_end(14)
+            .build();
+        let summary_card = gtk::Box::builder().css_classes(["card"]).build();
+        summary_card.append(&summary);
         let fit = super::model_fit::ModelFit::new(commands.clone());
         let layout = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -78,8 +90,16 @@ impl Overview {
             .build();
         layout.append(&heading);
         layout.append(&controls);
-        layout.append(&fit.widget);
+        layout.append(&summary_card);
         layout.append(&readings);
+        let calculator = gtk::Expander::builder()
+            .label("Will a model fit? (optional calculator)")
+            .child(&fit.widget)
+            .build();
+        calculator.set_tooltip_text(Some(
+            "Pick a model file and see whether it fits your memory, with the arithmetic shown",
+        ));
+        layout.append(&calculator);
         let clamp = adw::Clamp::builder()
             .maximum_size(900)
             .child(&layout)
@@ -96,6 +116,7 @@ impl Overview {
             refresh,
             spinner,
             status,
+            summary,
             readings,
             state,
             commands,
@@ -144,6 +165,7 @@ impl Overview {
                 while let Some(child) = self.readings.first_child() {
                     self.readings.remove(&child);
                 }
+                self.summary.set_label(&super::setup::advice(profile));
                 self.render(profile);
                 let coverage = if profile.issues.is_empty() {
                     "Hardware detected"

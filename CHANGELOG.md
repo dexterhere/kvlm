@@ -4,13 +4,29 @@ Changes worth knowing about are recorded here. The first pre-release is 0.1.1.
 
 ## Unreleased
 
+### Changed
+
+- Plainer, calmer interface: the first page is "My computer" with a short summary and a starting
+  model size, and the memory calculator sits in a collapsed section. The llama.cpp card explains
+  what llama.cpp is and what Kvlm does and does not control.
+- The setup guide shows one card at a time (no sliding neighbours), with a colour-scheme choice, a plain explanation of
+  models and runtimes, and Hugging Face token steps.
+
+- Clearer page names: My computer, Models ("Find models"), Runtimes, Speed test and Experiments, each
+  with a one-line explanation, and plainer status text.
+
+- Less on screen at once: Runtimes shows one runtime at a time (Ollama, llama.cpp, LM Studio and
+  vLLM), and Speed test and Experiments keep options, verification and past results in collapsed
+  sections.
+
 ### Added
 
 - A release workflow that builds a Flatpak bundle and an AppImage and attaches them, with checksums, to
-  a version tag's release. Untried until the first tagged run.
-
-### Added
-
+  a version tag's release. Both built on a pull request; neither has been installed and run on a real machine.
+- Preferences (Ctrl+,): colour scheme (follow the system, light or dark), reopen the setup guide,
+  and the fixed privacy statements.
+- "How to get a token" steps with a button that opens the Hugging Face token page, on the Models
+  page and in the setup guide.
 - The setup guide shows the hardware snapshot the window already takes and a rough starting model
   size. It makes no extra probe or request.
 

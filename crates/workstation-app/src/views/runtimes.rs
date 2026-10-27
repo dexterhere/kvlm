@@ -54,7 +54,7 @@ pub struct Runtimes {
     inspection: Rc<RefCell<InspectionState>>,
     commands: tokio::sync::mpsc::Sender<CoreCommand>,
     managed: super::managed::ManagedCard,
-    layout: gtk::Box,
+    sections: gtk::Stack,
 }
 
 impl Runtimes {
@@ -69,7 +69,7 @@ impl Runtimes {
             .hexpand(true)
             .build();
         let heading = gtk::Label::builder()
-            .label("Runtimes & Endpoints")
+            .label("Your runtimes")
             .xalign(0.0)
             .css_classes(["title-1"])
             .build();
@@ -87,10 +87,37 @@ impl Runtimes {
             .margin_end(18)
             .build();
         layout.append(&heading);
-        layout.append(&controls);
-        layout.append(&readings);
+        layout.append(
+            &gtk::Label::builder()
+                .label("A runtime is the program that loads a model and answers. Pick one to see its status.")
+                .wrap(true)
+                .xalign(0.0)
+                .css_classes(["dim-label"])
+                .build(),
+        );
+        let sections = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::Crossfade)
+            .hhomogeneous(false)
+            .vhomogeneous(false)
+            .build();
+        let switcher = gtk::StackSwitcher::builder()
+            .stack(&sections)
+            .halign(gtk::Align::Start)
+            .build();
+        let ollama = gtk::Box::new(gtk::Orientation::Vertical, 18);
+        ollama.append(&controls);
+        ollama.append(&readings);
+        sections.add_titled(&ollama, Some("ollama"), "Ollama");
         let managed = super::managed::ManagedCard::new(commands.clone());
-        layout.append(&managed.widget);
+        sections.add_titled(&managed.widget, Some("llamacpp"), "llama.cpp");
+        // Scrolls sideways instead of forcing the window wider than the 360 px minimum.
+        let switcher_scroll = gtk::ScrolledWindow::builder()
+            .child(&switcher)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .build();
+        layout.append(&switcher_scroll);
+        layout.append(&sections);
         let clamp = adw::Clamp::builder()
             .maximum_size(900)
             .child(&layout)
@@ -111,7 +138,7 @@ impl Runtimes {
             inspection: Rc::new(RefCell::new(InspectionState::default())),
             commands,
             managed,
-            layout,
+            sections,
         };
         let state = Rc::clone(&runtimes.state);
         let spinner = runtimes.spinner.clone();
@@ -129,7 +156,8 @@ impl Runtimes {
 
     /// Add a section below the managed runtime card.
     pub fn append(&self, section: &impl IsA<gtk::Widget>) {
-        self.layout.append(section);
+        self.sections
+            .add_titled(section, Some("others"), "LM Studio and vLLM");
     }
 
     /// Reads the saved managed-runtime state (local files only) and starts supervision.
