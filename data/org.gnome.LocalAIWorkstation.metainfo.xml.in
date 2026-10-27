@@ -29,9 +29,9 @@
   </categories>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="0.1.0" date="2026-10-27" type="development">
+    <release version="0.1.1" date="2026-10-27" type="development">
       <description>
-        <p>Pre-release for testing. Hardware validation is still in progress.</p>
+        <p>Beta pre-release for testing. Built from source; hardware, GNOME-session and screen-reader validation are still in progress.</p>
       </description>
     </release>
   </releases>
