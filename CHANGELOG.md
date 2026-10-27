@@ -4,8 +4,20 @@ Changes worth knowing about are recorded here. The first pre-release is 0.1.1.
 
 ## Unreleased
 
+### Changed
+
+- Plainer, calmer interface: the first page is "My computer" with a short summary and a starting
+  model size, and the memory calculator sits in a collapsed section. The llama.cpp card explains
+  what llama.cpp is and what Kvlm does and does not control.
+- The setup guide is a swipeable carousel with a colour-scheme choice, a plain explanation of
+  models and runtimes, and Hugging Face token steps.
+
 ### Added
 
+- Preferences (Ctrl+,): colour scheme (follow the system, light or dark), reopen the setup guide,
+  and the fixed privacy statements.
+- "How to get a token" steps with a button that opens the Hugging Face token page, on the Models
+  page and in the setup guide.
 - The setup guide shows the hardware snapshot the window already takes and a rough starting model
   size. It makes no extra probe or request.
 

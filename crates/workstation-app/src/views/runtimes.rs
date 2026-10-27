@@ -69,7 +69,7 @@ impl Runtimes {
             .hexpand(true)
             .build();
         let heading = gtk::Label::builder()
-            .label("Runtimes & Endpoints")
+            .label("Your runtimes")
             .xalign(0.0)
             .css_classes(["title-1"])
             .build();

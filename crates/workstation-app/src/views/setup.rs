@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! First-run setup guide. It explains what the application does and does not do, then sends the
-//! user to the page that performs the first check. It makes no request, reads no hardware and
-//! changes nothing itself; the only thing it stores is an empty marker file that says it was seen.
+//! First-run setup guide: a short carousel that explains what the application does, lets the user
+//! pick a colour scheme, explains models and runtimes, shows how to get a Hugging Face token and
+//! summarises the hardware snapshot the window already took. It makes no request and starts no
+//! probe itself; it stores only the marker file that says it was seen (and the theme, if changed).
 
 use std::{
     cell::RefCell,
@@ -13,6 +14,8 @@ use std::{
 use adw::prelude::*;
 use gtk::glib;
 use workstation_core::hardware::HardwareProfile;
+
+use crate::prefs::{self, Theme};
 
 const MARKER: &str = "local-ai-workstation/setup-seen";
 
@@ -34,55 +37,6 @@ fn remember(path: &Path) {
 /// True until the guide has been finished or skipped once.
 pub fn needed() -> bool {
     !seen(&marker())
-}
-
-struct Step {
-    title: &'static str,
-    icon: &'static str,
-    body: &'static str,
-}
-
-const STEPS: [Step; 3] = [
-    Step {
-        title: "Welcome to Kvlm",
-        icon: "computer-symbolic",
-        body: "Kvlm tells you whether a local model will fit your memory, shows what your runtimes are doing, and checks the answer with a benchmark.\n\nIt sends no telemetry, makes no network request when it starts, and needs no administrator rights.",
-    },
-    Step {
-        title: "Your runtimes stay yours",
-        icon: "network-server-symbolic",
-        body: "Ollama, LM Studio and vLLM are read, never started, stopped or changed. Kvlm looks for them only on this computer.\n\nOnly a llama.cpp server that Kvlm installs itself is managed by Kvlm.",
-    },
-    Step {
-        title: "You choose when anything runs",
-        icon: "system-run-symbolic",
-        body: "Benchmarks use your CPU, GPU and memory, and only after you press Check and then Run. Downloads and the update check happen only when you press their buttons.\n\nA Hugging Face token, if you add one, is kept in your system keyring.",
-    },
-];
-
-fn page(step: &Step, button: &gtk::Button) -> adw::NavigationPage {
-    let status = adw::StatusPage::builder()
-        .icon_name(step.icon)
-        .title(step.title)
-        .description(step.body)
-        .child(button)
-        .build();
-    adw::NavigationPage::builder()
-        .title(step.title)
-        .child(&status)
-        .build()
-}
-
-fn button(label: &str, suggested: bool) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .label(label)
-        .halign(gtk::Align::Center)
-        .build();
-    button.add_css_class("pill");
-    if suggested {
-        button.add_css_class("suggested-action");
-    }
-    button
 }
 
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -146,6 +100,80 @@ pub fn advice(profile: &HardwareProfile) -> String {
     lines.join("\n")
 }
 
+fn button(label: &str, suggested: bool) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .label(label)
+        .halign(gtk::Align::Center)
+        .build();
+    button.add_css_class("pill");
+    if suggested {
+        button.add_css_class("suggested-action");
+    }
+    button
+}
+
+fn page(icon: &str, title: &str, body: &str, child: Option<&gtk::Widget>) -> adw::StatusPage {
+    let page = adw::StatusPage::builder()
+        .icon_name(icon)
+        .title(title)
+        .description(body)
+        .vexpand(true)
+        .build();
+    if let Some(child) = child {
+        page.set_child(Some(child));
+    }
+    page
+}
+
+fn fact_list(rows: &[(&str, &str, &str)]) -> gtk::ListBox {
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .build();
+    for (icon, title, subtitle) in rows {
+        let row = adw::ActionRow::builder()
+            .title(*title)
+            .subtitle(*subtitle)
+            .subtitle_lines(0)
+            .use_markup(false)
+            .build();
+        row.add_prefix(&gtk::Image::from_icon_name(icon));
+        list.append(&row);
+    }
+    list
+}
+
+fn clamp(child: &impl IsA<gtk::Widget>) -> adw::Clamp {
+    adw::Clamp::builder().maximum_size(440).child(child).build()
+}
+
+fn theme_choice() -> gtk::Box {
+    let row = gtk::Box::builder()
+        .css_classes(["linked"])
+        .halign(gtk::Align::Center)
+        .build();
+    let current = prefs::theme();
+    let mut group: Option<gtk::ToggleButton> = None;
+    for theme in Theme::ALL {
+        let button = gtk::ToggleButton::builder()
+            .label(theme.label())
+            .active(theme == current)
+            .build();
+        if let Some(first) = &group {
+            button.set_group(Some(first));
+        } else {
+            group = Some(button.clone());
+        }
+        button.connect_toggled(move |button| {
+            if button.is_active() {
+                prefs::set_theme(theme);
+            }
+        });
+        row.append(&button);
+    }
+    row
+}
+
 /// Shows the guide. `go` receives the name of the page to open when it closes. `scan` is polled
 /// for the hardware snapshot the window is already taking; the guide never starts a probe itself.
 pub fn present(
@@ -157,11 +185,10 @@ pub fn present(
     let dialog = adw::Window::builder()
         .transient_for(parent)
         .modal(true)
-        .title("Setup guide")
-        .default_width(520)
-        .default_height(560)
+        .title("Welcome to Kvlm")
+        .default_width(560)
+        .default_height(640)
         .build();
-    let nav = adw::NavigationView::new();
     let finish = |target: &'static str| {
         let go = go.clone();
         let dialog = dialog.downgrade();
@@ -174,26 +201,138 @@ pub fn present(
         }
     };
 
-    // Quick scan page, built first because the last intro step pushes it.
     let found = gtk::Label::builder()
         .label("Reading your hardware…")
         .wrap(true)
         .justify(gtk::Justification::Center)
+        .css_classes(["card"])
+        .margin_start(12)
+        .margin_end(12)
         .build();
-    let to_start = button("Continue", true);
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 16);
-    column.append(&found);
-    column.append(&to_start);
-    let scan_page = adw::NavigationPage::builder()
-        .title("Your hardware")
-        .child(
-            &adw::StatusPage::builder()
-                .icon_name("computer-symbolic")
-                .title("What this computer can run")
-                .child(&column)
-                .build(),
-        )
+    found.set_margin_top(6);
+    found.set_margin_bottom(6);
+    let start = {
+        let overview = button("Open My computer", true);
+        overview.connect_clicked(finish("overview"));
+        let runtimes = button("Find my runtimes", false);
+        runtimes.connect_clicked(finish("runtimes"));
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        column.append(&overview);
+        column.append(&runtimes);
+        column
+    };
+
+    let token_steps = {
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        column.append(&super::token_help::steps_list());
+        column.append(&super::token_help::open_button());
+        clamp(&column)
+    };
+    let pages = [
+        page(
+            "applications-science-symbolic",
+            "Run AI on your own computer",
+            "Kvlm helps you pick a model that fits, shows what is running, and checks real speed. Nothing leaves this computer unless you press a button.",
+            None,
+        ),
+        page(
+            "preferences-desktop-appearance-symbolic",
+            "Pick a look",
+            "You can change this later in Preferences.",
+            Some(theme_choice().upcast_ref()),
+        ),
+        page(
+            "dialog-information-symbolic",
+            "How local AI fits together",
+            "Three parts work together. Kvlm helps with all of them.",
+            Some(
+                clamp(&fact_list(&[
+                    ("folder-download-symbolic", "A model", "The AI itself, a large file you download once. Models from Hugging Face are the most common."),
+                    ("system-run-symbolic", "A runtime", "The program that loads the model and answers. Ollama, LM Studio and vLLM are runtimes you install yourself; Kvlm only looks at them. llama.cpp is the engine inside many of them, and Kvlm can also install and run its own copy."),
+                    ("computer-symbolic", "Your hardware", "Memory decides what fits. A graphics card (GPU) is much faster than the processor alone."),
+                ]))
+                .upcast_ref(),
+            ),
+        ),
+        page(
+            "channel-secure-symbolic",
+            "A Hugging Face token (optional)",
+            super::token_help::NOTE,
+            Some(token_steps.upcast_ref()),
+        ),
+        page(
+            "computer-symbolic",
+            "What this computer can run",
+            "A rough starting point from the hardware Kvlm just read.",
+            Some(found.upcast_ref()),
+        ),
+        page(
+            "object-select-symbolic",
+            "You are ready",
+            "Reopen this guide any time from the main menu.",
+            Some(start.upcast_ref()),
+        ),
+    ];
+
+    let carousel = adw::Carousel::builder()
+        .interactive(true)
+        .vexpand(true)
         .build();
+    for page in &pages {
+        carousel.append(page);
+    }
+    let dots = adw::CarouselIndicatorDots::builder()
+        .carousel(&carousel)
+        .build();
+    let back = gtk::Button::builder().label("Back").build();
+    back.add_css_class("flat");
+    let next = button("Next", true);
+    let skip = gtk::Button::builder().label("Skip").build();
+    skip.add_css_class("flat");
+    skip.connect_clicked(finish("overview"));
+    let bar = gtk::CenterBox::builder()
+        .margin_start(18)
+        .margin_end(18)
+        .margin_bottom(18)
+        .build();
+    let left = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    left.append(&back);
+    left.append(&skip);
+    bar.set_start_widget(Some(&left));
+    bar.set_center_widget(Some(&dots));
+    bar.set_end_widget(Some(&next));
+
+    let last = pages.len() - 1;
+    let sync = {
+        let (back, next, skip) = (back.downgrade(), next.downgrade(), skip.downgrade());
+        move |carousel: &adw::Carousel| {
+            let index = carousel.position().round() as usize;
+            if let (Some(back), Some(next), Some(skip)) =
+                (back.upgrade(), next.upgrade(), skip.upgrade())
+            {
+                back.set_sensitive(index > 0);
+                next.set_visible(index < last);
+                skip.set_visible(index < last);
+            }
+        }
+    };
+    sync(&carousel);
+    carousel.connect_position_notify(sync);
+    let step = |delta: isize| {
+        let carousel = carousel.downgrade();
+        let pages = pages.clone();
+        move |_: &gtk::Button| {
+            if let Some(carousel) = carousel.upgrade() {
+                let index = carousel.position().round() as isize + delta;
+                if let Some(page) = pages.get(index.max(0) as usize) {
+                    carousel.scroll_to(page, true);
+                }
+            }
+        }
+    };
+    next.connect_clicked(step(1));
+    back.connect_clicked(step(-1));
+
     {
         let found = found.downgrade();
         let mut waited = 0;
@@ -207,80 +346,19 @@ pub fn present(
             }
             waited += 1;
             if waited > 60 {
-                found.set_label("The scan is taking long. Overview shows it when it finishes.");
+                found.set_label("The scan is taking long. My computer shows it when it finishes.");
                 return glib::ControlFlow::Break;
             }
             glib::ControlFlow::Continue
         });
     }
 
-    let last = {
-        let hardware = button("Open Overview", true);
-        hardware.connect_clicked(finish("overview"));
-        let runtimes = button("Find my runtimes", false);
-        runtimes.connect_clicked(finish("runtimes"));
-        let later = button("Skip for now", false);
-        later.add_css_class("flat");
-        later.connect_clicked(finish("overview"));
-        let column = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        column.append(&hardware);
-        column.append(&runtimes);
-        column.append(&later);
-        adw::NavigationPage::builder()
-            .title("Start")
-            .child(
-                &adw::StatusPage::builder()
-                    .icon_name("object-select-symbolic")
-                    .title("You are set")
-                    .description(
-                        "Pick where to start. You can reopen this guide from the main menu.",
-                    )
-                    .child(&column)
-                    .build(),
-            )
-            .build()
-    };
-    to_start.connect_clicked({
-        let nav = nav.downgrade();
-        move |_| {
-            if let Some(nav) = nav.upgrade() {
-                nav.push(&last);
-            }
-        }
-    });
-
-    // The intro pages chain: each Next pushes the following page, the last pushes the scan.
-    let mut following = vec![scan_page];
-    for step in STEPS.iter().skip(1).rev() {
-        let next = button("Next", true);
-        let page = page(step, &next);
-        let target = following.last().expect("seeded above").clone();
-        next.connect_clicked({
-            let nav = nav.downgrade();
-            move |_| {
-                if let Some(nav) = nav.upgrade() {
-                    nav.push(&target);
-                }
-            }
-        });
-        following.push(page);
-    }
-    let first_next = button("Next", true);
-    let first = page(&STEPS[0], &first_next);
-    let second = following.last().expect("at least one page").clone();
-    first_next.connect_clicked({
-        let nav = nav.downgrade();
-        move |_| {
-            if let Some(nav) = nav.upgrade() {
-                nav.push(&second);
-            }
-        }
-    });
-    nav.add(&first);
-
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.append(&carousel);
+    content.append(&bar);
     let toolbar = adw::ToolbarView::new();
-    toolbar.add_top_bar(&adw::HeaderBar::new());
-    toolbar.set_content(Some(&nav));
+    toolbar.add_top_bar(&adw::HeaderBar::builder().show_title(false).build());
+    toolbar.set_content(Some(&content));
     dialog.set_content(Some(&toolbar));
     // Closing with the window button counts as seeing it, so it never nags.
     dialog.connect_close_request(|_| {

@@ -14,6 +14,7 @@ use crate::{
 };
 
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
+    crate::prefs::theme().apply();
     let (commands, events) = bridge::start(runtime);
     let overview = views::overview::Overview::new(commands.clone());
     overview.append(&views::updates::new(runtime));
@@ -65,6 +66,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     let title = adw::WindowTitle::new(APP_NAME, concat!("Beta ", env!("CARGO_PKG_VERSION")));
     let header = adw::HeaderBar::builder().title_widget(&switcher).build();
     let menu = gio::Menu::new();
+    menu.append(Some("Preferences"), Some("win.preferences"));
     menu.append(Some("Setup guide"), Some("win.setup"));
     menu.append(Some("Quit"), Some("app.quit"));
     header.pack_end(
@@ -138,6 +140,21 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     window.add_action(&search);
     app.set_accels_for_action("win.search", &["<Primary>k"]);
 
+    let preferences = gio::SimpleAction::new("preferences", None);
+    let weak_window = window.downgrade();
+    preferences.connect_activate(move |_, _| {
+        let Some(window) = weak_window.upgrade() else {
+            return;
+        };
+        let opener = window.downgrade();
+        views::preferences::present(&window, move || {
+            if let Some(window) = opener.upgrade() {
+                gtk::prelude::ActionGroupExt::activate_action(&window, "setup", None);
+            }
+        });
+    });
+    window.add_action(&preferences);
+    app.set_accels_for_action("win.preferences", &["<Primary>comma"]);
     let latest_hardware = Rc::new(RefCell::new(None));
     let setup = gio::SimpleAction::new("setup", None);
     let setup_hardware = latest_hardware.clone();
