@@ -4,6 +4,8 @@ Changes worth knowing about are recorded here. The first pre-release is 0.1.1.
 
 ## Unreleased
 
+## 0.1.3 - 2026-10-27 (beta pre-release)
+
 ### Changed
 
 - Plainer, calmer interface: the first page is "My computer" with a short summary and a starting

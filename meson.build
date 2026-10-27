@@ -1,4 +1,4 @@
-project('local-ai-workstation', 'c', version: '0.1.2', meson_version: '>= 1.3.0')
+project('local-ai-workstation', 'c', version: '0.1.3', meson_version: '>= 1.3.0')
 
 gnome = import('gnome')
 python = import('python').find_installation('python3')
