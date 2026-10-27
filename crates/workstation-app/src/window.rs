@@ -31,7 +31,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     stack.add_titled_with_icon(
         &overview.widget,
         Some("overview"),
-        "Overview",
+        "My computer",
         "utilities-system-monitor-symbolic",
     );
     stack.add_titled_with_icon(
@@ -49,13 +49,13 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     stack.add_titled_with_icon(
         &benchmarks.widget,
         Some("benchmarks"),
-        "Benchmarks",
+        "Speed test",
         "applications-science-symbolic",
     );
     stack.add_titled_with_icon(
         &lab_page.widget,
         Some("lab"),
-        "Lab",
+        "Experiments",
         "applications-engineering-symbolic",
     );
 
@@ -79,7 +79,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
 
     let bottom_switcher = adw::ViewSwitcherBar::builder().stack(&stack).build();
     let status = gtk::Label::builder()
-        .label("Detecting hardware · Ollama not checked")
+        .label("Scanning this computer · Ollama not checked")
         .wrap(true)
         .margin_top(8)
         .margin_bottom(8)
@@ -238,7 +238,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     });
     let weak_status = status.downgrade();
     glib::MainContext::default().spawn_local(async move {
-        let mut hardware_status = "Detecting hardware";
+        let mut hardware_status = "Scanning this computer";
         let mut runtime_status = "Ollama not checked";
         while let Ok(event) = events.recv().await {
             let Some(status) = weak_status.upgrade() else {
@@ -252,8 +252,8 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
             benchmarks.receive(&event);
             catalog.receive(&event);
             match event {
-                UiEvent::HardwareDetected(_) => hardware_status = "Hardware snapshot ready",
-                UiEvent::HardwareFailed(_) => hardware_status = "Hardware detection failed",
+                UiEvent::HardwareDetected(_) => hardware_status = "Computer scanned",
+                UiEvent::HardwareFailed(_) => hardware_status = "Could not scan this computer",
                 UiEvent::OllamaDiscovered(discovery) => {
                     runtime_status = if discovery.installed.is_ok() && discovery.running.is_ok() {
                         "Connected: Ollama · Attached :11434"

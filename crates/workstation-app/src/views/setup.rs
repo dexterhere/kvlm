@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! First-run setup guide: a short carousel that explains what the application does, lets the user
+//! First-run setup guide: a short step-by-step dialog, one card at a time, that explains what the application does, lets the user
 //! pick a colour scheme, explains models and runtimes, shows how to get a Hugging Face token and
 //! summarises the hardware snapshot the window already took. It makes no request and starts no
 //! probe itself; it stores only the marker file that says it was seen (and the theme, if changed).
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     fs,
     path::{Path, PathBuf},
     rc::Rc,
@@ -274,16 +274,35 @@ pub fn present(
         ),
     ];
 
-    let carousel = adw::Carousel::builder()
-        .interactive(true)
+    // A stack with a cross-fade shows exactly one card at a time; a sliding carousel shows the
+    // neighbouring cards while it moves.
+    let stack = gtk::Stack::builder()
+        .transition_type(gtk::StackTransitionType::Crossfade)
+        .transition_duration(180)
+        .hhomogeneous(true)
         .vexpand(true)
         .build();
-    for page in &pages {
-        carousel.append(page);
+    for (index, page) in pages.iter().enumerate() {
+        stack.add_named(page, Some(&index.to_string()));
     }
-    let dots = adw::CarouselIndicatorDots::builder()
-        .carousel(&carousel)
+    let shown = Rc::new(Cell::new(0_usize));
+    let dots = gtk::Box::builder()
+        .spacing(8)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
         .build();
+    let dot_widgets: Vec<gtk::Label> = pages
+        .iter()
+        .map(|_| {
+            let dot = gtk::Label::builder()
+                .label("\u{25cf}")
+                .css_classes(["dim-label"])
+                .build();
+            dots.append(&dot);
+            dot
+        })
+        .collect();
+    dots.update_property(&[gtk::accessible::Property::Label("Setup progress")]);
     let back = gtk::Button::builder().label("Back").build();
     back.add_css_class("flat");
     let next = button("Next", true);
@@ -303,10 +322,24 @@ pub fn present(
     bar.set_end_widget(Some(&next));
 
     let last = pages.len() - 1;
-    let sync = {
+    let show = {
+        let stack = stack.downgrade();
         let (back, next, skip) = (back.downgrade(), next.downgrade(), skip.downgrade());
-        move |carousel: &adw::Carousel| {
-            let index = carousel.position().round() as usize;
+        let shown = shown.clone();
+        move |index: usize| {
+            shown.set(index);
+            if let Some(stack) = stack.upgrade() {
+                stack.set_visible_child_name(&index.to_string());
+            }
+            for (position, dot) in dot_widgets.iter().enumerate() {
+                if position == index {
+                    dot.remove_css_class("dim-label");
+                    dot.add_css_class("accent");
+                } else {
+                    dot.remove_css_class("accent");
+                    dot.add_css_class("dim-label");
+                }
+            }
             if let (Some(back), Some(next), Some(skip)) =
                 (back.upgrade(), next.upgrade(), skip.upgrade())
             {
@@ -316,22 +349,16 @@ pub fn present(
             }
         }
     };
-    sync(&carousel);
-    carousel.connect_position_notify(sync);
-    let step = |delta: isize| {
-        let carousel = carousel.downgrade();
-        let pages = pages.clone();
-        move |_: &gtk::Button| {
-            if let Some(carousel) = carousel.upgrade() {
-                let index = carousel.position().round() as isize + delta;
-                if let Some(page) = pages.get(index.max(0) as usize) {
-                    carousel.scroll_to(page, true);
-                }
-            }
-        }
-    };
-    next.connect_clicked(step(1));
-    back.connect_clicked(step(-1));
+    let show = Rc::new(show);
+    show(0);
+    next.connect_clicked({
+        let (show, shown) = (show.clone(), shown.clone());
+        move |_| show((shown.get() + 1).min(last))
+    });
+    back.connect_clicked({
+        let (show, shown) = (show.clone(), shown.clone());
+        move |_| show(shown.get().saturating_sub(1))
+    });
 
     {
         let found = found.downgrade();
@@ -354,7 +381,7 @@ pub fn present(
     }
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.append(&carousel);
+    content.append(&stack);
     content.append(&bar);
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&adw::HeaderBar::builder().show_title(false).build());

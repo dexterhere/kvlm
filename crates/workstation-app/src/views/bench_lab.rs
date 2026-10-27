@@ -86,12 +86,12 @@ impl Benchmarks {
         controls.append(&run);
         controls.append(&cancel);
         let heading = gtk::Label::builder()
-            .label("Benchmark Lab")
+            .label("Speed test")
             .xalign(0.0)
             .css_classes(["title-1"])
             .build();
         let note = gtk::Label::builder()
-            .label("Choose an installed model, then Check and Run. Models with reported cloud routing are excluded. Every run checks local-only support before inference. A request may load the model and use memory; this app never changes Ollama's service configuration.")
+            .label("Measure how fast one of your Ollama models answers. Pick a model, press Check to see what will happen, then Run. Models that run in the cloud are left out, and every run first confirms the model works locally. A run may load the model and use memory. Kvlm never changes Ollama's settings.")
             .xalign(0.0)
             .wrap(true)
             .build();

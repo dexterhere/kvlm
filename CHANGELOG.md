@@ -9,8 +9,11 @@ Changes worth knowing about are recorded here. The first pre-release is 0.1.1.
 - Plainer, calmer interface: the first page is "My computer" with a short summary and a starting
   model size, and the memory calculator sits in a collapsed section. The llama.cpp card explains
   what llama.cpp is and what Kvlm does and does not control.
-- The setup guide is a swipeable carousel with a colour-scheme choice, a plain explanation of
+- The setup guide shows one card at a time (no sliding neighbours), with a colour-scheme choice, a plain explanation of
   models and runtimes, and Hugging Face token steps.
+
+- Clearer page names: My computer, Models ("Find models"), Runtimes, Speed test and Experiments, each
+  with a one-line explanation, and plainer status text.
 
 ### Added
 

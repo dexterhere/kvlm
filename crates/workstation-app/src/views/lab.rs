@@ -166,7 +166,7 @@ impl Lab {
         let compare_text = text("");
 
         let intro = text(
-            "Measures a llama.cpp server this application started. Pick the number of passes, press Check to see exactly what will happen, then Run. Nothing is sent over the network.",
+            "Compare settings such as context length on a llama.cpp server that Kvlm started, and see what changed. Pick the number of passes, press Check to see exactly what will happen, then Run. Nothing is sent over the network.",
         );
         intro.add_css_class("dim-label");
         let page = gtk::Box::builder()
@@ -178,7 +178,7 @@ impl Lab {
             .margin_end(12)
             .build();
         for child in [
-            heading("Benchmark Lab").upcast::<gtk::Widget>(),
+            heading("Experiments").upcast::<gtk::Widget>(),
             intro.upcast(),
             controls.upcast(),
             buttons.upcast(),
@@ -189,7 +189,7 @@ impl Lab {
             heading("Result").upcast(),
             result.clone().upcast(),
             findings.clone().upcast(),
-            heading("Stored experiments").upcast(),
+            heading("Past experiments").upcast(),
             history_note.clone().upcast(),
             history.clone().upcast(),
             compare.clone().upcast(),
