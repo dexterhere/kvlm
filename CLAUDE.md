@@ -28,7 +28,7 @@ cargo test --locked -p workstation-runtimes <name>
 
 # Packaging changes only
 glib-compile-schemas --strict --dry-run data
-appstreamcli validate --no-net data/org.gnome.LocalAIWorkstation.metainfo.xml.in
+appstreamcli validate --no-net data/io.github.dexterhere.Kvlm.metainfo.xml.in
 meson setup build --prefix="$HOME/.local" && meson compile -C build && meson test -C build --print-errorlogs
 ```
 

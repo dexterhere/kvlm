@@ -8,7 +8,7 @@ Releases are cut by the owner. Nothing here is automated, and no step may be mar
 2. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`,
    `cargo test --workspace --locked`, `python3 scripts/check_repository.py` and the Python tests pass.
 3. Packaging: `glib-compile-schemas --strict --dry-run data`,
-   `appstreamcli validate --no-net data/org.gnome.LocalAIWorkstation.metainfo.xml.in`, then
+   `appstreamcli validate --no-net data/io.github.dexterhere.Kvlm.metainfo.xml.in`, then
    `meson setup build --prefix="$HOME/.local" --buildtype=release && meson compile -C build &&
    meson test -C build --print-errorlogs`, and a `DESTDIR` install that lists the binary, desktop file,
    metainfo, schema, icon and licence texts.

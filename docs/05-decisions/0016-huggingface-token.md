@@ -26,7 +26,7 @@ a token.
 - Only the encrypted transport (`Service::encrypted`) is used. `oo7`'s `Service::new`
   would silently fall back to a plain transport, which would send the token unencrypted over
   the session bus; this application refuses that and reports the keyring as unavailable.
-- Items carry the attributes `application=org.gnome.LocalAIWorkstation` and
+- Items carry the attributes `application=io.github.dexterhere.Kvlm` and
   `service=huggingface`. The secret is the token only.
 - Every keyring call is limited to five seconds. A locked collection may show an unlock
   prompt; if the prompt is not answered in time the action reports a timeout and can be

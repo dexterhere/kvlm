@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- SPDX-License-Identifier: CC0-1.0 -->
 <component type="desktop-application">
-  <id>org.gnome.LocalAIWorkstation</id>
+  <id>io.github.dexterhere.Kvlm</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>Local AI Workstation</name>
@@ -20,7 +20,7 @@
     <p>Nothing runs in the background and nothing is sent anywhere unless you press a button.
     There is no telemetry, no account and no need for administrator rights.</p>
   </description>
-  <launchable type="desktop-id">org.gnome.LocalAIWorkstation.desktop</launchable>
+  <launchable type="desktop-id">io.github.dexterhere.Kvlm.desktop</launchable>
   <provides>
     <binary>local-ai-workstation</binary>
   </provides>

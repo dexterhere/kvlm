@@ -239,7 +239,7 @@ Rules stated as invariants:
 ## Secrets
 
 - A `SecretStore` trait (`get`, `put`, `clear`, `available`) wraps `oo7`; a fake backs
-  the tests. Item attributes are `application=org.gnome.LocalAIWorkstation` and
+  the tests. Item attributes are `application=io.github.dexterhere.Kvlm` and
   `service=huggingface`; the token is the secret value only.
 - The token type implements `Debug` and `Display` as redacted and zeroizes on drop
   where the dependency allows. It is never logged, put in an error string, an event

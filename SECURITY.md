@@ -9,16 +9,14 @@ inference manager or expose endpoints to untrusted networks.
 ## Reporting a vulnerability
 
 Do not post secrets, working exploits, or sensitive system information in public
-issues. Use the host's private vulnerability-reporting facility **if maintainers
-have enabled it**, or an explicitly published private maintainer contact.
+issues. Report privately in either of these ways:
 
-**Publication prerequisite:** the configured repository is
-[dexterhere/kvlm](https://github.com/dexterhere/kvlm), but private reporting availability
-has not been verified and no private contact is published here. Maintainers must
-enable private reporting and publish a verified contact before inviting public
-vulnerability submissions. An
-unconfigured reporting route must not be advertised as available. No response-time
-or bounty promise is made.
+- GitHub private vulnerability reporting: the **Report a vulnerability** button on the
+  [Security tab](https://github.com/dexterhere/kvlm/security/advisories/new) of
+  [dexterhere/kvlm](https://github.com/dexterhere/kvlm).
+- Email: buggybuckai@gmail.com, with "Kvlm security" in the subject.
+
+This is a volunteer project. No response-time or bounty promise is made.
 
 Include the affected revision, environment, impact, reproduction steps, and any
 suggested mitigation. Redact access tokens, prompts, machine identifiers, and paths.

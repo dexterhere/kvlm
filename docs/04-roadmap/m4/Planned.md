@@ -23,7 +23,7 @@ alone; they are listed separately so they are never reported as done.
 | --- | --- |
 | Validation on a physical NVIDIA laptop/desktop, an AMD APU, a CPU-only AVX2 machine | Only the reference machine (RTX 4050, Hyprland) is available here; AMD and CPU-only machines are not |
 | GNOME-session validation | No GNOME Shell session is installed on the reference machine |
-| Application namespace confirmation | `org.gnome.LocalAIWorkstation` is a placeholder; using a `org.gnome.*` ID without being part of GNOME is not appropriate. The owner must choose and register an ID |
+| Application namespace confirmation | `io.github.dexterhere.Kvlm` is a placeholder; using a `org.gnome.*` ID without being part of GNOME is not appropriate. The owner must choose and register an ID |
 | Public security and community contacts | Requires real addresses the owner controls; placeholders are not invented |
 | Public release/tag and store submissions | Outward-facing, owner decision |
 

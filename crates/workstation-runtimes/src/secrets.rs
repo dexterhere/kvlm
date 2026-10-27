@@ -19,7 +19,7 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LEN: usize = 256;
 const LABEL: &str = "Local AI Workstation: Hugging Face access token";
 const ATTRIBUTES: [(&str, &str); 2] = [
-    ("application", "org.gnome.LocalAIWorkstation"),
+    ("application", "io.github.dexterhere.Kvlm"),
     ("service", "huggingface"),
 ];
 

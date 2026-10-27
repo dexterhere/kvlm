@@ -12,5 +12,5 @@ pub mod models;
 pub mod runtime;
 
 /// Provisional application identifier from the master specification.
-pub const APP_ID: &str = "org.gnome.LocalAIWorkstation";
+pub const APP_ID: &str = "io.github.dexterhere.Kvlm";
 pub const APP_NAME: &str = "Local AI Workstation";

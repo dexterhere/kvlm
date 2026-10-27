@@ -20,10 +20,11 @@ Retaliating against someone who reports a concern is also unacceptable.
 
 ## Reporting and enforcement
 
-Report concerns privately to a published project maintainer contact. Do not put
-private reports or identifying details in public issues. **Before public launch,
-maintainers must publish a private conduct contact in this document.** No contact
-is configured yet; a reporting channel must not be implied to exist.
+Report concerns privately by email to buggybuckai@gmail.com, with "Kvlm conduct" in the
+subject. Do not put private reports or identifying details in public issues. The project
+currently has one maintainer, so a report about that maintainer cannot be handled
+independently; say so in the report and it will be referred to another maintainer once
+one exists.
 
 Maintainers should acknowledge reports, protect the reporter's privacy as far as
 practical, consider available evidence, and avoid handling reports in which they
