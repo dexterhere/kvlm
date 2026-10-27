@@ -29,6 +29,9 @@
   </categories>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.2" date="2026-10-27" type="development">
+      <description><p>Application ID change, installer script, first-run setup guide and measured runtime benchmarks.</p></description>
+    </release>
     <release version="0.1.1" date="2026-10-27" type="development">
       <description>
         <p>Beta pre-release for testing. Built from source; hardware, GNOME-session and screen-reader validation are still in progress.</p>
