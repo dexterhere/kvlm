@@ -15,6 +15,10 @@ Changes worth knowing about are recorded here. The first pre-release is 0.1.1.
 - Clearer page names: My computer, Models ("Find models"), Runtimes, Speed test and Experiments, each
   with a one-line explanation, and plainer status text.
 
+- Less on screen at once: Runtimes shows one runtime at a time (Ollama, llama.cpp, LM Studio and
+  vLLM), and Speed test and Experiments keep options, verification and past results in collapsed
+  sections.
+
 ### Added
 
 - Preferences (Ctrl+,): colour scheme (follow the system, light or dark), reopen the setup guide,

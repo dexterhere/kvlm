@@ -116,12 +116,20 @@ impl Benchmarks {
         verification.append(&verification_status);
         verification.append(&verification_help);
         verification.append(&check_verification);
-        content.append(&verification);
         content.append(&workload);
         content.append(&controls);
         content.append(&status);
         content.append(&results);
-        content.append(&history.widget);
+        let details = gtk::Expander::builder()
+            .label("Check an earlier result is still valid")
+            .child(&verification)
+            .build();
+        content.append(&details);
+        let past = gtk::Expander::builder()
+            .label("Past speed tests")
+            .child(&history.widget)
+            .build();
+        content.append(&past);
         let clamp = adw::Clamp::builder()
             .maximum_size(900)
             .child(&content)

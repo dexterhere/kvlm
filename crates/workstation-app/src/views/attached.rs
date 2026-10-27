@@ -152,7 +152,7 @@ impl Attached {
             .build();
         widget.append(
             &gtk::Label::builder()
-                .label("Other runtimes (attached)")
+                .label("LM Studio and vLLM")
                 .xalign(0.0)
                 .css_classes(["title-2"])
                 .build(),
