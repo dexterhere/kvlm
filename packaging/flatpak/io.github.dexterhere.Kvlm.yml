@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Flatpak manifest for Kvlm. cargo-sources.json is generated from Cargo.lock by the release
+# workflow (it is not committed), so the build itself needs no network access.
+app-id: io.github.dexterhere.Kvlm
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: local-ai-workstation
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # GPU access, so hardware probes and managed llama.cpp builds can see the graphics card.
+  - --device=dri
+  # Loopback access to Ollama, LM Studio and vLLM on the host, plus model and release downloads
+  # that the user starts with a button. The application makes no request at startup.
+  - --share=network
+  # The Hugging Face token lives in the desktop keyring.
+  - --talk-name=org.freedesktop.secrets
+modules:
+  - name: kvlm
+    buildsystem: meson
+    config-opts:
+      - --buildtype=release
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/kvlm/cargo
+        CARGO_NET_OFFLINE: 'true'
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - build
+          - stage
+          - .git
+          - graphify-out
+      - cargo-sources.json
