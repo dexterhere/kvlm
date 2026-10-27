@@ -2603,7 +2603,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "workstation-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "gtk4",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "workstation-bench"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rusqlite",
  "sha2",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "workstation-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "nvml-wrapper",
@@ -2641,7 +2641,7 @@ dependencies = [
 
 [[package]]
 name = "workstation-runtimes"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flate2",
  "oo7",
