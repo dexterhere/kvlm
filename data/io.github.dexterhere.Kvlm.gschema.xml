@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <schemalist>
-  <schema id="org.gnome.LocalAIWorkstation" path="/org/gnome/LocalAIWorkstation/">
+  <schema id="io.github.dexterhere.Kvlm" path="/io/github/dexterhere/Kvlm/">
     <key name="local-only-mode" type="b">
       <default>true</default>
       <summary>Allow only local inference</summary>

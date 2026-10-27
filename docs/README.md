@@ -32,6 +32,8 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Keyboard and accessibility](03-development/accessibility.md) | Shortcuts, labels, minimum width, the opt-in audit, manual passes |
 | 03 | [Hardware validation procedures](03-development/hardware-validation-procedures.md) | Machines still needed, exact commands and the evidence record |
 | 03 | [Beta status](03-development/beta-status.md) | Implemented versus validated, owner-only items, known limits |
+| 03 | [Test coverage](03-development/test-coverage.md) | What was run on the reference machine and what was not |
+| 03 | [Runtime benchmarks](03-development/runtime-benchmarks.md) | Measured speed of Ollama, LM Studio and vLLM on the reference machine |
 | 03 | [Release checklist](03-development/release-checklist.md) | Owner-run steps before tagging, and how the opt-in update check behaves |
 | 03 | [Managed runtime in the interface](03-development/managed-runtime-ui.md) | Runtimes card: install, profiles, start/stop, logs, shutdown |
 | 03 | [Benchmark Lab store](03-development/benchmark-lab-store.md) | Experiment, pass and finding records, one-running rule, pruning, summaries |

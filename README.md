@@ -34,6 +34,11 @@ title, launcher and AppStream name) and its program is `local-ai-workstation`. T
 (`dexterhere/kvlm`) and the `KVLM_*` environment variables used by the opt-in acceptance tests
 use the short name.
 
+**The name.** Kvlm reads as **KV** + **LM**: the *key-value cache* and the *language model*. The
+KV cache is the part of local inference that grows with context length and quietly decides
+whether a model fits, so it is what this project is built to explain. (A maintainer-chosen
+reading of the name, not a formal acronym.)
+
 Running a local model starts with guesswork: will a 7B Q4_K_M fit in 6 GB of VRAM, what
 happens at 32K context, and is Ollama already holding the file you are about to download?
 Kvlm answers those questions on your own hardware, with the arithmetic shown, and then lets
@@ -236,25 +241,22 @@ long-lived branches are protected; see [Git workflow](docs/03-development/git-wo
 
 ## Install and run
 
-There is no installer or setup wizard yet. You build Kvlm from source and run it as a normal
-user. You need Linux, Rust stable (1.92+), GTK 4.12+, Libadwaita 1.4+, a C toolchain and
-pkg-config; the [development guide](docs/03-development/getting-started.md) lists packages for
-Debian/Ubuntu, Fedora and Arch.
+Kvlm is built from source; there are no prebuilt binaries yet. You need Linux, Rust stable
+(1.92+), GTK 4.12+, Libadwaita 1.4+, Meson, Ninja, a C toolchain and pkg-config. The installer
+script checks for all of that, prints the exact package command for your distribution if
+something is missing (it never runs `sudo`), builds a release, and installs under `~/.local`:
 
 ```sh
 git clone https://github.com/dexterhere/kvlm.git
 cd kvlm
-cargo run --locked -p workstation-app
+scripts/install.sh            # asks before building; --check only reports what is missing
+scripts/install.sh --uninstall
 ```
 
-To install the launcher, icon, metadata and settings schema under your home directory:
-
-```sh
-meson setup build --prefix="$HOME/.local" --buildtype=release
-meson compile -C build
-meson install -C build
-~/.local/bin/local-ai-workstation
-```
+The first launch opens a short **setup guide** (reopen it from the main menu) that explains what
+Kvlm reads, what it never touches and when anything runs, then sends you to the hardware or
+runtime check. The [development guide](docs/03-development/getting-started.md) has the manual
+Cargo and Meson steps.
 
 Ollama, a GPU and model downloads are all optional. Kvlm starts with no network access.
 Cargo may download build dependencies.

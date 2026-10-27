@@ -1,4 +1,4 @@
-project('local-ai-workstation', 'c', version: '0.1.1', meson_version: '>= 1.3.0')
+project('local-ai-workstation', 'c', version: '0.1.2', meson_version: '>= 1.3.0')
 
 gnome = import('gnome')
 python = import('python').find_installation('python3')
@@ -25,7 +25,7 @@ custom_target(
   install_mode: 'rwxr-xr-x',
 )
 
-app_id = 'org.gnome.LocalAIWorkstation'
+app_id = 'io.github.dexterhere.Kvlm'
 desktop_file = configure_file(
   input: 'data' / app_id + '.desktop.in',
   output: app_id + '.desktop',
