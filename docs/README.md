@@ -7,6 +7,7 @@ policies stay at the root so contributors and hosting platforms can find them.
 | --- | --- | --- |
 | 01 | [Master specification](01-product/gnome_local_ai_workstation_master_specification.md) | Complete product and technical target, preserved from the original document |
 | 02 | [Architecture](02-architecture/README.md) | Crate boundaries, threading, data flow, safety |
+| 02 | [Interface wireframes](02-architecture/ui-wireframes.md) | Layout and states of the five pages, narrow layout, first-run journey |
 | 03 | [Getting started](03-development/getting-started.md) | Dependencies, build, run, validation, installation |
 | 03 | [Repository layout](03-development/repository-layout.md) | Where code, fixtures, metadata, and documentation belong |
 | 03 | [Git workflow](03-development/git-workflow.md) | Small commits, authorship, review, publication |
