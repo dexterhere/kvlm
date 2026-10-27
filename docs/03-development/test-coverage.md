@@ -22,6 +22,7 @@ the result is recorded; "not tested" means exactly that.
 | First-run setup guide | Appears on first launch |
 | vLLM (attached, Qwen2.5-1.5B-Instruct) | Reachable on loopback; timed by `scripts/compare_runtimes.py` |
 | Ollama (attached, Qwen2.5-Coder 7B Q4_K_M) | Reachable on loopback; timed |
+| llama.cpp CUDA server (unmanaged binary, same 1.5B file as the others) | Served on GPU and timed; Kvlm's managed GPU install and supervisor not yet run on GPU |
 | LM Studio (attached, Qwen2.5-Coder 7B Q4_K_M) | Server reachable on loopback; timed. Not exercised through the app UI |
 
 Benchmark numbers live in [runtime benchmarks](runtime-benchmarks.md).

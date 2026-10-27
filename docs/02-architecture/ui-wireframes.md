@@ -45,7 +45,7 @@ flowchart TD
 ## Overview
 
 ```text
-Overview & Monitor                                           [ Refresh ]
+My computer                                           [ Refresh ]
 ┌ Hardware ──────────────────────────────────────────────────────────────┐
 │ CPU        <model> · 8 physical / 12 logical · AVX2                    │
 │ RAM        15.32 GiB total · 5.42 GiB free                             │
@@ -93,12 +93,12 @@ on huggingface.co; Kvlm never accepts terms for you.
 ## Runtimes
 
 ```text
-Runtimes & Endpoints                                        [ Refresh ]
+Your runtimes                                        [ Refresh ]
 ┌ Ollama (attached, read-only) ──────────────────────────────────────────┐
 │ Status: reachable · version · installed models                          │
 │ [Model ▾]  [ Inspect ]   declared vs loaded context, memory, split      │
 └────────────────────────────────────────────────────────────────────────┘
-┌ llama.cpp (Managed) ───────────────────────────────────────────────────┐
+┌ Run models with llama.cpp ───────────────────────────────────────────────────┐
 │ ▸ Find builds      newest official release for this computer           │
 │ ▸ Installed builds                                                     │
 │ ▸ Launch profiles  model file · port · context · GPU layers            │

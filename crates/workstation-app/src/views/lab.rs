@@ -165,8 +165,28 @@ impl Lab {
             .build();
         let compare_text = text("");
 
+        let options = gtk::Expander::builder()
+            .label("Options")
+            .child(&controls)
+            .build();
+        let past_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(8)
+            .build();
+        for child in [
+            history_note.clone().upcast::<gtk::Widget>(),
+            history.clone().upcast(),
+            compare.clone().upcast(),
+            compare_text.clone().upcast(),
+        ] {
+            past_box.append(&child);
+        }
+        let past = gtk::Expander::builder()
+            .label("Past experiments")
+            .child(&past_box)
+            .build();
         let intro = text(
-            "Measures a llama.cpp server this application started. Pick the number of passes, press Check to see exactly what will happen, then Run. Nothing is sent over the network.",
+            "Compare settings such as context length on a llama.cpp server that Kvlm started, and see what changed. Pick the number of passes, press Check to see exactly what will happen, then Run. Nothing is sent over the network.",
         );
         intro.add_css_class("dim-label");
         let page = gtk::Box::builder()
@@ -178,9 +198,9 @@ impl Lab {
             .margin_end(12)
             .build();
         for child in [
-            heading("Benchmark Lab").upcast::<gtk::Widget>(),
+            heading("Experiments").upcast::<gtk::Widget>(),
             intro.upcast(),
-            controls.upcast(),
+            options.upcast(),
             buttons.upcast(),
             check_text.clone().upcast(),
             bar.clone().upcast(),
@@ -189,11 +209,7 @@ impl Lab {
             heading("Result").upcast(),
             result.clone().upcast(),
             findings.clone().upcast(),
-            heading("Stored experiments").upcast(),
-            history_note.clone().upcast(),
-            history.clone().upcast(),
-            compare.clone().upcast(),
-            compare_text.clone().upcast(),
+            past.upcast(),
         ] {
             page.append(&child);
         }

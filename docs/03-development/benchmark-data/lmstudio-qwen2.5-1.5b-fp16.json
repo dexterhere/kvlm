@@ -1,0 +1,43 @@
+{
+  "machine": {
+    "os": "Linux",
+    "cores": 12,
+    "cpu": "13th Gen Intel(R) Core(TM) i5-13420H",
+    "ram_gib": 15.3,
+    "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "vram_mib": 6141
+  },
+  "prompt": "Explain in about 120 words how the key-value cache affects memory use when a language model runs with a long context.",
+  "results": [
+    {
+      "target": "lmstudio",
+      "model": "qwen2.5-1.5b",
+      "max_tokens": 160,
+      "runs": 5,
+      "cold_ttft_s": 2.3818299140002637,
+      "ttft_s": {
+        "median": 0.028285495000091032,
+        "min": 0.026147246000618907,
+        "max": 0.03586403799999971
+      },
+      "decode_tps": {
+        "median": 51.115470242709925,
+        "min": 50.34907046972703,
+        "max": 51.203815155440424
+      },
+      "total_s": {
+        "median": 3.1424893670009624,
+        "min": 3.1313846100001683,
+        "max": 3.19381707499997
+      },
+      "tokens": [
+        160,
+        160,
+        160,
+        160,
+        160
+      ],
+      "peak_gpu_used_mib": 3415
+    }
+  ]
+}

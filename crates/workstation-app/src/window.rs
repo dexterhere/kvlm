@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::{cell::RefCell, rc::Rc};
+
 use adw::prelude::*;
 use gtk::{gio, glib};
 use workstation_core::APP_NAME;
@@ -12,6 +14,7 @@ use crate::{
 };
 
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
+    crate::prefs::theme().apply();
     let (commands, events) = bridge::start(runtime);
     let overview = views::overview::Overview::new(commands.clone());
     overview.append(&views::updates::new(runtime));
@@ -28,7 +31,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     stack.add_titled_with_icon(
         &overview.widget,
         Some("overview"),
-        "Overview",
+        "My computer",
         "utilities-system-monitor-symbolic",
     );
     stack.add_titled_with_icon(
@@ -46,13 +49,13 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     stack.add_titled_with_icon(
         &benchmarks.widget,
         Some("benchmarks"),
-        "Benchmarks",
+        "Speed test",
         "applications-science-symbolic",
     );
     stack.add_titled_with_icon(
         &lab_page.widget,
         Some("lab"),
-        "Lab",
+        "Experiments",
         "applications-engineering-symbolic",
     );
 
@@ -63,6 +66,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     let title = adw::WindowTitle::new(APP_NAME, concat!("Beta ", env!("CARGO_PKG_VERSION")));
     let header = adw::HeaderBar::builder().title_widget(&switcher).build();
     let menu = gio::Menu::new();
+    menu.append(Some("Preferences"), Some("win.preferences"));
     menu.append(Some("Setup guide"), Some("win.setup"));
     menu.append(Some("Quit"), Some("app.quit"));
     header.pack_end(
@@ -75,7 +79,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
 
     let bottom_switcher = adw::ViewSwitcherBar::builder().stack(&stack).build();
     let status = gtk::Label::builder()
-        .label("Detecting hardware · Ollama not checked")
+        .label("Scanning this computer · Ollama not checked")
         .wrap(true)
         .margin_top(8)
         .margin_bottom(8)
@@ -136,14 +140,31 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     window.add_action(&search);
     app.set_accels_for_action("win.search", &["<Primary>k"]);
 
+    let preferences = gio::SimpleAction::new("preferences", None);
+    let weak_window = window.downgrade();
+    preferences.connect_activate(move |_, _| {
+        let Some(window) = weak_window.upgrade() else {
+            return;
+        };
+        let opener = window.downgrade();
+        views::preferences::present(&window, move || {
+            if let Some(window) = opener.upgrade() {
+                gtk::prelude::ActionGroupExt::activate_action(&window, "setup", None);
+            }
+        });
+    });
+    window.add_action(&preferences);
+    app.set_accels_for_action("win.preferences", &["<Primary>comma"]);
+    let latest_hardware = Rc::new(RefCell::new(None));
     let setup = gio::SimpleAction::new("setup", None);
+    let setup_hardware = latest_hardware.clone();
     let weak_window = window.downgrade();
     let weak_stack = stack.downgrade();
     setup.connect_activate(move |_, _| {
         let (Some(window), stack) = (weak_window.upgrade(), weak_stack.clone()) else {
             return;
         };
-        views::setup::present(&window, move |page| {
+        views::setup::present(&window, setup_hardware.clone(), move |page| {
             if let Some(stack) = stack.upgrade() {
                 stack.set_visible_child_name(page);
             }
@@ -217,19 +238,22 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     });
     let weak_status = status.downgrade();
     glib::MainContext::default().spawn_local(async move {
-        let mut hardware_status = "Detecting hardware";
+        let mut hardware_status = "Scanning this computer";
         let mut runtime_status = "Ollama not checked";
         while let Ok(event) = events.recv().await {
             let Some(status) = weak_status.upgrade() else {
                 break;
             };
+            if let UiEvent::HardwareDetected(profile) = &event {
+                *latest_hardware.borrow_mut() = Some((**profile).clone());
+            }
             overview.receive(&event);
             runtimes.receive(&event);
             benchmarks.receive(&event);
             catalog.receive(&event);
             match event {
-                UiEvent::HardwareDetected(_) => hardware_status = "Hardware snapshot ready",
-                UiEvent::HardwareFailed(_) => hardware_status = "Hardware detection failed",
+                UiEvent::HardwareDetected(_) => hardware_status = "Computer scanned",
+                UiEvent::HardwareFailed(_) => hardware_status = "Could not scan this computer",
                 UiEvent::OllamaDiscovered(discovery) => {
                     runtime_status = if discovery.installed.is_ok() && discovery.running.is_ok() {
                         "Connected: Ollama · Attached :11434"

@@ -2,7 +2,7 @@
 
 Status: implemented (M2 phase 2f). Live behaviour with a real `llama-server` is exercised in phase 2g.
 
-The Runtimes page gains a "llama.cpp (Managed)" card beside the attached Ollama readings. Attached runtimes keep
+The Runtimes page gains a "Run models with llama.cpp" card beside the attached Ollama readings. Attached runtimes keep
 their own wording and are never started, stopped or modified here.
 
 ## What the card does
@@ -11,10 +11,10 @@ their own wording and are never started, stopped or modified here.
   while a process is live, the context size the server reports, restarts since the last start, and the failure reason
   with the exit code. `Busy` is derived from the server's own slot or request counters, never invented. Stop, Restart
   and Logs live here; the log window is read-only, selectable, monospace and refreshed once a second only while open.
-- **Installed builds:** the builds this application installed, one marked for use, with Remove (refused while a process
+- **Engine versions installed:** the builds this application installed, one marked for use, with Remove (refused while a process
   is live). Find lists the newest official release for this computer only when pressed; Install downloads, checks
   SHA-256, extracts and publishes under the application data directory, with progress and Cancel. One install at a time.
-- **Launch profiles:** saved profiles with Start, Edit and Delete, and a New profile editor. The editor has typed
+- **Saved ways to run a model (launch profiles):** saved profiles with Start, Edit and Delete, and a New profile editor. The editor has typed
   fields only (model file, port, context length, GPU layers, K/V cache types, flash attention, micro-batch, threads,
   parallel slots, memory mapping, memory lock). There is no free-text argument field, and `LaunchProfile::validate` has
   the final say before anything is saved or started.
