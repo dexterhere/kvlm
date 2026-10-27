@@ -1,190 +1,338 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="Local AI Workstation logo: three stacked memory slabs with a small neural network on top" width="128" height="128">
+  <img src="docs/assets/logo.svg" alt="Kvlm logo: three stacked memory slabs with a small neural network on top" width="128" height="128">
 </p>
 
-<h1 align="center">GNOME Local AI Workstation</h1>
-
-<p align="center">
-  <strong>Know what your machine can run, then measure it.</strong><br>
-  A native GTK4/Libadwaita control plane for local AI models on Linux.
-</p>
+<h1 align="center">Kvlm</h1>
 
 <p align="center">
-  <a href="docs/04-roadmap/milestones.md">Roadmap</a> ·
-  <a href="docs/README.md">Documentation</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="COPYING">GPL-3.0-or-later</a>
+  <strong>Local AI Workstation for GNOME</strong><br>
+  Know what your machine can run, then measure it.
 </p>
+
+<p align="center">
+  <a href="https://github.com/dexterhere/kvlm/releases"><img alt="Release: 0.1.1 beta" src="https://img.shields.io/badge/release-0.1.1%20beta-orange"></a>
+  <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-informational">
+  <img alt="Toolkit: GTK4 and Libadwaita" src="https://img.shields.io/badge/toolkit-GTK4%20%2B%20Libadwaita-blue">
+  <img alt="Language: Rust" src="https://img.shields.io/badge/language-Rust-b7410e">
+  <a href="COPYING"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-green"></a>
+</p>
+
+<p align="center">
+  <a href="#what-kvlm-is">What it is</a> ·
+  <a href="#the-interface">Interface</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#install-and-run">Install</a> ·
+  <a href="#status-of-the-011-beta">Status</a> ·
+  <a href="docs/README.md">Docs</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
+
+## What Kvlm is
+
+**Kvlm** is the project; its desktop application is called **Local AI Workstation** (the window
+title, launcher and AppStream name) and its program is `local-ai-workstation`. The repository
+(`dexterhere/kvlm`) and the `KVLM_*` environment variables used by the opt-in acceptance tests
+use the short name.
 
 Running a local model starts with guesswork: will a 7B Q4_K_M fit in 6 GB of VRAM, what
 happens at 32K context, and is Ollama already holding the file you are about to download?
-Local AI Workstation answers those questions on your own hardware, with the arithmetic
-shown, and then lets you check the answer with a real benchmark.
+Kvlm answers those questions on your own hardware, with the arithmetic shown, and then lets
+you check the answer with a real benchmark.
 
-It is a local inference **control plane**, not a chatbot, a custom inference engine, or a
+It is a local inference **control plane**, not a chatbot, not an inference engine, and not a
 privileged daemon. It needs no root, sends no telemetry, and never guesses: when data is
 missing the answer is `Unknown`, not an optimistic fit.
 
-## Who it is for
+> **Beta.** Version 0.1.1 is a pre-release for testing. It is built from source; there are no
+> prebuilt binaries or store packages yet. See [status](#status-of-the-011-beta) for what has and
+> has not been validated on real hardware.
 
-Linux developers who run models locally, for coding assistants, tooling, or experiments,
-on a laptop or workstation with one GPU, an APU with shared memory, or only a CPU. If you
-juggle Ollama, llama.cpp, and Hugging Face downloads and want to know why a model is slow
-or does not fit, this is for you.
+**Who it is for:** Linux developers who run models locally, for coding assistants, tooling or
+experiments, on a laptop or workstation with one GPU, an APU with shared memory, or only a CPU,
+and who juggle Ollama, llama.cpp and Hugging Face downloads.
+
+## The interface
+
+Kvlm is a native GTK4/Libadwaita window with five pages, switchable with `Ctrl+1` to `Ctrl+5`.
+`Ctrl+K` jumps to model search and `Ctrl+R` refreshes the current page. It works down to a
+360 px wide window, where the page switcher moves to the bottom bar.
+
+```text
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Local AI Workstation   [Overview][Models][Runtimes][Benchmarks][Lab]  ☰  │
+├──────────────────────────────────────────────────────────────────────────┤
+│  Overview & Monitor                                    [ Refresh ]       │
+│  ┌ Hardware ─────────────────────┐ ┌ Memory scenarios ─────────────────┐ │
+│  │ CPU  8 cores · AVX2           │ │ GGUF file     [ Choose file… ]    │ │
+│  │ RAM  15.3 GiB  (5.4 free)     │ │ Context tokens   [ 8192 ]         │ │
+│  │ GPU  RTX 4050  VRAM 6.0 GiB   │ │ Sequences [1]  Microbatch [512]   │ │
+│  │      free 5.7 GiB             │ │ [ Estimate ]                      │ │
+│  └───────────────────────────────┘ │ Weights ▇▇▇▇▇▇  K/V ▇▇  Buffers ▇ │ │
+│                                    │ Result: Comfortable | Unknown …   │ │
+│  Updates  [ Check for updates ]    └───────────────────────────────────┘ │
+├──────────────────────────────────────────────────────────────────────────┤
+│ Detecting hardware · Ollama not checked                                  │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+| Page | What you do there |
+| --- | --- |
+| **Overview** | See CPU, RAM, VRAM and shared GPU memory; pick a local GGUF file and get a conditional memory-fit estimate with a per-component breakdown |
+| **Models** | Search Hugging Face GGUF repositories, inspect a file's header and fit, see files you already have, download with pause and resume, store a gated-model token in the desktop keyring |
+| **Runtimes** | Attach to Ollama (read-only), install and run a managed llama.cpp server, check LM Studio and vLLM on loopback |
+| **Benchmarks** | Run one explicit Quick Benchmark against an installed Ollama model; review history and `Benchmark Verified` badges |
+| **Lab** | Run a cold/warm experiment on the managed llama.cpp server, read diagnostics, compare two runs, try a one-setting follow-up |
+
+Annotated wireframes of all five pages, the narrow layout, and the states each page can be in
+are in [docs/02-architecture/ui-wireframes.md](docs/02-architecture/ui-wireframes.md). They are
+drawn from the implemented widgets, not mock-ups of future work.
+
+## How it works
+
+### From a file to a verdict
+
+```mermaid
+flowchart LR
+    G[GGUF header] --> F[Fit estimate]
+    S[Your settings<br/>context, K/V type, batch] --> F
+    L[Live RAM / VRAM / GTT] --> F
+    F --> V{Verdict}
+    V --> C[Comfortable]
+    V --> K[Constrained]
+    V --> N[Not recommended]
+    V --> U[Unknown]
+    F -. you choose to run .-> B[Quick Benchmark]
+    B --> H[(SQLite history)]
+    H --> BV[Benchmark Verified badge]
+```
+
+Fit estimates are conditional on the scenario you supply. A saved benchmark proves one prior
+request, not every future context or placement, and the interface says so.
+
+### Architecture
+
+```mermaid
+flowchart TB
+    subgraph app["workstation-app: GTK4 / Libadwaita"]
+        W[Window and five pages]
+        BR[bridge: CoreCommand / UiEvent]
+    end
+    subgraph core[workstation-core]
+        HW[Hardware probes<br/>CPU, NVML, AMD sysfs]
+        FIT[Fit math and GGUF parser]
+        DB[(SQLite store)]
+        EXP[Exports and comparisons]
+    end
+    subgraph rt[workstation-runtimes]
+        OL[Ollama, attached]
+        LMS[LM Studio and vLLM, attached]
+        LC[llama.cpp, managed]
+        HF[Hugging Face catalog and downloads]
+    end
+    subgraph bench[workstation-bench]
+        RUN[Runner and cancellation]
+        SAMP[RAM / VRAM / GTT sampler]
+        LAB[Lab protocol]
+    end
+    W <--> BR
+    BR --> core
+    BR --> rt
+    BR --> bench
+    bench --> core
+    rt --> core
+    LC -. owned process .-> PROC((llama-server<br/>127.0.0.1))
+    OL -. read only .-> EXT((Your Ollama))
+    LMS -. read only .-> EXT2((LM Studio / vLLM))
+```
+
+Four crates, no `unsafe` code anywhere in the workspace.
+
+### Threading
+
+GTK objects live only on the GLib main thread. Work crosses to Tokio through typed commands and
+comes back as typed events, each carrying an `id` so a stale reply can be dropped. Blocking
+probes and database work run on blocking threads; the interface never waits on the network, a
+model or a GPU.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant UI as GTK main thread
+    participant T as Tokio worker
+    U->>UI: press Refresh
+    UI->>T: CoreCommand { id: 7 }
+    Note over UI: page stays responsive
+    T->>T: probe hardware (spawn_blocking)
+    T-->>UI: UiEvent { id: 7, result }
+    UI->>UI: apply only if id is still current
+```
+
+### Who owns which runtime
+
+```mermaid
+flowchart LR
+    subgraph Attached["Attached: yours, read-only"]
+        A1[Ollama]
+        A2[LM Studio]
+        A3[vLLM]
+    end
+    subgraph Managed["Managed: Kvlm installs and owns"]
+        M1[llama.cpp server]
+    end
+    Attached --> R1[Discover, list models, read memory]
+    Managed --> R2[Install, start, stop, restart, log, benchmark in the Lab]
+    Attached -. never .-> X["Stop, restart, edit units, delete models"]
+```
+
+Benchmarks and the Lab run only against a process Kvlm owns or, for Quick Benchmark, a
+local-only Ollama request after an explicit check, because local execution of someone else's
+process cannot be proven.
+
+### Branches and releases
+
+```mermaid
+gitGraph
+    commit id: "main"
+    branch staging
+    branch develop
+    branch feat/x
+    commit id: "small commits"
+    checkout develop
+    merge feat/x
+    checkout staging
+    merge develop
+    checkout main
+    merge staging tag: "v0.1.1"
+```
+
+Feature branch → `develop` → `staging` → `main`, by pull request, merge commits only. All three
+long-lived branches are protected; see [Git workflow](docs/03-development/git-workflow.md).
 
 ## What it does today
 
 | Capability | What you get |
 | --- | --- |
 | Hardware discovery | CPU and RAM, NVIDIA VRAM through NVML, AMD VRAM and GTT through sysfs |
-| Three memory pools | Dedicated VRAM, shared GPU memory (GTT), and system RAM are kept separate; shared GPU memory is never added to host RAM |
-| Memory fit | Weights, K/V cache, compute buffers, and runtime allowance for LLaMA and Qwen2 GGUF files at an explicit context, with a per-component breakdown |
-| Attached Ollama | Read-only discovery and inspection of an existing Ollama server; the application never stops it, changes its units, or deletes its models |
-| Quick Benchmark | One explicit, local-only streaming request with cancellation, server decode rate, and sampled RAM/VRAM/GTT peaks |
-| History and verification | SQLite run history, and a `Benchmark Verified` badge tied to the exact Ollama manifest and hardware, restored after restart |
-
-## How it works
-
-```text
-GGUF header ─┐
-Settings     ─┼─► fit estimate ──► Comfortable / Constrained / Not recommended / Unknown
-Live memory  ─┘                              │
-                                             ▼
-                          Quick Benchmark ──► SQLite history ──► Benchmark Verified
-```
-
-Fit estimates are conditional on the scenario you supply (context length, K/V type, batch
-size, and an attention-layout assumption). A saved benchmark proves one prior request, not
-every future context or placement, and the interface says so.
-
-## Status
-
-**M0 is complete for the accepted reference baseline and merged into `main`.** Real Qwen
-CUDA inference and verification after a separate-process restart passed on an RTX 4050
-laptop; see the [M0 acceptance record](docs/03-development/m0-acceptance.md) for
-measurements and limits. The measured native GTK/CUDA results on Hyprland were accepted
-on 2026-10-26. GNOME-session validation remains a follow-up and is not claimed as tested.
-
-**M1 is implemented on `develop` and awaiting sign-off.** The Models page searches Hugging Face
-GGUF repositories, shows a file's header and a conditional fit, notes files you already have
-in Ollama, the Hugging Face cache or the application's store, downloads with pause, resume
-and checksum verification, and keeps a gated-model token in your desktop keyring. A live run
-on the reference machine is recorded in the
-[M1 acceptance evidence](docs/03-development/m1-acceptance.md); the stored-token restart
-check passed. See the [M1 plan](docs/04-roadmap/m1/Planned.md).
-
-**M2 is implemented on `develop`.** The Runtimes page can install the official portable
-llama.cpp build (checksum verified, no root), save launch profiles, start, stop and restart
-a managed server on `127.0.0.1`, and show its log. A live run with the real server is in the
-[M2 acceptance evidence](docs/03-development/m2-acceptance.md); only the CPU build was served.
-**M3 is implemented on `develop` for the managed llama.cpp server.** The Lab page runs a fixed
-prompt through a cold/warm protocol, stores each experiment with its measurements and coverage,
-shows diagnostic findings, and compares two runs, including a controlled follow-up that changes
-exactly one setting. A live run is in the
-[M3 acceptance evidence](docs/03-development/m3-acceptance.md); only the CPU build and a toy model
-were used.
-
-**M4 is implemented on `develop`, validation pending.** Read-only LM Studio and vLLM discovery,
-keyboard shortcuts and an accessibility audit, packaging, an opt-in update check and a redacted
-`--report-hardware` mode exist. Real-hardware, GNOME-session and screen-reader validation, the
-application ID decision and the release itself are not done; see
-[beta status](docs/03-development/beta-status.md).
-
-This is an independent community project; it is not an official GNOME application or a
-GNOME Circle member.
+| Three memory pools | Dedicated VRAM, shared GPU memory (GTT) and system RAM kept separate; shared GPU memory is never added to host RAM |
+| Memory fit | Weights, K/V cache, compute buffers and runtime allowance for LLaMA and Qwen2 GGUF files at an explicit context |
+| Model catalog | Hugging Face GGUF search with pinned revisions, deduplication against Ollama and the HF cache, resumable verified downloads, keyring-only token |
+| Attached runtimes | Read-only Ollama inspection; read-only LM Studio and vLLM discovery, with vLLM metrics on request |
+| Managed llama.cpp | Checksum-verified portable install, launch profiles, supervised start/stop/restart on `127.0.0.1`, bounded logs |
+| Quick Benchmark | One explicit local-only streaming request with cancellation, server decode rate, and sampled RAM/VRAM/GTT peaks |
+| Benchmark Lab | Cold/warm protocol, stored experiments with coverage limits, four diagnostics, A/B comparison, controlled follow-up |
+| Developer exports | Continue.dev, Zed and OpenCode snippets and a `systemd --user` unit, as text you copy |
+| Accessibility | Named controls, keyboard shortcuts, 360 px minimum width, no information by colour alone |
+| Hardware report | `local-ai-workstation --report-hardware` prints a redacted capability report for bug reports |
 
 ## Principles
 
-- **Honest by default:** missing metadata stays `Unknown`; unmeasured memory channels are
-  reported with coverage limits, never as zero.
-- **Local first:** no usage analytics or crash uploads. Network requests happen only after
-  an explicit action.
+- **Honest by default:** missing metadata stays `Unknown`; unmeasured memory channels are reported
+  with coverage limits, never as zero.
+- **Local first:** no telemetry or crash uploads. The network is touched only after you press a
+  button. Startup makes no requests at all.
 - **Do not touch what you do not own:** an attached runtime is read-only; no root required.
-- **Reproducible:** tests need no GPU, model download, running runtime, or internet.
+- **No stored secrets in files:** a Hugging Face token lives only in the desktop keyring.
+- **Reproducible:** tests need no GPU, model download, running runtime or internet.
 
-## Get started
+## Install and run
 
-Use Linux, Rust stable (1.92+), GTK 4.12+, Libadwaita 1.4+,
-a C toolchain, and pkg-config. See the
-[development guide](docs/03-development/getting-started.md) for system dependencies.
+There is no installer or setup wizard yet. You build Kvlm from source and run it as a normal
+user. You need Linux, Rust stable (1.92+), GTK 4.12+, Libadwaita 1.4+, a C toolchain and
+pkg-config; the [development guide](docs/03-development/getting-started.md) lists packages for
+Debian/Ubuntu, Fedora and Arch.
 
 ```sh
+git clone https://github.com/dexterhere/kvlm.git
+cd kvlm
 cargo run --locked -p workstation-app
 ```
 
-The shell does not require Ollama, a GPU, or model downloads. It makes no network
-requests at startup. Cargo may download build dependencies.
+To install the launcher, icon, metadata and settings schema under your home directory:
 
-Exercise the core calculator without a GPU, model, or runtime:
+```sh
+meson setup build --prefix="$HOME/.local" --buildtype=release
+meson compile -C build
+meson install -C build
+~/.local/bin/local-ai-workstation
+```
+
+Ollama, a GPU and model downloads are all optional. Kvlm starts with no network access.
+Cargo may download build dependencies.
+
+Try the calculator without a GPU, model or runtime:
 
 ```sh
 cargo run --locked -p workstation-core --example memory_fit
 ```
 
-The example clearly labels synthetic inputs. The API estimates weights, separate K/V
-cache storage, buffers, and runtime allowance, then classifies one selected CPU/GPU
-placement. Missing metadata or unverified compatibility remains Unknown; shared memory
-is never added to host RAM. This does not grant benchmark verification. See the
-[calculator guide](docs/03-development/static-memory-fit.md) for scope and checks.
+Reporting a hardware problem? Run `local-ai-workstation --report-hardware` and attach the output;
+device identifiers, paths and times are removed.
 
-For local GGUF inspection, see the [metadata guide](docs/03-development/gguf-metadata.md).
-This reports declarations and tensor layout; runtime compatibility remains unverified.
-The [GGUF fit scenario guide](docs/03-development/gguf-fit.md) connects those
-declarations to explicit settings and a supplied budget. It requires an explicit
-layout assumption for a breakdown and cannot return a positive fit classification.
-Use the [desktop CPU workflow](docs/03-development/desktop-cpu-fit.md) to select a
-local file and configure a scenario directly in Overview. Use the
-[Ollama inspection workflow](docs/03-development/ollama-inspection.md) to inspect an
-installed model in Runtimes. Those inspection workflows do not run inference.
-The [Quick Benchmark workflow](docs/03-development/quick-benchmark.md) sends one
-fixed inference request only after Check and Run in Benchmark Lab.
-The [benchmark history guide](docs/03-development/benchmark-history.md) explains
-durable snapshots, storage errors, and unfinished runs.
-The [memory sampling guide](docs/03-development/benchmark-memory-sampling.md) explains
-observed peaks, unknown channels, and system/device attribution limits.
+## Status of the 0.1.1 beta
+
+Version 0.1.1 is the first tagged pre-release. "Implemented" means the code exists with tests
+that need no GPU, model or network and passed CI. "Validated" means a person ran it on the
+stated hardware and recorded it.
+
+| Milestone | Scope | State |
+| --- | --- | --- |
+| M0 | Hardware, memory fit, attached Ollama, Quick Benchmark | Complete for the accepted baseline (RTX 4050 laptop) |
+| M1 | Models page, catalog, downloads, token | Implemented; live run recorded |
+| M2 | Managed llama.cpp, exports | Implemented; CPU build served in a live run |
+| M3 | Benchmark Lab | Implemented; toy model on CPU in a live run |
+| M4 | LM Studio/vLLM, accessibility, packaging | Implemented; **validation pending** |
+
+Not yet validated: AMD GPUs and APUs, a CPU-only AVX2 machine, GPU builds of llama.cpp, a real
+chat model in the Lab, LM Studio and vLLM against live servers, a real GNOME session, and a
+screen-reader pass. The list, with owners and procedures, is in
+[beta status](docs/03-development/beta-status.md) and
+[hardware validation procedures](docs/03-development/hardware-validation-procedures.md).
+Release notes are in the [changelog](CHANGELOG.md).
+
+This is an independent community project; it is not an official GNOME application or a GNOME
+Circle member.
+
+## Repository
+
+| Path | Responsibility |
+| --- | --- |
+| `crates/workstation-core/` | Domain types, hardware probes, fit, models, SQLite, exports |
+| `crates/workstation-runtimes/` | Runtime adapters, downloads and owned-process supervision |
+| `crates/workstation-bench/` | Benchmark execution, workloads, resource sampling, Lab protocol |
+| `crates/workstation-app/` | GTK4/Libadwaita shell and the Tokio/GLib bridge |
+| `data/` | Desktop launcher, AppStream metadata, settings schema, icons |
+| `docs/` | Ordered product, architecture, development, roadmap and decision documents |
+| `scripts/`, `tests/` | Repository validation and its tests |
+
+Start with the [documentation index](docs/README.md), then the
+[master specification](docs/01-product/gnome_local_ai_workstation_master_specification.md). The
+specification describes the target product, not a list of completed features.
+
+Checks before sending a change:
 
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 python3 scripts/check_repository.py
+python3 -m unittest discover -s tests -p 'test_*.py'
 ```
-
-## Repository
-
-Source repository: [dexterhere/kvlm](https://github.com/dexterhere/kvlm).
-
-| Path | Responsibility |
-| --- | --- |
-| `crates/workstation-core/` | Domain types, hardware probes, fit, models, SQLite, exports |
-| `crates/workstation-runtimes/` | Runtime adapters and owned-process supervision |
-| `crates/workstation-bench/` | Benchmark execution, workloads, resource sampling |
-| `crates/workstation-app/` | GTK4/Libadwaita shell and Tokio/GLib bridge |
-| `data/` | Desktop launcher, AppStream metadata, settings schema, icons |
-| `docs/` | Ordered product, architecture, development, roadmap, decision documents |
-| `tests/` | Shared fixture guidance; executable Rust tests live with their owning crate |
-| `scripts/` | Repository validation |
-
-Start with the [documentation index](docs/README.md), then read the
-[master specification](docs/01-product/gnome_local_ai_workstation_master_specification.md).
-The specification describes the target product, not a list of completed features.
 
 ## Contribute
 
-Contributions to code, documentation, accessibility, testing, and hardware support
-are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), the
-[Code of Conduct](CODE_OF_CONDUCT.md), and the
-[milestone roadmap](docs/04-roadmap/milestones.md). Small, focused pull requests are
-easier to review. Discuss changes to scope or safety boundaries before implementing them.
+Contributions to code, documentation, accessibility, testing and hardware validation are
+welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md) and
+the [milestone roadmap](docs/04-roadmap/milestones.md). Small, focused pull requests are easier
+to review. Discuss changes to scope or safety boundaries before implementing them. Machines for
+the validation list above are the most useful contribution right now.
 
-See [SUPPORT.md](SUPPORT.md) for questions and [SECURITY.md](SECURITY.md) for
-vulnerability reporting. Private reporting and a verified maintainer contact still
-need to be configured before accepting sensitive reports.
+See [SUPPORT.md](SUPPORT.md) for questions and [SECURITY.md](SECURITY.md) for vulnerability
+reporting. Private reporting and a verified maintainer contact still need to be configured before
+sensitive reports are accepted.
 
 ## License
 
-GPL-3.0-or-later. See [COPYING](COPYING) for the full license. Contributions are
-accepted under the same license, with no copyright assignment or contributor
-license agreement. Third-party models and runtime binaries retain their own licenses.
-The AppStream metadata file, including contributions to that file, is CC0-1.0 so
-software catalogs can redistribute its descriptions; see [the CC0 text](LICENSES/CC0-1.0.txt).
+GPL-3.0-or-later. See [COPYING](COPYING). Contributions are accepted under the same license, with
+no copyright assignment or contributor license agreement. Third-party models and runtime
+binaries keep their own licenses. The AppStream metadata file is CC0-1.0 so software catalogs
+can redistribute its descriptions; see [the CC0 text](LICENSES/CC0-1.0.txt).

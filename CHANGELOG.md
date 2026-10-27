@@ -1,8 +1,18 @@
 # Changelog
 
-Changes worth knowing about are recorded here. There is no published release yet.
+Changes worth knowing about are recorded here. The first pre-release is 0.1.1.
 
 ## Unreleased
+
+## 0.1.1 - 2026-10-27 (beta pre-release)
+
+First tagged pre-release, built from source. M4 is implemented with validation pending; see
+[beta status](docs/03-development/beta-status.md).
+
+### Changed
+
+- README rewritten around the Kvlm name, with architecture, threading, ownership and branch
+  diagrams, and interface wireframes in `docs/02-architecture/ui-wireframes.md`.
 
 ### Added
 
