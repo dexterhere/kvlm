@@ -6,6 +6,11 @@ Changes worth knowing about are recorded here. The first pre-release is 0.1.1.
 
 ### Added
 
+- A release workflow that builds a Flatpak bundle and an AppImage and attaches them, with checksums, to
+  a version tag's release. Untried until the first tagged run.
+
+### Added
+
 - The setup guide shows the hardware snapshot the window already takes and a rough starting model
   size. It makes no extra probe or request.
 
