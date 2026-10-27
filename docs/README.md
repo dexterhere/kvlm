@@ -21,12 +21,33 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 03 | [Model downloads](03-development/model-downloads.md) | Explicit download, pause, resume, discard, and what stops a transfer |
 | 03 | [Hugging Face access](03-development/huggingface-access.md) | Gated models, keyring-only token, and what is sent where |
 | 03 | [M1 acceptance evidence](03-development/m1-acceptance.md) | Live catalog, resume, dedup and gated-refusal results |
+| 03 | [Portable llama.cpp install](03-development/llamacpp-install.md) | Verified, rootless llama-server install, safe extraction, removal rules |
+| 03 | [Managed runtime supervisor](03-development/runtime-supervisor.md) | Lifecycle, identity-checked readiness, bounded logs, process groups, crash reclaim |
+| 03 | [llama.cpp HTTP client](03-development/llamacpp-client.md) | Loopback-only readiness, props/slots/metrics, bounded streaming chat |
+| 03 | [Developer exports](03-development/developer-exports.md) | Continue.dev, Zed, OpenCode and systemd --user text generators |
+| 03 | [M2 acceptance evidence](03-development/m2-acceptance.md) | Live run with the real llama-server, coverage and what is not claimed |
+| 03 | [M3 acceptance evidence](03-development/m3-acceptance.md) | Live cold run, controlled follow-up and comparison through the production lab path; what is not claimed |
+| 03 | [Attached runtimes](03-development/attached-runtimes.md) | LM Studio and vLLM read-only discovery, limits, what is not done |
+| 03 | [Keyboard and accessibility](03-development/accessibility.md) | Shortcuts, labels, minimum width, the opt-in audit, manual passes |
+| 03 | [Hardware validation procedures](03-development/hardware-validation-procedures.md) | Machines still needed, exact commands and the evidence record |
+| 03 | [Beta status](03-development/beta-status.md) | Implemented versus validated, owner-only items, known limits |
+| 03 | [Release checklist](03-development/release-checklist.md) | Owner-run steps before tagging, and how the opt-in update check behaves |
+| 03 | [Managed runtime in the interface](03-development/managed-runtime-ui.md) | Runtimes card: install, profiles, start/stop, logs, shutdown |
+| 03 | [Benchmark Lab store](03-development/benchmark-lab-store.md) | Experiment, pass and finding records, one-running rule, pruning, summaries |
+| 03 | [Benchmark Lab metrics](03-development/benchmark-lab-metrics.md) | Valid-only ITL, server-counter speeds, CPU/process/GPU load sampling |
+| 03 | [Benchmark Lab protocol](03-development/benchmark-lab-protocol.md) | Cold/warm protocol runner, failure and cancellation rules, llama.cpp target |
+| 03 | [Benchmark Lab diagnostics](03-development/benchmark-lab-diagnostics.md) | DIAG-01..04 rules, thresholds, evidence and not-evaluated reporting |
+| 03 | [Benchmark Lab comparisons](03-development/benchmark-lab-compare.md) | A/B comparison, refusals, controlled single-variable follow-up |
+| 03 | [Benchmark Lab page](03-development/benchmark-lab-ui.md) | Check/Run/Cancel flow, restarts for cold loads and follow-ups, stored experiments |
 | 03 | [Static memory fit](03-development/static-memory-fit.md) | Offline example, core API, validation, and remaining integration |
 | 03 | [GGUF metadata inspection](03-development/gguf-metadata.md) | Local inspection, merged-file split markers, validation evidence, and limits |
 | 03 | [GGUF fit scenarios](03-development/gguf-fit.md) | Local declarations with explicit settings, assumptions, and unknown compatibility |
 | 03 | [Desktop CPU/CUDA fit workflow](03-development/desktop-cpu-fit.md) | File selection, explicit inputs, fresh RAM, asynchronous estimates, and validation limits |
 | 04 | [Milestones](04-roadmap/milestones.md) | Current state and M0–M4 delivery order |
 | 04 | [M1 plan](04-roadmap/m1/Planned.md) | Model Explorer, Hugging Face catalog, deduplication, downloads: [implementation](04-roadmap/m1/Implementation.md) and [diagrams](04-roadmap/m1/Diagrams.md) |
+| 04 | [M2 plan](04-roadmap/m2/Planned.md) | Hybrid runtime manager, managed llama.cpp, supervisor, developer exports |
+| 04 | [M3 plan](04-roadmap/m3/Planned.md) | Benchmark lab, cold/warm protocol, A/B comparison, diagnostic advisor |
+| 04 | [M4 plan](04-roadmap/m4/Planned.md) | LM Studio and vLLM adapters, accessibility, packaging, and what needs hardware or the owner |
 | 04 | [Next feature: hardware discovery](04-roadmap/next-feature-hardware-discovery.md) | Implementation sequence, scope, and acceptance checks for M0 Step 2 |
 | 05 | [Decisions](05-decisions/README.md) | How to record architecture decisions |
 | 05 | [Foundation decision](05-decisions/0001-workspace-foundation.md) | Accepted setup choices |
@@ -45,6 +66,9 @@ policies stay at the root so contributors and hosting platforms can find them.
 | 05 | [Hugging Face catalog](05-decisions/0014-huggingface-catalog.md) | Explicit public catalog access, pinned revisions, rustls, bounded client |
 | 05 | [Resumable downloads](05-decisions/0015-resumable-downloads.md) | Private locked store, verified publication, Range resume, explicit start |
 | 05 | [Hugging Face token](05-decisions/0016-huggingface-token.md) | Keyring-only token, encrypted transport, first-hop-only use |
+| 05 | [Managed llama.cpp](05-decisions/0017-managed-llamacpp.md) | Ownership modes, verified install, identity-checked readiness, process safety |
+| 05 | [Benchmark Lab](05-decisions/0018-benchmark-lab.md) | Experiment records, protocol, diagnostics, controlled comparisons, ownership rules |
+| 05 | [Application ID and contacts](05-decisions/0019-application-id.md) | Why the placeholder ID must change, options, the rename script, owner steps |
 | 05 | [Open questions](05-decisions/open-questions.md) | Specification gaps to resolve before affected implementation |
 
 Also read [contributing](../CONTRIBUTING.md), [security](../SECURITY.md),

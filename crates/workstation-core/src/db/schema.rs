@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Ordered atomic migration (0→1, 1→2); unknown databases are never adopted or downgraded.
+//! Ordered atomic migration (0→1, 1→2, 2→3, 3→4); unknown databases are never adopted or downgraded.
 
 use rusqlite::Connection;
 pub const APPLICATION_ID: i64 = 0x4b56_4c4d;
-pub const VERSION: i64 = 2;
+pub const VERSION: i64 = 4;
 
 const STEP_0_TO_1: &str = "CREATE TABLE benchmark_runs (
     id INTEGER PRIMARY KEY,
@@ -60,6 +60,79 @@ CREATE TABLE downloads (
     updated_at_unix_ms INTEGER NOT NULL
 ) STRICT;";
 
+/// Managed-runtime launch profiles and installed runtime builds. Profiles hold validated
+/// JSON only (no secrets); installs record directories this application created.
+const STEP_2_TO_3: &str = "
+CREATE TABLE runtime_profiles (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE CHECK(length(name) BETWEEN 1 AND 64),
+    engine TEXT NOT NULL CHECK(engine IN ('llamacpp')),
+    profile_json TEXT NOT NULL CHECK(length(CAST(profile_json AS BLOB)) <= 16384),
+    created_at_unix_ms INTEGER NOT NULL,
+    updated_at_unix_ms INTEGER NOT NULL
+) STRICT;
+CREATE TABLE runtime_installs (
+    id INTEGER PRIMARY KEY,
+    engine TEXT NOT NULL CHECK(engine IN ('llamacpp')),
+    version TEXT NOT NULL CHECK(length(version) BETWEEN 1 AND 64),
+    backend TEXT NOT NULL CHECK(backend IN ('cpu','vulkan','cuda')),
+    dir_name TEXT NOT NULL CHECK(length(dir_name) BETWEEN 1 AND 64),
+    sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+    installed_at_unix_ms INTEGER NOT NULL,
+    UNIQUE (engine, version, backend)
+) STRICT;";
+
+/// Benchmark Lab: experiments, their passes and diagnostic findings. Deleting an experiment
+/// removes its passes and findings; a controlled follow-up keeps existing if its baseline is
+/// pruned (the link becomes empty).
+const STEP_3_TO_4: &str = "
+CREATE TABLE experiments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    state TEXT NOT NULL CHECK(state IN ('running','completed','failed','cancelled','interrupted')),
+    started_at_unix_ms INTEGER NOT NULL,
+    finished_at_unix_ms INTEGER,
+    engine TEXT NOT NULL CHECK(engine IN ('llamacpp','ollama')),
+    ownership TEXT NOT NULL CHECK(ownership IN ('managed','attached')),
+    cold INTEGER NOT NULL CHECK(cold IN (0,1)),
+    passes_requested INTEGER NOT NULL CHECK(passes_requested BETWEEN 1 AND 20),
+    workload_id TEXT NOT NULL CHECK(length(workload_id) BETWEEN 1 AND 512),
+    prompt_sha256 TEXT NOT NULL CHECK(length(prompt_sha256) = 64),
+    seed INTEGER NOT NULL,
+    max_tokens INTEGER NOT NULL,
+    model_name TEXT NOT NULL CHECK(length(model_name) BETWEEN 1 AND 512),
+    model_sha256 TEXT CHECK(model_sha256 IS NULL OR length(model_sha256) <= 512),
+    runtime_version TEXT CHECK(runtime_version IS NULL OR length(runtime_version) <= 512),
+    backend TEXT CHECK(backend IS NULL OR length(backend) <= 512),
+    hardware_hash TEXT CHECK(hardware_hash IS NULL OR length(hardware_hash) <= 512),
+    requested_json TEXT NOT NULL CHECK(length(CAST(requested_json AS BLOB)) <= 16384),
+    observed_json TEXT CHECK(observed_json IS NULL OR length(CAST(observed_json AS BLOB)) <= 16384),
+    summary_json TEXT CHECK(summary_json IS NULL OR length(CAST(summary_json AS BLOB)) <= 65536),
+    variable TEXT CHECK(variable IS NULL OR variable IN ('cache_type_q8','half_context','flash_attention_on')),
+    baseline_id INTEGER REFERENCES experiments(id) ON DELETE SET NULL,
+    failure TEXT CHECK(failure IS NULL OR length(failure) <= 512)
+) STRICT;
+CREATE INDEX experiments_started ON experiments(started_at_unix_ms DESC);
+CREATE TABLE experiment_passes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('cold_load','warmup','measured')),
+    ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 40),
+    state TEXT NOT NULL CHECK(state IN ('running','completed','failed','cancelled','interrupted')),
+    started_at_unix_ms INTEGER NOT NULL,
+    finished_at_unix_ms INTEGER,
+    metrics_json TEXT CHECK(metrics_json IS NULL OR length(CAST(metrics_json AS BLOB)) <= 65536),
+    failure TEXT CHECK(failure IS NULL OR length(failure) <= 512),
+    UNIQUE (experiment_id, kind, ordinal)
+) STRICT;
+CREATE TABLE diagnostic_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    rule_id TEXT NOT NULL CHECK(rule_id IN ('DIAG-01','DIAG-02','DIAG-03','DIAG-04')),
+    status TEXT NOT NULL CHECK(status IN ('triggered','clear','not_evaluated','not_applicable')),
+    finding_json TEXT NOT NULL CHECK(length(CAST(finding_json AS BLOB)) <= 16384),
+    UNIQUE (experiment_id, rule_id)
+) STRICT;";
+
 /// Expected `name:type:notnull:pk-position` for every column of every table. CHECK
 /// size caps are not verified here; they are enforced when the tables are created.
 const SHAPES: &[(&str, &str)] = &[
@@ -86,6 +159,26 @@ const SHAPES: &[(&str, &str)] = &[
     (
         "downloads",
         "id:INTEGER:0:1,artifact_id:TEXT:1:0,repo_id:TEXT:1:0,revision:TEXT:1:0,filename:TEXT:1:0,expected_sha256:TEXT:1:0,expected_size:INTEGER:1:0,state:TEXT:1:0,bytes_done:INTEGER:1:0,failure_code:TEXT:0:0,created_at_unix_ms:INTEGER:1:0,updated_at_unix_ms:INTEGER:1:0",
+    ),
+    (
+        "runtime_profiles",
+        "id:INTEGER:0:1,name:TEXT:1:0,engine:TEXT:1:0,profile_json:TEXT:1:0,created_at_unix_ms:INTEGER:1:0,updated_at_unix_ms:INTEGER:1:0",
+    ),
+    (
+        "runtime_installs",
+        "id:INTEGER:0:1,engine:TEXT:1:0,version:TEXT:1:0,backend:TEXT:1:0,dir_name:TEXT:1:0,sha256:TEXT:1:0,installed_at_unix_ms:INTEGER:1:0",
+    ),
+    (
+        "experiments",
+        "id:INTEGER:0:1,state:TEXT:1:0,started_at_unix_ms:INTEGER:1:0,finished_at_unix_ms:INTEGER:0:0,engine:TEXT:1:0,ownership:TEXT:1:0,cold:INTEGER:1:0,passes_requested:INTEGER:1:0,workload_id:TEXT:1:0,prompt_sha256:TEXT:1:0,seed:INTEGER:1:0,max_tokens:INTEGER:1:0,model_name:TEXT:1:0,model_sha256:TEXT:0:0,runtime_version:TEXT:0:0,backend:TEXT:0:0,hardware_hash:TEXT:0:0,requested_json:TEXT:1:0,observed_json:TEXT:0:0,summary_json:TEXT:0:0,variable:TEXT:0:0,baseline_id:INTEGER:0:0,failure:TEXT:0:0",
+    ),
+    (
+        "experiment_passes",
+        "id:INTEGER:0:1,experiment_id:INTEGER:1:0,kind:TEXT:1:0,ordinal:INTEGER:1:0,state:TEXT:1:0,started_at_unix_ms:INTEGER:1:0,finished_at_unix_ms:INTEGER:0:0,metrics_json:TEXT:0:0,failure:TEXT:0:0",
+    ),
+    (
+        "diagnostic_findings",
+        "id:INTEGER:0:1,experiment_id:INTEGER:1:0,rule_id:TEXT:1:0,status:TEXT:1:0,finding_json:TEXT:1:0",
     ),
 ];
 
@@ -148,13 +241,25 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<(), String> {
             .map_err(|_| "Cannot create benchmark history schema.")?;
         tx.execute_batch(STEP_1_TO_2)
             .map_err(|_| "Cannot create model catalog schema.")?;
+        tx.execute_batch(STEP_2_TO_3)
+            .map_err(|_| "Cannot create runtime profile schema.")?;
+        tx.execute_batch(STEP_3_TO_4)
+            .map_err(|_| "Cannot create benchmark lab schema.")?;
         tx.pragma_update(None, "application_id", APPLICATION_ID)
             .map_err(|_| "Cannot set history identity.")?;
         tx.pragma_update(None, "user_version", VERSION)
             .map_err(|_| "Cannot set history version.")?;
-    } else if app == APPLICATION_ID && version == 1 {
-        tx.execute_batch(STEP_1_TO_2)
-            .map_err(|_| "Cannot upgrade history to the model catalog schema.")?;
+    } else if app == APPLICATION_ID && (1..VERSION).contains(&version) {
+        if version == 1 {
+            tx.execute_batch(STEP_1_TO_2)
+                .map_err(|_| "Cannot upgrade history to the model catalog schema.")?;
+        }
+        if version <= 2 {
+            tx.execute_batch(STEP_2_TO_3)
+                .map_err(|_| "Cannot upgrade history to the runtime profile schema.")?;
+        }
+        tx.execute_batch(STEP_3_TO_4)
+            .map_err(|_| "Cannot upgrade history to the benchmark lab schema.")?;
         tx.pragma_update(None, "user_version", VERSION)
             .map_err(|_| "Cannot set history version.")?;
     } else if app != APPLICATION_ID || version != VERSION {

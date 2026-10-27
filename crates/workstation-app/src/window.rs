@@ -4,15 +4,25 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use workstation_core::APP_NAME;
 
-use crate::bridge::{self, UiEvent};
 use crate::views;
+use crate::{
+    attached,
+    bridge::{self, UiEvent},
+    lab,
+};
 
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
     let (commands, events) = bridge::start(runtime);
     let overview = views::overview::Overview::new(commands.clone());
+    overview.append(&views::updates::new(runtime));
     let runtimes = views::runtimes::Runtimes::new(commands.clone());
+    let (attached_commands, attached_events) = attached::start(runtime);
+    let other_runtimes = views::attached::Attached::new(attached_commands);
+    runtimes.append(&other_runtimes.widget);
     let catalog = views::catalog::Explorer::new(commands.clone());
     let benchmarks = views::bench_lab::Benchmarks::new(commands);
+    let (lab_commands, lab_events) = lab::start(runtime, lab::live());
+    let lab_page = views::lab::Lab::new(lab_commands);
     let stack = adw::ViewStack::new();
     stack.set_vexpand(true);
     stack.add_titled_with_icon(
@@ -38,6 +48,12 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         Some("benchmarks"),
         "Benchmarks",
         "applications-science-symbolic",
+    );
+    stack.add_titled_with_icon(
+        &lab_page.widget,
+        Some("lab"),
+        "Lab",
+        "applications-engineering-symbolic",
     );
 
     let switcher = adw::ViewSwitcher::builder()
@@ -96,7 +112,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
         }
     });
     window.add_action(&navigate);
-    for (index, name) in ["overview", "catalog", "runtimes", "benchmarks"]
+    for (index, name) in ["overview", "catalog", "runtimes", "benchmarks", "lab"]
         .into_iter()
         .enumerate()
     {
@@ -105,6 +121,19 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
             &[&format!("<Primary>{}", index + 1)],
         );
     }
+
+    // Ctrl+K: jump to Models and focus the search field. It never starts a search.
+    let search = gio::SimpleAction::new("search", None);
+    let weak_stack = stack.downgrade();
+    let search_entry = catalog.search_entry().downgrade();
+    search.connect_activate(move |_, _| {
+        if let (Some(stack), Some(entry)) = (weak_stack.upgrade(), search_entry.upgrade()) {
+            stack.set_visible_child_name("catalog");
+            entry.grab_focus();
+        }
+    });
+    window.add_action(&search);
+    app.set_accels_for_action("win.search", &["<Primary>k"]);
 
     let refresh = gio::SimpleAction::new("refresh", None);
     let weak_stack = stack.downgrade();
@@ -126,17 +155,41 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     window.add_action(&refresh);
     app.set_accels_for_action("win.refresh", &["<Primary>r"]);
     overview.request();
+    runtimes.load_managed();
     benchmarks.request_history();
+    lab_page.load();
     catalog.load_saved();
     catalog.load_downloads();
     let closing_events = events.clone();
+    let closing_lab = lab_events.clone();
+    let closing_attached = attached_events.clone();
+    let closing_page = lab_page.clone();
     window.connect_close_request(move |_| {
+        closing_page.cancel();
         closing_events.close();
+        closing_lab.close();
+        closing_attached.close();
         glib::Propagation::Proceed
     });
     let shutdown_events = events.clone();
+    let shutdown_lab = lab_events.clone();
+    let shutdown_attached = attached_events.clone();
+    let shutdown_page = lab_page.clone();
     app.connect_shutdown(move |_| {
+        shutdown_page.cancel();
         shutdown_events.close();
+        shutdown_lab.close();
+        shutdown_attached.close();
+    });
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(event) = attached_events.recv().await {
+            other_runtimes.receive(&event);
+        }
+    });
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(event) = lab_events.recv().await {
+            lab_page.receive(&event);
+        }
     });
     let weak_status = status.downgrade();
     glib::MainContext::default().spawn_local(async move {
@@ -176,7 +229,8 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
                 | UiEvent::DownloadProgress(_)
                 | UiEvent::DownloadFinished { .. }
                 | UiEvent::DownloadsLoaded { .. }
-                | UiEvent::TokenDone { .. } => continue,
+                | UiEvent::TokenDone { .. }
+                | UiEvent::Managed(_) => continue,
             }
             status.set_label(&format!("{hardware_status} · {runtime_status}"));
         }

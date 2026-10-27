@@ -33,6 +33,8 @@ use workstation_runtimes::ollama::{
 };
 use workstation_runtimes::secrets::{Token, TokenService, TokenSlot};
 
+use crate::managed::{self, ManagedBackend, ManagedCommand, ManagedEvent};
+
 #[derive(Debug)]
 pub enum CoreCommand {
     CheckBenchmarkVerification {
@@ -117,6 +119,8 @@ pub enum CoreCommand {
         model: InstalledModel,
         cancel: tokio::sync::watch::Receiver<bool>,
     },
+    /// The managed llama.cpp runtime; see `managed`.
+    Managed(ManagedCommand),
 }
 
 /// What a finished token action achieved. Never carries the token.
@@ -190,6 +194,7 @@ pub enum UiEvent {
         id: u64,
         result: Result<Vec<DownloadRow>, String>,
     },
+    Managed(ManagedEvent),
 }
 
 /// A file's header facts and the conditional fit for the default scenario.
@@ -479,6 +484,90 @@ fn token_job(
     })
 }
 
+fn managed_failed(id: u64) -> UiEvent {
+    UiEvent::Managed(ManagedEvent::Action {
+        id,
+        result: Err("The runtime worker stopped unexpectedly. Retry.".into()),
+    })
+}
+
+/// The request id and the work for one managed-runtime command (install is handled apart).
+fn managed_job(
+    managed: &Arc<dyn ManagedBackend>,
+    command: ManagedCommand,
+) -> (u64, BoxFuture<UiEvent>) {
+    let snapshot = |id: u64,
+                    work: BoxFuture<Result<managed::Snapshot, String>>|
+     -> (u64, BoxFuture<UiEvent>) {
+        (
+            id,
+            Box::pin(async move {
+                let result = work.await.map(Box::new);
+                UiEvent::Managed(ManagedEvent::Snapshot { id, result })
+            }),
+        )
+    };
+    let action = |id: u64, work: BoxFuture<Result<(), String>>| -> (u64, BoxFuture<UiEvent>) {
+        (
+            id,
+            Box::pin(async move {
+                UiEvent::Managed(ManagedEvent::Action {
+                    id,
+                    result: work.await,
+                })
+            }),
+        )
+    };
+    match command {
+        ManagedCommand::Load { id } => snapshot(id, managed.snapshot()),
+        ManagedCommand::RemoveInstall { id, dir_name } => {
+            snapshot(id, managed.remove_install(dir_name))
+        }
+        ManagedCommand::SaveProfile { id, profile } => snapshot(id, managed.save_profile(*profile)),
+        ManagedCommand::DeleteProfile { id, name } => snapshot(id, managed.delete_profile(name)),
+        ManagedCommand::Builds { id, backends } => {
+            let work = managed.builds(backends);
+            (
+                id,
+                Box::pin(async move {
+                    UiEvent::Managed(ManagedEvent::Builds {
+                        id,
+                        result: work.await,
+                    })
+                }),
+            )
+        }
+        ManagedCommand::Start {
+            id,
+            profile,
+            dir_name,
+        } => action(id, managed.start(profile, dir_name)),
+        ManagedCommand::Stop { id } => action(id, managed.stop()),
+        ManagedCommand::Restart { id } => action(id, managed.restart()),
+        ManagedCommand::Logs { id } => {
+            let work = managed.logs();
+            (
+                id,
+                Box::pin(async move {
+                    UiEvent::Managed(ManagedEvent::Logs {
+                        id,
+                        lines: work.await,
+                    })
+                }),
+            )
+        }
+        // Routed before this function; a stray one is answered, not dropped.
+        ManagedCommand::Install { id, .. } => action(
+            id,
+            Box::pin(async { Err("Unsupported request.".to_owned()) }),
+        ),
+        ManagedCommand::CancelInstall => action(
+            0,
+            Box::pin(async { Err("Unsupported request.".to_owned()) }),
+        ),
+    }
+}
+
 fn release_failed(id: u64) -> UiEvent {
     UiEvent::ReleaseLoaded {
         id,
@@ -559,6 +648,7 @@ where
         run_benchmark,
         load_history,
         Arc::new(LiveCatalog::default()),
+        managed::live(),
     )
 }
 
@@ -573,6 +663,7 @@ fn start_with_catalog<D, I, B>(
     run_benchmark: impl Fn(InstalledModel, tokio::sync::watch::Receiver<bool>) -> B + Send + 'static,
     load_history: impl Fn() -> Result<Vec<HistoryEntry>, String> + Send + Sync + 'static,
     catalog: Arc<dyn CatalogBackend>,
+    managed: Arc<dyn ManagedBackend>,
 ) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>)
 where
     D: std::future::Future<Output = Result<Discovery, String>> + Send,
@@ -611,6 +702,16 @@ where
         // Keyring calls run on their own task, one at a time, so a hung prompt never blocks
         // download control or browsing.
         let mut token_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        // Managed runtime: short requests run together (the backend serializes what must be);
+        // one install at a time, cancellable. Status arrives on a coalescing watch.
+        let mut managed_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let mut install_jobs: tokio::task::JoinSet<UiEvent> = tokio::task::JoinSet::new();
+        let mut install_cancel = Arc::new(AtomicBool::new(false));
+        // Latest reading only, so a slow consumer can never build a backlog.
+        let (install_tx, mut install_rx) = tokio::sync::watch::channel::<Option<workstation_runtimes::llamacpp::install::Progress>>(None);
+        let install_tx = Arc::new(install_tx);
+        let mut live_rx = managed.live();
+        let mut live_open = true;
         loop {
             if events.is_closed() { break; }
             let command = if let Some(command) = pending.take() { command } else { tokio::select! {
@@ -665,6 +766,33 @@ where
                 result = download_list_jobs.join_next(), if !download_list_jobs.is_empty() => {
                     if let Some(Ok(event)) = result
                         && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = managed_jobs.join_next(), if !managed_jobs.is_empty() => {
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                result = install_jobs.join_next(), if !install_jobs.is_empty() => {
+                    // A reading from before the end would only be stale.
+                    install_tx.send_replace(None);
+                    install_rx.borrow_and_update();
+                    if let Some(Ok(event)) = result
+                        && events.send(event).await.is_err() { break; }
+                    continue;
+                }
+                changed = install_rx.changed() => {
+                    if changed.is_err() { continue; }
+                    let latest = *install_rx.borrow_and_update();
+                    if let Some(latest) = latest
+                        && events.send(UiEvent::Managed(ManagedEvent::InstallProgress(latest))).await.is_err() { break; }
+                    continue;
+                }
+                changed = live_rx.changed(), if live_open => {
+                    if changed.is_err() { live_open = false; continue; }
+                    let latest = live_rx.borrow_and_update().clone();
+                    if let Some(live) = latest
+                        && events.send(UiEvent::Managed(ManagedEvent::Live(Box::new(live)))).await.is_err() { break; }
                     continue;
                 }
                 Some(mut latest) = progress_rx.recv() => {
@@ -806,6 +934,30 @@ where
                         if events.send(UiEvent::BenchmarkFinished { id, outcome, resources: None }).await.is_err() { break; }
                     }
                 }
+                CoreCommand::Managed(command) => match command {
+                    ManagedCommand::CancelInstall => {
+                        install_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    ManagedCommand::Install { id, candidate } => {
+                        if install_jobs.is_empty() {
+                            install_cancel = Arc::new(AtomicBool::new(false));
+                            let (managed, cancel, tx) = (Arc::clone(&managed), Arc::clone(&install_cancel), Arc::clone(&install_tx));
+                            install_jobs.spawn(guarded(id, managed_failed, async move {
+                                let report = Box::new(move |p| { tx.send_replace(Some(p)); });
+                                let result = managed.install(*candidate, cancel, report).await.map(Box::new);
+                                UiEvent::Managed(ManagedEvent::Installed { id, result })
+                            }));
+                        } else {
+                            let result = Err("Another install is still running. Cancel it first.".to_owned());
+                            if events.send(UiEvent::Managed(ManagedEvent::Installed { id, result })).await.is_err() { break; }
+                        }
+                    }
+                    other => {
+                        let managed = Arc::clone(&managed);
+                        let (id, work) = managed_job(&managed, other);
+                        managed_jobs.spawn(guarded(id, managed_failed, work));
+                    }
+                },
                 CoreCommand::DetectHardware => {
                     let probe = Arc::clone(&probe);
                     let result = tokio::select! {
@@ -862,6 +1014,7 @@ where
         }
         // A scan on a blocking thread cannot be aborted; tell it to stop.
         scan_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        install_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
     });
     (commands, event_rx)
 }
@@ -1228,7 +1381,179 @@ mod tests {
             |_, _| async { unreachable!("no benchmark in catalog tests") },
             || Ok(Vec::new()),
             Arc::new(FakeCatalog),
+            Arc::new(crate::managed::fake::FakeManaged::default()),
         )
+    }
+
+    fn start_managed(
+        fake: Arc<crate::managed::fake::FakeManaged>,
+    ) -> (mpsc::Sender<CoreCommand>, async_channel::Receiver<UiEvent>) {
+        start_with_catalog(
+            &tokio::runtime::Handle::current(),
+            snapshot,
+            |_| Err("unused".into()),
+            || async { Err("unused".into()) },
+            |_| async { Err("unused".into()) },
+            |_, _| async { unreachable!("no benchmark in managed tests") },
+            || Ok(Vec::new()),
+            Arc::new(FakeCatalog),
+            fake,
+        )
+    }
+
+    fn managed(command: ManagedCommand) -> CoreCommand {
+        CoreCommand::Managed(command)
+    }
+
+    fn valid_profile(name: &str) -> workstation_core::runtime::profile::LaunchProfile {
+        use workstation_core::runtime::profile::{CacheType, LaunchProfile};
+        LaunchProfile {
+            name: name.into(),
+            model_path: "/m/x.gguf".into(),
+            port: 8081,
+            context_length: 4096,
+            gpu_layers: 0,
+            cache_type_k: CacheType::F16,
+            cache_type_v: CacheType::F16,
+            flash_attention: false,
+            ubatch_size: 512,
+            extra: vec![],
+        }
+    }
+
+    fn candidate() -> Box<workstation_runtimes::llamacpp::release::Candidate> {
+        use workstation_runtimes::llamacpp::release::{Backend, Candidate};
+        Box::new(Candidate {
+            tag: "b1".into(),
+            backend: Backend::Cpu,
+            archives: vec![],
+        })
+    }
+
+    #[tokio::test]
+    async fn managed_profiles_round_trip_through_typed_commands() {
+        let fake = Arc::new(crate::managed::fake::FakeManaged::default());
+        let (commands, events) = start_managed(Arc::clone(&fake));
+        commands
+            .send(managed(ManagedCommand::Load { id: 1 }))
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::Managed(ManagedEvent::Snapshot { id: 1, result: Ok(s) }) if s.profiles.is_empty()));
+        commands
+            .send(managed(ManagedCommand::SaveProfile {
+                id: 2,
+                profile: Box::new(valid_profile("a")),
+            }))
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::Managed(ManagedEvent::Snapshot { id: 2, result: Ok(s) }) if s.profiles.len() == 1));
+        commands
+            .send(managed(ManagedCommand::DeleteProfile {
+                id: 3,
+                name: "a".into(),
+            }))
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::Managed(ManagedEvent::Snapshot { id: 3, result: Ok(s) }) if s.profiles.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn managed_start_reports_the_answer_and_the_new_state_separately() {
+        let fake = Arc::new(crate::managed::fake::FakeManaged::default());
+        let (commands, events) = start_managed(Arc::clone(&fake));
+        commands
+            .send(managed(ManagedCommand::Start {
+                id: 1,
+                profile: "a".into(),
+                dir_name: "b1-cpu".into(),
+            }))
+            .await
+            .unwrap();
+        let (mut answered, mut ready) = (false, false);
+        while !(answered && ready) {
+            match receive(&events).await {
+                UiEvent::Managed(ManagedEvent::Action {
+                    id: 1,
+                    result: Ok(()),
+                }) => answered = true,
+                UiEvent::Managed(ManagedEvent::Live(live)) => {
+                    ready |= live.state() == workstation_core::runtime::RuntimeLifecycleState::Ready
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        commands
+            .send(managed(ManagedCommand::Start {
+                id: 2,
+                profile: "missing".into(),
+                dir_name: "b1-cpu".into(),
+            }))
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::Managed(ManagedEvent::Action { id: 2, result: Err(m) }) if m.contains("no longer exists")));
+        assert_eq!(fake.calls.lock().unwrap()[0], "start a b1-cpu");
+    }
+
+    #[tokio::test]
+    async fn managed_install_reports_latest_progress_and_refuses_a_second_install() {
+        let fake = Arc::new(crate::managed::fake::FakeManaged::slow());
+        let (commands, events) = start_managed(fake);
+        commands
+            .send(managed(ManagedCommand::Install {
+                id: 1,
+                candidate: candidate(),
+            }))
+            .await
+            .unwrap();
+        loop {
+            if matches!(
+                receive(&events).await,
+                UiEvent::Managed(ManagedEvent::InstallProgress(_))
+            ) {
+                break;
+            }
+        }
+        commands
+            .send(managed(ManagedCommand::Install {
+                id: 2,
+                candidate: candidate(),
+            }))
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::Managed(ManagedEvent::Installed { id: 2, result: Err(m) }) if m.contains("still running")));
+        commands
+            .send(managed(ManagedCommand::CancelInstall))
+            .await
+            .unwrap();
+        loop {
+            match receive(&events).await {
+                UiEvent::Managed(ManagedEvent::Installed {
+                    id: 1,
+                    result: Err(m),
+                }) => {
+                    assert!(m.contains("cancelled"));
+                    break;
+                }
+                UiEvent::Managed(ManagedEvent::InstallProgress(_)) => {}
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_logs_are_returned_for_their_request_id() {
+        let (commands, events) = start_managed(Arc::default());
+        commands
+            .send(managed(ManagedCommand::Logs { id: 7 }))
+            .await
+            .unwrap();
+        assert!(matches!(receive(&events).await,
+            UiEvent::Managed(ManagedEvent::Logs { id: 7, lines }) if lines.len() == 2));
     }
 
     #[tokio::test]

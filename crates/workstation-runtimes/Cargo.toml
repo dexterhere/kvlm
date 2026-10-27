@@ -16,6 +16,17 @@ tokio.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
 oo7.workspace = true
+flate2.workspace = true
+tar.workspace = true
+rustix.workspace = true
 
 [lints]
 workspace = true
+
+# A stand-in for llama-server used only by the supervisor tests; its behaviour is chosen by
+# the first line of the "model" file it is given.
+[[bin]]
+name = "fake-llama-server"
+path = "tests/support/fake_llama_server.rs"
+test = false
+doc = false

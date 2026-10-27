@@ -31,6 +31,7 @@ impl LoadState {
 
 pub struct Overview {
     pub widget: gtk::ScrolledWindow,
+    layout: gtk::Box,
     pub refresh: gtk::Button,
     spinner: gtk::Spinner,
     status: gtk::Label,
@@ -41,6 +42,11 @@ pub struct Overview {
 }
 
 impl Overview {
+    /// Add a section below the readings.
+    pub fn append(&self, section: &impl IsA<gtk::Widget>) {
+        self.layout.append(section);
+    }
+
     pub fn new(commands: tokio::sync::mpsc::Sender<CoreCommand>) -> Self {
         let refresh = gtk::Button::with_mnemonic("_Refresh");
         refresh.set_tooltip_text(Some("Refresh hardware readings (Ctrl+R)"));
@@ -86,6 +92,7 @@ impl Overview {
         let state = Rc::new(RefCell::new(LoadState::default()));
         let overview = Self {
             widget,
+            layout,
             refresh,
             spinner,
             status,

@@ -71,9 +71,24 @@ in Ollama, the Hugging Face cache or the application's store, downloads with pau
 and checksum verification, and keeps a gated-model token in your desktop keyring. A live run
 on the reference machine is recorded in the
 [M1 acceptance evidence](docs/03-development/m1-acceptance.md); the stored-token restart
-check passed. See the [M1 plan](docs/04-roadmap/m1/Planned.md). Managed runtimes,
-controlled benchmark comparisons, and more hardware matrices come in M2 to M4; the
-[roadmap](docs/04-roadmap/milestones.md) tracks them.
+check passed. See the [M1 plan](docs/04-roadmap/m1/Planned.md).
+
+**M2 is implemented on `develop`.** The Runtimes page can install the official portable
+llama.cpp build (checksum verified, no root), save launch profiles, start, stop and restart
+a managed server on `127.0.0.1`, and show its log. A live run with the real server is in the
+[M2 acceptance evidence](docs/03-development/m2-acceptance.md); only the CPU build was served.
+**M3 is implemented on `develop` for the managed llama.cpp server.** The Lab page runs a fixed
+prompt through a cold/warm protocol, stores each experiment with its measurements and coverage,
+shows diagnostic findings, and compares two runs, including a controlled follow-up that changes
+exactly one setting. A live run is in the
+[M3 acceptance evidence](docs/03-development/m3-acceptance.md); only the CPU build and a toy model
+were used.
+
+**M4 is implemented on `develop`, validation pending.** Read-only LM Studio and vLLM discovery,
+keyboard shortcuts and an accessibility audit, packaging, an opt-in update check and a redacted
+`--report-hardware` mode exist. Real-hardware, GNOME-session and screen-reader validation, the
+application ID decision and the release itself are not done; see
+[beta status](docs/03-development/beta-status.md).
 
 This is an independent community project; it is not an official GNOME application or a
 GNOME Circle member.
