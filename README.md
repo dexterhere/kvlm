@@ -254,8 +254,9 @@ scripts/install.sh --uninstall
 ```
 
 The first launch opens a short **setup guide** (reopen it from the main menu) that explains what
-Kvlm reads, what it never touches and when anything runs, then sends you to the hardware or
-runtime check. The [development guide](docs/03-development/getting-started.md) has the manual
+Kvlm reads, what it never touches and when anything runs. It then shows what the hardware
+scan found (processor, memory, graphics memory) with a rough starting size for models, and
+sends you to the hardware or runtime check. The [development guide](docs/03-development/getting-started.md) has the manual
 Cargo and Meson steps.
 
 Ollama, a GPU and model downloads are all optional. Kvlm starts with no network access.

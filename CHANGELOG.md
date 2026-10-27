@@ -4,6 +4,11 @@ Changes worth knowing about are recorded here. The first pre-release is 0.1.1.
 
 ## Unreleased
 
+### Added
+
+- The setup guide shows the hardware snapshot the window already takes and a rough starting model
+  size. It makes no extra probe or request.
+
 ## 0.1.2 - 2026-10-27 (beta pre-release)
 
 ### Changed
