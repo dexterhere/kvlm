@@ -13,17 +13,22 @@ host name or machine id; no paths or identifiers are in this page.
 | --- | --- | --- | ---: | ---: | ---: | ---: |
 | vLLM | 0.32.0 | Qwen2.5-1.5B-Instruct, bf16 safetensors, 4096 context, eager mode | 0.53 s | 0.03 s | 55.2 tok/s (range 55.1–55.3) | 4.7 GiB |
 
-Read the memory figure with care: vLLM reserves a fixed share of VRAM at start (here 80%), so it shows the
-reservation, not what the model needs. Eager mode (no CUDA graphs) was used by the owner to fit a 6 GiB card and
-lowers speed.
+| LM Studio | server on 1234, GGUF runtime | Qwen2.5-Coder 7B Instruct Q4_K_M, all layers requested on GPU | 0.11 s (model preloaded) | 0.03 s | 36.8 tok/s | 4.8 GiB |
+| Ollama | local service on 11434 | Qwen2.5-Coder 7B Q4_K_M | 6.03 s (includes loading the model) | 0.03 s | 38.1 tok/s | 4.6 GiB |
 
-## Not measured yet
+How to read this:
 
-| Runtime | Model | Blocker |
-| --- | --- | --- |
-| LM Studio | Qwen2.5-1.5B-Instruct and Qwen2.5-Coder 7B Q4_K_M | Its local server was off, and the 6 GiB GPU was occupied by vLLM |
-| Ollama | Qwen2.5-Coder 7B Q4_K_M | The GPU was occupied by vLLM; a 7B Q4 model needs about 4.7 GiB |
+- **7B Q4_K_M, LM Studio against Ollama:** decode speed is within about 4% (36.8 against 38.1 tok/s), which is inside what one run on one day can tell apart. Treat them as equal on this machine. The cold figures are not comparable: LM Studio's model was loaded before the timing began, Ollama's was loaded by the first request.
+- **vLLM's row is a different model** (1.5B, bf16), so its 55 tok/s must not be compared with the 7B rows. Its memory figure is vLLM's fixed 80% reservation, not what the model needs.
+- GPU memory is the whole machine's use while the target ran, including the desktop, so it overstates the runtime itself by a few hundred MiB.
+- vLLM ran in eager mode (no CUDA graphs) so that it fits a 6 GiB card; that lowers its speed.
+- Raw per-run data: [benchmark-data](benchmark-data/).
 
-The 1.5B and 7B models are not directly comparable, and vLLM cannot serve the 7B GGUF model yet (its GGUF support
-is experimental), so a like-for-like three-way table is not possible on this machine. The planned comparison is
-vLLM against LM Studio on the 1.5B model, and LM Studio against Ollama on the 7B Q4_K_M model.
+## Not possible on this machine
+
+| Comparison | Why |
+| --- | --- |
+| LM Studio on the 1.5B model | The only 1.5B copy here is a safetensors model; LM Studio on Linux reported "No LM Runtime found for model format torchSafetensors" |
+| vLLM on the 7B Q4_K_M model | vLLM's GGUF support is experimental; not attempted |
+
+So a three-way, same-model table does not exist yet. A matching 1.5B GGUF file would allow LM Studio and Ollama to join the vLLM row.
