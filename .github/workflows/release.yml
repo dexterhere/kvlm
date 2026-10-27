@@ -1,0 +1,123 @@
+name: Release packages
+
+# Builds a Flatpak bundle and an AppImage. On a version tag (v*) the files are attached to that
+# tag's GitHub release; on a pull request that touches packaging, or a manual run, they are only
+# kept as workflow artifacts for 7 days so the packaging can be tried without releasing.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    branches: [develop]
+    paths:
+      - 'packaging/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # A tag name on a release, otherwise a throwaway label (a pull request ref contains a slash).
+  VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('dev-{0}', github.run_number) }}
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate vendored Cargo sources from Cargo.lock
+        run: |
+          pip install --break-system-packages aiohttp tomlkit
+          curl -fsSL -o /tmp/flatpak-cargo-generator.py \
+            https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/9d86d336a39b9af38b86f114b6ce5820fe260f91/cargo/flatpak-cargo-generator.py
+          echo "0a2db6be87d75910facef28ab46d4d6460802e8419ab850d0caa6a364d26b380  /tmp/flatpak-cargo-generator.py" | sha256sum -c -
+          python3 /tmp/flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
+        with:
+          bundle: kvlm-${{ env.VERSION }}.flatpak
+          manifest-path: packaging/flatpak/io.github.dexterhere.Kvlm.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+          upload-artifact: false
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flatpak
+          path: kvlm-*.flatpak
+          retention-days: 7
+
+  appimage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: 2
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
+            meson ninja-build libglib2.0-bin desktop-file-utils appstream python3 patchelf
+      - name: Prepare Rust
+        run: rustup update stable --no-self-update
+      - name: Build and stage into an AppDir
+        run: |
+          meson setup build --buildtype=release --prefix=/usr
+          meson compile -C build
+          DESTDIR="$PWD/AppDir" meson install -C build
+      - name: Fetch linuxdeploy and its GTK plugin (pinned, checksummed)
+        run: |
+          mkdir -p tools
+          curl -fsSL -o tools/linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          curl -fsSL -o tools/linuxdeploy-plugin-gtk.sh \
+            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/7a3fbc31a9e5075073ff8790f26effbac5f84453/linuxdeploy-plugin-gtk.sh
+          cd tools
+          echo "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  linuxdeploy-x86_64.AppImage" | sha256sum -c -
+          echo "b0f4cbc684a0103a9651f0955b635eaea0096b3a66c0f5a2c2aa337960375171  linuxdeploy-plugin-gtk.sh" | sha256sum -c -
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk.sh
+      - name: Bundle libraries and write the AppImage
+        env:
+          DEPLOY_GTK_VERSION: '4'
+        run: |
+          export PATH="$PWD/tools:$PATH"
+          tools/linuxdeploy-x86_64.AppImage --appdir AppDir --plugin gtk \
+            --desktop-file AppDir/usr/share/applications/io.github.dexterhere.Kvlm.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/io.github.dexterhere.Kvlm.svg \
+            --output appimage
+          ls -la ./*.AppImage
+          mv ./*.AppImage "kvlm-${VERSION}-x86_64.AppImage"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: appimage
+          path: kvlm-*.AppImage
+          retention-days: 7
+
+  publish:
+    # Only for a version tag. Needs write access to the release, so it is a separate job that runs
+    # no project code: it downloads the two artifacts, writes checksums and uploads them.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [flatpak, appimage]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write checksums and attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" * --repo "$GITHUB_REPOSITORY" --clobber
