@@ -4,6 +4,23 @@ Changes worth knowing about are recorded here. The first pre-release is 0.1.1.
 
 ## Unreleased
 
+## 0.1.2 - 2026-10-27 (beta pre-release)
+
+### Changed
+
+- The application ID is now `io.github.dexterhere.Kvlm` (ADR 0019). A Hugging Face token saved
+  under the old placeholder ID must be saved again.
+- Security and conduct contacts are published; GitHub private vulnerability reporting is enabled.
+- The README explains the name Kvlm (KV cache + language model).
+
+### Added
+
+- `scripts/install.sh`: user-level build and install with tool checks and uninstall; never uses sudo.
+- First-run setup guide, reopenable from the main menu.
+- `scripts/compare_runtimes.py` and the first measured runtime numbers on the reference machine
+  ([runtime benchmarks](docs/03-development/runtime-benchmarks.md),
+  [test coverage](docs/03-development/test-coverage.md)).
+
 ## 0.1.1 - 2026-10-27 (beta pre-release)
 
 First tagged pre-release, built from source. M4 is implemented with validation pending; see
