@@ -21,6 +21,8 @@ Changes worth knowing about are recorded here. The first pre-release is 0.1.1.
 
 ### Added
 
+- A release workflow that builds a Flatpak bundle and an AppImage and attaches them, with checksums, to
+  a version tag's release. Both built on a pull request; neither has been installed and run on a real machine.
 - Preferences (Ctrl+,): colour scheme (follow the system, light or dark), reopen the setup guide,
   and the fixed privacy statements.
 - "How to get a token" steps with a button that opens the Hugging Face token page, on the Models
