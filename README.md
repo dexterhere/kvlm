@@ -23,6 +23,7 @@
   <a href="#how-it-works">How it works</a> ·
   <a href="#install-and-run">Install</a> ·
   <a href="#status-of-the-013-beta">Status</a> ·
+  <a href="https://dexterhere.github.io/kvlm/">Website</a> ·
   <a href="docs/README.md">Docs</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
