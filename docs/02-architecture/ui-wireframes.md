@@ -1,19 +1,20 @@
 # Interface wireframes
 
-Wireframes of the interface as implemented in 0.1.1, drawn from the widgets in
+Wireframes of the interface as implemented in 0.1.3, drawn from the widgets in
 `crates/workstation-app/src/views/`. They show layout and states, not pixel-exact styling; the real
-window follows the desktop theme, and exact wording of labels and values may differ from these sketches. Run the application to see it. Screenshots are not committed
-because they show the tester's hardware.
+window follows the desktop theme, and exact wording of labels and values may differ from these sketches. Run the application to see it. The project site carries a few reviewed screenshots of the
+reference machine.
 
-There is no installer or setup wizard. A user builds from source, runs `local-ai-workstation`, and
-lands on Overview. Nothing is configured before first use; every network action is a button.
+Install with `scripts/install.sh` or build from source. On first run a setup guide explains what
+Kvlm reads and what it never touches, then opens My computer. Nothing is configured before first
+use; every network action is a button.
 
 ## Window frame
 
 ```text
 Wide (>= 700 sp)                                         Narrow (< 700 sp, down to 360 px)
 ┌────────────────────────────────────────────┐           ┌──────────────────────┐
-│ [Overview][Models][Runtimes][Bench][Lab]  ☰│           │  Local AI Workstation│
+│ [My computer][Models][Runtimes][Speed][Exp]│           │  Local AI Workstation│
 ├────────────────────────────────────────────┤           │  ☰                   │
 │                                            │           ├──────────────────────┤
 │              page content                  │           │    page content      │
@@ -21,7 +22,7 @@ Wide (>= 700 sp)                                         Narrow (< 700 sp, down 
 │                                            │           │                      │
 ├────────────────────────────────────────────┤           ├──────────────────────┤
 │ status line: hardware · Ollama             │           │ status line          │
-└────────────────────────────────────────────┘           │ [Ov][Mo][Ru][Be][La] │
+└────────────────────────────────────────────┘           │ [My][Mo][Ru][Sp][Ex] │
                                                          └──────────────────────┘
 ```
 
@@ -31,18 +32,19 @@ Shortcuts: `Ctrl+1` … `Ctrl+5` pages, `Ctrl+K` model search, `Ctrl+R` refresh,
 
 ```mermaid
 flowchart TD
-    A[Start the app] --> B[Overview: hardware read automatically, local only]
+    A[Start the app] --> S[Setup guide: what Kvlm reads, what it never touches]
+    S --> B[My computer: hardware read automatically, local only]
     B --> C{Want a fit estimate?}
     C -->|yes| D[Choose a local GGUF file, set context, press Estimate]
     C -->|no| E[Models: search Hugging Face, only when you press Search]
     E --> F[Inspect a file, then Download]
     B --> G[Runtimes: Check Ollama, or install llama.cpp]
     G --> H[Start a profile]
-    H --> I[Lab: Check, then Run]
-    G --> J[Benchmarks: Check verification, then Run]
+    H --> I[Experiments: Check, then Run]
+    G --> J[Speed test: Check verification, then Run]
 ```
 
-## Overview
+## My computer
 
 ```text
 My computer                                           [ Refresh ]
@@ -113,10 +115,10 @@ Your runtimes                                        [ Refresh ]
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Benchmarks
+## Speed test
 
 ```text
-Benchmark Lab
+Speed test
 Installed model  [ qwen2.5-coder:7b ▾ ]   Quick workload  (fixed prompt)
 [ Check verification ]   No saved verification checked.
 [ Run ]  [ Cancel ]
@@ -128,10 +130,10 @@ Recent benchmark history  [ Reload ]     Benchmark Verified badge when the
                                          manifest and hardware match exactly
 ```
 
-## Lab
+## Experiments
 
 ```text
-Benchmark Lab                         target: managed llama.cpp (running)
+Experiments                           target: managed llama.cpp (running)
 [ ] Time a cold model load            [ Check ]  →  [ Run ] [ Cancel ]
 ┌ Result ───────────────────────────────────────────────────────────────┐
 │ cold load · warm passes · prefill/decode speed · inter-token latency   │
