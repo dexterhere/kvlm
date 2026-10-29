@@ -239,6 +239,7 @@ impl Runtimes {
             Ok(models) => {
                 for model in visible_models(models) {
                     let model_row = row(&model.name, &installed_text(model));
+                    model_row.add_suffix(&routing_chip(model.cloud_routed()));
                     let inspect = gtk::Button::with_label("Inspect");
                     inspect.set_valign(gtk::Align::Center);
                     let state = Rc::clone(&self.inspection);
@@ -622,6 +623,24 @@ fn bytes_text(bytes: Option<u64>) -> String {
     bytes
         .map(|bytes| format!("{bytes} bytes ({:.2} GiB)", bytes as f64 / 1073741824.0))
         .unwrap_or_else(|| "Unknown".into())
+}
+
+/// The routing verdict as a chip. The same words stay in the row subtitle.
+fn routing_chip(cloud_routed: bool) -> gtk::Label {
+    let chip = gtk::Label::builder()
+        .label(if cloud_routed {
+            "Cloud routed"
+        } else {
+            "Routing unverified"
+        })
+        .valign(gtk::Align::Center)
+        .build();
+    chip.add_css_class("kvlm-chip");
+    chip.add_css_class("neutral");
+    chip.set_tooltip_text(Some(
+        "This Ollama service is externally owned; Kvlm only reads its model list.",
+    ));
+    chip
 }
 
 fn installed_text(model: &InstalledModel) -> String {
