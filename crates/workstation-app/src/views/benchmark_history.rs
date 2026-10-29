@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::bridge::{CoreCommand, UiEvent};
+use crate::{
+    bridge::{CoreCommand, UiEvent},
+    views::charts,
+};
 use adw::prelude::*;
 use std::{cell::RefCell, rc::Rc};
 use tokio::sync::mpsc;
@@ -25,6 +28,7 @@ pub struct BenchmarkHistory {
     reload: gtk::Button,
     status: gtk::Label,
     feedback: gtk::Label,
+    trend: charts::TrendChart,
     entries: gtk::ListBox,
     state: Rc<RefCell<State>>,
     commands: mpsc::Sender<CoreCommand>,
@@ -46,6 +50,7 @@ impl BenchmarkHistory {
 
         let status = label("History has not been loaded.");
         let feedback = label("");
+        let trend = charts::TrendChart::new();
         let entries = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
@@ -62,6 +67,7 @@ impl BenchmarkHistory {
         widget.append(&header);
         widget.append(&note);
         widget.append(&status);
+        widget.append(&trend.widget);
         widget.append(&feedback);
         widget.append(&entries);
 
@@ -70,6 +76,7 @@ impl BenchmarkHistory {
             reload,
             status,
             feedback,
+            trend,
             entries,
             state: Rc::new(RefCell::new(State::default())),
             commands,
@@ -116,6 +123,7 @@ impl BenchmarkHistory {
                     Ok(entries) => {
                         self.state.borrow_mut().loaded = true;
                         render_entries(&self.entries, entries);
+                        self.trend.set_entries(entries);
                         let count = self.entries.first_child().is_some();
                         self.status.set_text(if count {
                             "History loaded. Showing at most 100 newest saved runs."

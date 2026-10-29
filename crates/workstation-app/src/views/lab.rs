@@ -21,6 +21,7 @@ use workstation_core::{
     experiments::{Experiment, FindingStatus, Ownership, State as RunState, Variable},
 };
 
+use super::charts;
 use super::lab_text::{
     baseline_label, comparison_text, finding_detail, finding_title, state_label, summary_text,
     variable_label,
@@ -62,6 +63,7 @@ struct Inner {
     history_note: gtk::Label,
     compare: gtk::Button,
     compare_text: gtk::Label,
+    comparison_chart: charts::ComparisonChart,
 }
 
 #[derive(Clone)]
@@ -164,6 +166,7 @@ impl Lab {
             .halign(gtk::Align::Start)
             .build();
         let compare_text = text("");
+        let comparison_chart = charts::ComparisonChart::new();
 
         let options = gtk::Expander::builder()
             .label("Options")
@@ -178,6 +181,7 @@ impl Lab {
             history.clone().upcast(),
             compare.clone().upcast(),
             compare_text.clone().upcast(),
+            comparison_chart.widget.clone().upcast(),
         ] {
             past_box.append(&child);
         }
@@ -238,6 +242,7 @@ impl Lab {
             history_note,
             compare,
             compare_text,
+            comparison_chart,
         });
         Self::connect(&inner);
         Self {
@@ -518,6 +523,9 @@ impl Inner {
                                 .set_text("Run the lab to see measured results here.");
                             self.clear_findings();
                         }
+                        // A deleted run cannot stay in a comparison.
+                        self.comparison_chart.clear();
+                        self.compare_text.set_text("");
                     }
                     Err(message) => self.notice.set_text(&clean(message)),
                 }
@@ -529,8 +537,14 @@ impl Inner {
                 }
                 self.state.borrow_mut().compare = None;
                 match result {
-                    Ok(comparison) => self.compare_text.set_text(&comparison_text(comparison)),
-                    Err(message) => self.compare_text.set_text(&clean(message)),
+                    Ok(comparison) => {
+                        self.compare_text.set_text(&comparison_text(comparison));
+                        self.comparison_chart.set(comparison);
+                    }
+                    Err(message) => {
+                        self.compare_text.set_text(&clean(message));
+                        self.comparison_chart.clear();
+                    }
                 }
             }
         }
