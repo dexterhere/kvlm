@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::bridge::{CoreCommand, UiEvent};
+use crate::{
+    bridge::{CoreCommand, UiEvent},
+    views::charts,
+};
 use adw::prelude::*;
 use std::{cell::RefCell, rc::Rc};
 use workstation_core::hardware::{ComputeBackend, HardwareProfile, MemoryPool};
@@ -210,26 +213,38 @@ impl Overview {
                     cpu.logical_cores
                 ),
             ));
-            let features = cpu
-                .features
-                .map(|flags| {
-                    let enabled: Vec<_> = [
-                        ("AVX2", flags.avx2),
-                        ("AVX-512", flags.avx512),
-                        ("VNNI", flags.vnni),
-                        ("AMX", flags.amx),
-                    ]
-                    .into_iter()
-                    .filter_map(|(name, enabled)| enabled.then_some(name))
-                    .collect();
-                    if enabled.is_empty() {
-                        "None of the listed instruction sets reported".into()
-                    } else {
-                        enabled.join(", ")
-                    }
-                })
-                .unwrap_or_else(|| "Unknown".into());
-            processor.add(&row("CPU instruction sets", &features));
+            if let Some(flags) = cpu.features {
+                processor.add(&row(
+                    "CPU instruction sets",
+                    "Teal chips are reported by this CPU; grey chips are not reported.",
+                ));
+                let chips = gtk::FlowBox::builder()
+                    .selection_mode(gtk::SelectionMode::None)
+                    .max_children_per_line(4)
+                    .min_children_per_line(1)
+                    .column_spacing(6)
+                    .row_spacing(6)
+                    .halign(gtk::Align::Start)
+                    .margin_start(12)
+                    .margin_end(12)
+                    .margin_top(4)
+                    .margin_bottom(10)
+                    .build();
+                for (name, enabled) in [
+                    ("AVX2", flags.avx2),
+                    ("AVX-512", flags.avx512),
+                    ("VNNI", flags.vnni),
+                    ("AMX", flags.amx),
+                ] {
+                    chips.insert(&capability_chip(name, enabled), -1);
+                }
+                processor.add(&chips);
+            } else {
+                processor.add(&row(
+                    "CPU instruction sets",
+                    "Unknown · the probe did not report instruction sets.",
+                ));
+            }
         } else {
             processor.add(&row(
                 "CPU information unavailable",
@@ -238,10 +253,11 @@ impl Overview {
         }
         self.readings.append(&processor);
         let ram = group("System memory");
-        ram.add(&row(
-            "Available / total RAM",
-            &memory_text(profile.system_ram),
-        ));
+        let ram_row = row("Available / total RAM", &memory_text(profile.system_ram));
+        if let Some(pool) = profile.system_ram {
+            ram_row.add_suffix(&memory_meter("Available RAM", pool).widget);
+        }
+        ram.add(&ram_row);
         ram.set_description(Some(
             "Available RAM uses Linux MemAvailable; shared GPU memory overlaps this pool.",
         ));
@@ -254,11 +270,16 @@ impl Overview {
         for gpu in &profile.gpus {
             let graphics = group("Graphics device");
             graphics.add(&row("Model", &gpu.name));
-            graphics.add(&row("Dedicated VRAM", &memory_text(gpu.dedicated_vram)));
-            graphics.add(&row(
-                "Shared GPU memory (GTT)",
-                &memory_text(gpu.shared_gtt),
-            ));
+            for (title, pool) in [
+                ("Dedicated VRAM", gpu.dedicated_vram),
+                ("Shared GPU memory (GTT)", gpu.shared_gtt),
+            ] {
+                let pool_row = row(title, &memory_text(pool));
+                if let Some(pool) = pool {
+                    pool_row.add_suffix(&memory_meter(title, pool).widget);
+                }
+                graphics.add(&pool_row);
+            }
             let capability = gpu
                 .supported_backends
                 .iter()
@@ -327,6 +348,26 @@ fn row(title: &str, subtitle: &str) -> adw::ActionRow {
         .use_markup(false)
         .subtitle_lines(0)
         .build()
+}
+
+fn capability_chip(name: &str, enabled: bool) -> gtk::Label {
+    let chip = gtk::Label::builder().label(name).build();
+    chip.add_css_class("kvlm-chip");
+    if !enabled {
+        chip.add_css_class("neutral");
+    }
+    chip.set_tooltip_text(Some(if enabled {
+        "Reported by this CPU."
+    } else {
+        "Not reported by this CPU."
+    }));
+    chip
+}
+
+fn memory_meter(title: &str, pool: MemoryPool) -> charts::Meter {
+    let meter = charts::Meter::new(title);
+    meter.set(&pool);
+    meter
 }
 
 fn memory_text(memory: Option<MemoryPool>) -> String {
