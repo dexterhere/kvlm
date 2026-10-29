@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="512" height="512" role="img" aria-labelledby="t"><title id="t">Local AI Workstation</title><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a8bf0"/><stop offset="1" stop-color="#173f87"/></linearGradient><radialGradient id="glow" cx=".25" cy=".12" r=".9"><stop offset="0" stop-color="#fff" stop-opacity=".26"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)"/><rect x="8" y="8" width="112" height="112" rx="28" fill="url(#glow)"/>
+<g stroke-linejoin="round">
+<path d="M32 78L64 94V102L32 86Z M96 78L64 94V102L96 86Z" fill="#fff" fill-opacity=".14"/><path d="M64 62L96 78L64 94L32 78Z" fill="#fff" fill-opacity=".24"/>
+<path d="M32 58L64 74V82L32 66Z M96 58L64 74V82L96 66Z" fill="#fff" fill-opacity=".2"/><path d="M64 42L96 58L64 74L32 58Z" fill="#fff" fill-opacity=".48"/>
+<path d="M32 38L64 54V62L32 46Z M96 38L64 54V62L96 46Z" fill="#fff" fill-opacity=".3"/><path d="M64 22L96 38L64 54L32 38Z" fill="#fff"/>
+</g>
+<g stroke="#1b4a9a" stroke-width="2" stroke-linecap="round"><path d="M64 30L52 38M64 30L76 38M52 38L64 46M76 38L64 46M52 38L76 38"/></g>
+<g fill="#1b4a9a"><circle cx="64" cy="30" r="3.2"/><circle cx="52" cy="38" r="3.2"/><circle cx="76" cy="38" r="3.2"/></g><circle cx="64" cy="46" r="3.6" fill="#2aa8e0"/>
+</svg>
