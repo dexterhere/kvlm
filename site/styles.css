@@ -8,7 +8,7 @@
   src: url("assets/fonts/figtree-latin.woff2") format("woff2");
 }
 
-/* Shape rule: cards use 18px, small surfaces 12px, controls are pills. */
+/* Shape rule: one radius token; set --radius and --pill to soften the page. */
 :root {
   color-scheme: light dark;
   --bg: #f4f8f7;
@@ -32,16 +32,20 @@
   --unknown: #566360;
   --shadow-1: 0 1px 2px rgb(8 30 27 / 6%), 0 12px 32px rgb(8 30 27 / 8%);
   --shadow-2: 0 24px 64px rgb(8 30 27 / 14%);
+  --shadow-lift: 0 34px 84px rgb(8 30 27 / 22%);
   --glow-a: rgb(15 118 110 / 12%);
   --glow-b: rgb(227 179 65 / 10%);
+  --glow-c: rgb(227 179 65 / 6%);
+  --grid-line: rgb(15 118 110 / 7%);
+  --sheen: rgb(255 255 255 / 24%);
   --header-bg: rgb(244 248 247 / 82%);
   --terminal: #0b1614;
   --terminal-line: #263b37;
   --terminal-text: #e6f1ee;
-  --radius: 18px;
-  --radius-sm: 12px;
-  --pill: 999px;
-  --wrap: 72rem;
+  --radius: 0;
+  --radius-sm: 0;
+  --pill: 0;
+  --wrap: 84rem;
   --font: "Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     Cantarell, "Noto Sans", "Liberation Sans", sans-serif;
   --mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Roboto Mono",
@@ -72,8 +76,12 @@
     --unknown: #9db0ac;
     --shadow-1: 0 1px 2px rgb(0 0 0 / 30%), 0 14px 34px rgb(0 0 0 / 28%);
     --shadow-2: 0 28px 70px rgb(0 0 0 / 48%);
+    --shadow-lift: 0 34px 84px rgb(0 0 0 / 58%);
     --glow-a: rgb(94 234 212 / 14%);
     --glow-b: rgb(242 201 76 / 8%);
+    --glow-c: rgb(242 201 76 / 5%);
+    --grid-line: rgb(94 234 212 / 8%);
+    --sheen: rgb(4 33 30 / 20%);
     --header-bg: rgb(8 17 15 / 76%);
     --terminal: #0a1211;
     --terminal-line: #223530;
@@ -110,7 +118,22 @@ body::before {
   pointer-events: none;
   background:
     radial-gradient(40rem 30rem at 16% 4%, var(--glow-a), transparent 68%),
-    radial-gradient(34rem 28rem at 88% 16%, var(--glow-b), transparent 70%);
+    radial-gradient(34rem 28rem at 88% 16%, var(--glow-b), transparent 70%),
+    radial-gradient(30rem 22rem at 52% -6%, var(--glow-c), transparent 72%);
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  -webkit-mask-image: radial-gradient(80% 62% at 50% 0%, #000 24%, transparent 78%);
+  mask-image: radial-gradient(80% 62% at 50% 0%, #000 24%, transparent 78%);
 }
 
 ::selection {
@@ -133,7 +156,7 @@ code {
   font-size: 0.9em;
   background: var(--surface-2);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 0;
   padding: 0.1em 0.36em;
 }
 
@@ -152,7 +175,7 @@ h3 {
 }
 
 h1 {
-  font-size: clamp(2.45rem, 4vw, 3rem);
+  font-size: clamp(2.45rem, 4vw, 3.3rem);
   line-height: 1.05;
   letter-spacing: -0.04em;
   margin-bottom: 0.35em;
@@ -184,7 +207,18 @@ a:hover {
 :focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 3px;
-  border-radius: 6px;
+  border-radius: 0;
+}
+
+.scroll-progress {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 40;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  pointer-events: none;
 }
 
 .skip-link {
@@ -225,6 +259,14 @@ a:hover {
     background: var(--header-bg);
     backdrop-filter: blur(16px) saturate(150%);
     -webkit-backdrop-filter: blur(16px) saturate(150%);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .site-header {
+    background: var(--bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
 
@@ -357,12 +399,14 @@ a:hover {
 }
 
 .button {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
   min-height: 48px;
   padding: 0.72rem 1.3rem;
+  overflow: hidden;
   border: 1px solid var(--accent);
   border-radius: var(--pill);
   background: var(--accent);
@@ -372,6 +416,22 @@ a:hover {
   text-decoration: none;
   transition: transform 0.2s var(--ease-out), background-color 0.2s var(--ease-out),
     border-color 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out);
+}
+
+.button:not(.secondary)::before {
+  content: "";
+  position: absolute;
+  inset: -20% -40%;
+  background: linear-gradient(115deg, transparent 38%, var(--sheen) 50%, transparent 62%);
+  transform: translateX(-130%);
+  transition: transform 0.65s var(--ease-out);
+  pointer-events: none;
+}
+
+@media (hover: hover) {
+  .button:not(.secondary):hover::before {
+    transform: translateX(130%);
+  }
 }
 
 .button:hover {
@@ -419,6 +479,16 @@ a:hover {
   border-radius: var(--radius);
   background: var(--surface-2);
   box-shadow: var(--shadow-2);
+  transition: transform 0.4s var(--ease-out), border-color 0.4s var(--ease-out),
+    box-shadow 0.4s var(--ease-out);
+}
+
+@media (hover: hover) {
+  .hero-shot:hover img {
+    transform: translateY(-4px);
+    border-color: var(--accent);
+    box-shadow: var(--shadow-lift);
+  }
 }
 
 .hero-shot figcaption {
@@ -474,7 +544,7 @@ kbd {
   padding: 0.08em 0.4em;
   border: 1px solid var(--line-strong);
   border-bottom-width: 2px;
-  border-radius: 6px;
+  border-radius: 0;
   background: var(--surface-2);
   color: var(--muted);
   font-size: 0.78em;
@@ -502,6 +572,7 @@ kbd {
 }
 
 .notice p {
+  max-width: 72ch;
   margin: 0;
   color: var(--muted);
   font-size: 0.95rem;
@@ -530,6 +601,16 @@ kbd {
   border-radius: var(--radius);
   background: var(--surface-2);
   box-shadow: var(--shadow-1);
+  transition: transform 0.35s var(--ease-out), border-color 0.35s var(--ease-out),
+    box-shadow 0.35s var(--ease-out);
+}
+
+@media (hover: hover) {
+  .shots figure:hover img {
+    transform: translateY(-4px);
+    border-color: var(--accent);
+    box-shadow: var(--shadow-2);
+  }
 }
 
 .shots figcaption {
@@ -546,23 +627,68 @@ kbd {
 /* Feature bento */
 
 .bento {
+  counter-reset: feature;
   list-style: none;
   display: grid;
   grid-template-columns: 1fr;
-  gap: 1rem;
+  gap: 1px;
   margin: 0;
   padding: 0;
+  background: var(--line);
+  border: 1px solid var(--line);
 }
 
 .bento li {
+  position: relative;
+  overflow: hidden;
+  counter-increment: feature;
   padding: 1.45rem;
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  transition: box-shadow 0.3s var(--ease-out);
+}
+
+.bento li::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.4s var(--ease-out);
+}
+
+.bento li::after {
+  content: counter(feature, decimal-leading-zero);
+  position: absolute;
+  top: 1.5rem;
+  right: 1.45rem;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  opacity: 0.7;
+  transition: color 0.3s var(--ease-out), opacity 0.3s var(--ease-out);
 }
 
 .bento h3 {
   margin-bottom: 0.4rem;
+  padding-right: 2.2rem;
+}
+
+@media (hover: hover) {
+  .bento li:hover {
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+
+  .bento li:hover::before {
+    transform: scaleX(1);
+  }
+
+  .bento li:hover::after {
+    color: var(--accent-2);
+    opacity: 1;
+  }
 }
 
 .bento p {
@@ -643,7 +769,7 @@ kbd {
 .swatch {
   width: 0.62rem;
   height: 0.62rem;
-  border-radius: 3px;
+  border-radius: 0;
   background: var(--accent);
   flex: none;
 }
@@ -743,10 +869,12 @@ kbd {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(15.5rem, 1fr);
-  gap: 1rem;
+  gap: 1px;
   margin: 0;
-  padding: 0 0 0.6rem;
+  padding: 0;
   overflow-x: auto;
+  background: var(--line);
+  border: 1px solid var(--line);
   scroll-snap-type: x mandatory;
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
@@ -759,9 +887,15 @@ kbd {
   min-height: 11.5rem;
   padding: 1.25rem;
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
   scroll-snap-align: start;
+  transition: background-color 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
+}
+
+@media (hover: hover) {
+  .pages li:hover {
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
 }
 
 .pages h3 {
@@ -786,14 +920,14 @@ kbd {
 .split {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1.15rem;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
 }
 
 .panel {
   padding: clamp(1.35rem, 3vw, 1.8rem);
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
 }
 
 .panel h3 {
@@ -933,9 +1067,11 @@ kbd {
 .milestones {
   list-style: none;
   display: grid;
-  gap: 0.75rem;
+  gap: 1px;
   margin: 0 0 clamp(1.75rem, 3vw, 2.5rem);
   padding: 0;
+  background: var(--line);
+  border: 1px solid var(--line);
 }
 
 .milestones li {
@@ -945,8 +1081,14 @@ kbd {
   align-items: center;
   padding: 1rem 1.2rem;
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  transition: background-color 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
+}
+
+@media (hover: hover) {
+  .milestones li:hover {
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+  }
 }
 
 .milestone-id {
@@ -1147,6 +1289,12 @@ kbd {
   }
 }
 
+@media (min-width: 75rem) {
+  .hero {
+    grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  }
+}
+
 @media (min-width: 60rem) {
   .pages {
     grid-auto-flow: row;
@@ -1222,6 +1370,21 @@ kbd {
   }
 }
 
+@keyframes grid-drift {
+  to {
+    background-position: 64px 64px;
+  }
+}
+
+@keyframes progress-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
 @keyframes reveal-up {
   from {
     opacity: 0;
@@ -1250,6 +1413,10 @@ kbd {
     animation: drift 30s ease-in-out infinite alternate;
   }
 
+  body::after {
+    animation: grid-drift 60s linear infinite;
+  }
+
   .hero-copy > * {
     animation: enter 0.85s var(--ease-out) both;
   }
@@ -1276,6 +1443,15 @@ kbd {
 
   .badge-dot {
     animation: status-pulse 2.6s ease-in-out infinite;
+  }
+}
+
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .scroll-progress {
+      animation: progress-grow linear both;
+      animation-timeline: scroll();
+    }
   }
 }
 
