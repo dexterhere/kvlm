@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dexterhere/kvlm/releases"><img alt="Release: 0.1.1 beta" src="https://img.shields.io/badge/release-0.1.1%20beta-orange"></a>
+  <a href="https://github.com/dexterhere/kvlm/releases"><img alt="Release: 0.1.3 beta" src="https://img.shields.io/badge/release-0.1.3%20beta-orange"></a>
   <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-informational">
   <img alt="Toolkit: GTK4 and Libadwaita" src="https://img.shields.io/badge/toolkit-GTK4%20%2B%20Libadwaita-blue">
   <img alt="Language: Rust" src="https://img.shields.io/badge/language-Rust-b7410e">
@@ -22,7 +22,8 @@
   <a href="#the-interface">Interface</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#install-and-run">Install</a> ·
-  <a href="#status-of-the-011-beta">Status</a> ·
+  <a href="#status-of-the-013-beta">Status</a> ·
+  <a href="https://dexterhere.github.io/kvlm/">Website</a> ·
   <a href="docs/README.md">Docs</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
@@ -48,9 +49,9 @@ It is a local inference **control plane**, not a chatbot, not an inference engin
 privileged daemon. It needs no root, sends no telemetry, and never guesses: when data is
 missing the answer is `Unknown`, not an optimistic fit.
 
-> **Beta.** Version 0.1.1 is a pre-release for testing. It is built from source; there are no
-> prebuilt binaries or store packages yet. See [status](#status-of-the-011-beta) for what has and
-> has not been validated on real hardware.
+> **Beta.** Version 0.1.3 is a pre-release for testing. It is built from source; release tags also
+> attach a Flatpak bundle and an AppImage that have not yet been installed and run. See
+> [status](#status-of-the-013-beta) for what has and has not been validated on real hardware.
 
 **Who it is for:** Linux developers who run models locally, for coding assistants, tooling or
 experiments, on a laptop or workstation with one GPU, an APU with shared memory, or only a CPU,
@@ -64,9 +65,9 @@ Kvlm is a native GTK4/Libadwaita window with five pages, switchable with `Ctrl+1
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ Local AI Workstation   [Overview][Models][Runtimes][Benchmarks][Lab]  ☰  │
+│ Local AI Workstation  [My computer][Models][Runtimes][Speed][Experiments]│
 ├──────────────────────────────────────────────────────────────────────────┤
-│  Overview & Monitor                                    [ Refresh ]       │
+│  My computer                                           [ Refresh ]       │
 │  ┌ Hardware ─────────────────────┐ ┌ Memory scenarios ─────────────────┐ │
 │  │ CPU  8 cores · AVX2           │ │ GGUF file     [ Choose file… ]    │ │
 │  │ RAM  15.3 GiB  (5.4 free)     │ │ Context tokens   [ 8192 ]         │ │
@@ -82,11 +83,11 @@ Kvlm is a native GTK4/Libadwaita window with five pages, switchable with `Ctrl+1
 
 | Page | What you do there |
 | --- | --- |
-| **Overview** | See CPU, RAM, VRAM and shared GPU memory; pick a local GGUF file and get a conditional memory-fit estimate with a per-component breakdown |
+| **My computer** | See CPU, RAM, VRAM and shared GPU memory; pick a local GGUF file and get a conditional memory-fit estimate with a per-component breakdown |
 | **Models** | Search Hugging Face GGUF repositories, inspect a file's header and fit, see files you already have, download with pause and resume, store a gated-model token in the desktop keyring |
 | **Runtimes** | Attach to Ollama (read-only), install and run a managed llama.cpp server, check LM Studio and vLLM on loopback |
-| **Benchmarks** | Run one explicit Quick Benchmark against an installed Ollama model; review history and `Benchmark Verified` badges |
-| **Lab** | Run a cold/warm experiment on the managed llama.cpp server, read diagnostics, compare two runs, try a one-setting follow-up |
+| **Speed test** | Run one explicit Quick Benchmark against an installed Ollama model; review history and `Benchmark Verified` badges |
+| **Experiments** | Run a cold/warm experiment on the managed llama.cpp server, read diagnostics, compare two runs, try a one-setting follow-up |
 
 Annotated wireframes of all five pages, the narrow layout, and the states each page can be in
 are in [docs/02-architecture/ui-wireframes.md](docs/02-architecture/ui-wireframes.md). They are
@@ -189,7 +190,7 @@ flowchart LR
     Attached -. never .-> X["Stop, restart, edit units, delete models"]
 ```
 
-Benchmarks and the Lab run only against a process Kvlm owns or, for Quick Benchmark, a
+The Speed test and Experiments pages run only against a process Kvlm owns or, for Quick Benchmark, a
 local-only Ollama request after an explicit check, because local execution of someone else's
 process cannot be proven.
 
@@ -207,7 +208,7 @@ gitGraph
     checkout staging
     merge develop
     checkout main
-    merge staging tag: "v0.1.1"
+    merge staging tag: "v0.1.3"
 ```
 
 Feature branch → `develop` → `staging` → `main`, by pull request, merge commits only. All three
@@ -273,11 +274,11 @@ cargo run --locked -p workstation-core --example memory_fit
 Reporting a hardware problem? Run `local-ai-workstation --report-hardware` and attach the output;
 device identifiers, paths and times are removed.
 
-## Status of the 0.1.1 beta
+## Status of the 0.1.3 beta
 
-Version 0.1.1 is the first tagged pre-release. "Implemented" means the code exists with tests
-that need no GPU, model or network and passed CI. "Validated" means a person ran it on the
-stated hardware and recorded it.
+Version 0.1.3 is the current tagged pre-release; 0.1.1 was the first. "Implemented" means the
+code exists with tests that need no GPU, model or network and passed CI. "Validated" means a
+person ran it on the stated hardware and recorded it.
 
 | Milestone | Scope | State |
 | --- | --- | --- |
