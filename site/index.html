@@ -1,0 +1,357 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kvlm - Local AI Workstation for GNOME</title>
+  <meta name="description" content="Kvlm estimates whether a local model fits your memory and benchmarks the inference runtimes you already run, on your own Linux hardware. GTK4, no root, no telemetry.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f4f8f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1d1d1d" media="(prefers-color-scheme: dark)">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'">
+  <link rel="canonical" href="https://dexterhere.github.io/kvlm/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Kvlm">
+  <meta property="og:title" content="Kvlm - Local AI Workstation for GNOME">
+  <meta property="og:description" content="Know what your machine can run, then measure it. Memory-fit estimates and benchmarks for local models on your own Linux hardware.">
+  <meta property="og:url" content="https://dexterhere.github.io/kvlm/">
+  <meta property="og:image" content="https://dexterhere.github.io/kvlm/assets/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Kvlm logo with the words: know what your machine can run, then measure it.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Kvlm - Local AI Workstation for GNOME">
+  <meta name="twitter:description" content="Know what your machine can run, then measure it. Memory-fit estimates and benchmarks for local models.">
+  <meta name="twitter:image" content="https://dexterhere.github.io/kvlm/assets/og.png">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="assets/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="scroll-progress" aria-hidden="true"></div>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#top">
+        <img src="assets/logo.svg" alt="" width="40" height="40">
+        <span>Kvlm</span>
+      </a>
+      <div class="header-tools">
+        <nav aria-label="Main">
+          <a href="#screens">Screenshots</a>
+          <a href="#features">What it does</a>
+          <a href="#fit">Memory fit</a>
+          <a href="#install">Install</a>
+          <a href="#status">Status</a>
+          <a class="nav-source" href="https://github.com/dexterhere/kvlm" aria-label="Kvlm repository on GitHub">GitHub</a>
+        </nav>
+        <fieldset class="theme-switch">
+          <legend>Colour theme</legend>
+          <label><input type="radio" name="theme" id="theme-auto" checked><span>Auto</span></label>
+          <label><input type="radio" name="theme" id="theme-light"><span>Light</span></label>
+          <label><input type="radio" name="theme" id="theme-dark"><span>Dark</span></label>
+        </fieldset>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="wrap hero" id="top">
+      <div class="hero-copy">
+        <h1><span>Know what your machine</span> <span>can run. Measure it.</span></h1>
+        <p class="lede">Kvlm estimates memory fit for local models, then benchmarks the runtimes
+          you already run. Native GTK4, no root, no telemetry.</p>
+        <p class="badge"><span class="badge-dot" aria-hidden="true"></span>0.1.3 beta</p>
+        <div class="actions">
+          <a class="button" href="#install">Build from source <span class="arrow" aria-hidden="true">&rarr;</span></a>
+          <a class="button secondary" href="https://github.com/dexterhere/kvlm/releases">Latest release</a>
+        </div>
+      </div>
+      <figure class="hero-shot">
+        <img src="screenshots/my-computer.webp" alt="The My computer page, showing the hardware summary, processor model, core count and instruction sets." width="850" height="545" fetchpriority="high" decoding="async">
+        <figcaption>My computer on a 13th-gen Intel i5 laptop. Partial readings stay visible, not hidden.</figcaption>
+      </figure>
+    </section>
+
+    <section class="wrap section-notice" aria-labelledby="notice-title">
+      <aside class="notice reveal">
+        <div>
+          <h2 id="notice-title">Beta, and honest about it</h2>
+          <p><strong>Implemented</strong> means the code exists and its tests pass without a GPU,
+            model, or network. <strong>Validated</strong> means a person ran it on the stated
+            hardware and recorded the result. Most of Kvlm is implemented. Some areas are not yet
+            validated. This is an independent community project, not an official GNOME application.</p>
+        </div>
+        <a class="text-link" href="https://github.com/dexterhere/kvlm/blob/main/docs/03-development/beta-status.md">Read the beta status</a>
+      </aside>
+    </section>
+
+    <section class="wrap" id="screens" aria-labelledby="screens-title">
+      <div class="section-head reveal">
+        <h2 id="screens-title">The interface</h2>
+        <p class="section-lede">Five pages on one window. These captures come from a 13th-gen
+          Intel i5 laptop with 16 GB of RAM, on Wayland/Hyprland, not a GNOME session.</p>
+      </div>
+      <div class="shots">
+        <figure class="reveal">
+          <img src="screenshots/models.webp" alt="Models page with a Hugging Face search field, an access section and an empty saved-results state." width="1200" height="800" loading="lazy" decoding="async">
+          <figcaption><strong>Models.</strong> Search runs only when you press Search. Downloads
+            resume and verify.</figcaption>
+        </figure>
+        <figure class="reveal">
+          <img src="screenshots/runtimes.webp" alt="Runtimes page with tabs for Ollama, llama.cpp, and LM Studio and vLLM, shown in an unchecked state." width="1200" height="800" loading="lazy" decoding="async">
+          <figcaption><strong>Runtimes.</strong> One runtime at a time, with what Kvlm owns and
+            what it only reads.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="wrap" id="features" aria-labelledby="features-title">
+      <div class="section-head reveal">
+        <h2 id="features-title">Built around one question</h2>
+        <p class="section-lede">Can this machine run this model, and how fast? Every feature feeds
+          that answer without guessing.</p>
+      </div>
+      <ul class="bento">
+        <li class="span-5 feature-tint reveal">
+          <h3>Hardware discovery</h3>
+          <p>CPU and RAM, NVIDIA VRAM through NVML, AMD VRAM and GTT through sysfs. Missing
+            readings stay unknown, never zero.</p>
+        </li>
+        <li class="span-4 reveal">
+          <h3>Conditional memory fit</h3>
+          <p>Weights, K/V cache, compute buffers and runtime allowance for an explicit context,
+            with a per-component breakdown.</p>
+          <div class="meter meter-small" role="img" aria-label="Memory estimate split into weights, K/V cache, buffers and runtime allowance">
+            <i class="seg seg-weights"></i>
+            <i class="seg seg-kv"></i>
+            <i class="seg seg-buffers"></i>
+            <i class="seg seg-runtime"></i>
+          </div>
+        </li>
+        <li class="span-3 reveal">
+          <h3>Model catalog</h3>
+          <p>Hugging Face GGUF search with pinned revisions, deduplication, resumable downloads
+            and a keyring token.</p>
+        </li>
+        <li class="span-4 reveal">
+          <h3>Attached runtimes</h3>
+          <p>Discover Ollama, LM Studio and vLLM on loopback. Kvlm never stops them, edits their
+            units, or deletes their models.</p>
+        </li>
+        <li class="span-4 reveal">
+          <h3>Managed llama.cpp</h3>
+          <p>A checksum-verified portable install, launch profiles, and supervised start, stop and
+            restart on <code>127.0.0.1</code>.</p>
+        </li>
+        <li class="span-4 feature-tint reveal">
+          <h3>Speed test</h3>
+          <p>One explicit, cancellable streaming request to a local Ollama model, with decode rate
+            and sampled RAM, VRAM and GTT peaks.</p>
+        </li>
+        <li class="span-5 reveal">
+          <h3>Experiments</h3>
+          <p>Cold and warm runs on the managed llama.cpp server, diagnostics with evidence, A/B
+            comparison, and a one-setting follow-up.</p>
+        </li>
+        <li class="span-7 reveal">
+          <h3>Developer exports</h3>
+          <p>Continue.dev, Zed and OpenCode snippets plus a <code>systemd --user</code> unit,
+            generated as text you copy. No account and no cloud step.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section class="wrap" id="fit" aria-labelledby="fit-title">
+      <div class="section-head reveal">
+        <h2 id="fit-title">From a file to a verdict</h2>
+        <p class="section-lede">Fit estimates are conditional, not promises. A saved benchmark
+          proves one prior request, not every future context or placement.</p>
+      </div>
+      <div class="fit-grid">
+        <div class="fit-copy reveal">
+          <h3>The arithmetic</h3>
+          <p>For a supported GGUF layout, Kvlm adds the resident weights, the K/V cache at your
+            context length, compute buffers, and a runtime allowance. The calculator never probes
+            or downloads anything by itself.</p>
+          <div class="meter meter-large" role="img" aria-label="Memory estimate split into weights, K/V cache, buffers and runtime allowance">
+            <i class="seg seg-weights"></i>
+            <i class="seg seg-kv"></i>
+            <i class="seg seg-buffers"></i>
+            <i class="seg seg-runtime"></i>
+          </div>
+          <ul class="meter-key">
+            <li><i class="swatch swatch-weights" aria-hidden="true"></i>Weights</li>
+            <li><i class="swatch swatch-kv" aria-hidden="true"></i>K/V cache</li>
+            <li><i class="swatch swatch-buffers" aria-hidden="true"></i>Buffers</li>
+            <li><i class="swatch swatch-runtime" aria-hidden="true"></i>Runtime</li>
+          </ul>
+          <p class="small">When metadata is missing, the answer is <code>Unknown</code>, not an
+            optimistic fit. Layout warnings block the breakdown path.</p>
+        </div>
+        <div class="verdict-panel reveal">
+          <h3>Verdicts</h3>
+          <ul class="verdicts">
+            <li><span class="dot dot-ok" aria-hidden="true"></span><span><strong>Comfortable.</strong> Fits the stated context with room to spare.</span></li>
+            <li><span class="dot dot-warn" aria-hidden="true"></span><span><strong>Constrained.</strong> Fits, but leaves little headroom.</span></li>
+            <li><span class="dot dot-bad" aria-hidden="true"></span><span><strong>Not recommended.</strong> Exceeds the supplied pools.</span></li>
+            <li><span class="dot dot-unknown" aria-hidden="true"></span><span><strong>Unknown.</strong> Not enough data to answer.</span></li>
+          </ul>
+          <p class="small">Verdicts always carry a text label, never colour alone.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap" id="pages" aria-labelledby="pages-title">
+      <div class="section-head reveal">
+        <h2 id="pages-title">Five pages, one job</h2>
+        <p class="section-lede">Switch with <kbd>Ctrl</kbd>+<kbd>1</kbd> to <kbd>Ctrl</kbd>+<kbd>5</kbd>.
+          Every page answers part of the same question, and nothing runs until you ask.</p>
+      </div>
+      <ol class="pages reveal" tabindex="0" aria-label="The five pages">
+        <li><kbd>Ctrl 1</kbd><h3>My computer</h3><p>Processor, memory, graphics memory, and the fit calculator.</p></li>
+        <li><kbd>Ctrl 2</kbd><h3>Models</h3><p>Search, inspect, download, and keep track of model files.</p></li>
+        <li><kbd>Ctrl 3</kbd><h3>Runtimes</h3><p>Ollama, llama.cpp, LM Studio and vLLM, with ownership stated.</p></li>
+        <li><kbd>Ctrl 4</kbd><h3>Speed test</h3><p>One explicit Quick Benchmark and its local history.</p></li>
+        <li><kbd>Ctrl 5</kbd><h3>Experiments</h3><p>Cold and warm runs, diagnostics, comparison and follow-up.</p></li>
+      </ol>
+    </section>
+
+    <section class="wrap" id="ownership" aria-labelledby="ownership-title">
+      <div class="section-head reveal">
+        <h2 id="ownership-title">It does not touch what it does not own</h2>
+      </div>
+      <div class="split">
+        <div class="panel reveal">
+          <h3>Attached: yours, read-only</h3>
+          <p>Ollama, LM Studio and vLLM are discovered on loopback. Kvlm lists their models and
+            reads memory and loaded state. It never stops or restarts them, edits their system
+            units, or deletes their files.</p>
+        </div>
+        <div class="panel reveal">
+          <h3>Managed: installed and owned</h3>
+          <p>Kvlm can install a portable llama.cpp build it verifies, start and stop it on
+            <code>127.0.0.1</code>, read bounded logs, and benchmark it on the Experiments page.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap" id="install" aria-labelledby="install-title">
+      <div class="section-head reveal">
+        <h2 id="install-title">Install</h2>
+        <p class="section-lede">Kvlm is a beta built from source. You need Linux, Rust stable 1.92+,
+          GTK 4.12+, Libadwaita 1.4+, Meson, Ninja, a C toolchain and pkg-config.</p>
+      </div>
+      <div class="install-grid">
+        <div class="reveal">
+          <div class="terminal">
+            <div class="terminal-head"><span>Terminal</span><span>~/.local</span></div>
+            <pre><code>git clone https://github.com/dexterhere/kvlm.git
+cd kvlm
+scripts/install.sh</code></pre>
+          </div>
+          <p>The installer checks dependencies, prints the package command for your distribution
+            if something is missing, and installs under <code>~/.local</code>. It never runs
+            <code>sudo</code>. Use <code>--check</code> to report only, or <code>--uninstall</code>
+            to remove it.</p>
+          <p><a class="text-link" href="https://github.com/dexterhere/kvlm/blob/main/docs/03-development/getting-started.md">Manual Cargo and Meson steps</a></p>
+        </div>
+        <div class="release-panel reveal">
+          <h3>Release files</h3>
+          <p>Version tags attach <code>kvlm-&lt;version&gt;.flatpak</code>,
+            <code>kvlm-&lt;version&gt;-x86_64.AppImage</code> and <code>SHA256SUMS</code> to the
+            GitHub release.</p>
+          <p class="small">Both are built in CI. Neither has been installed and run on a real
+            machine yet. If they do not work, build from source. There is no store package.</p>
+          <a class="text-link" href="https://github.com/dexterhere/kvlm/releases">Open the latest release</a>
+        </div>
+      </div>
+      <div class="hardware-report reveal">
+        <h3>Reporting a hardware problem</h3>
+        <p>Run <code>local-ai-workstation --report-hardware</code> and attach the output. Device
+          identifiers, paths and times are removed.</p>
+      </div>
+    </section>
+
+    <section class="wrap" id="privacy" aria-labelledby="privacy-title">
+      <div class="section-head reveal">
+        <h2 id="privacy-title">Privacy is the default</h2>
+        <p class="section-lede">Kvlm is a local control plane. It does not need an account, a
+          backend, or a background connection.</p>
+      </div>
+      <ul class="checklist reveal">
+        <li>No telemetry and no crash uploads.</li>
+        <li>Startup makes no network request at all.</li>
+        <li>The network is touched only after you press a button.</li>
+        <li>A Hugging Face token lives only in the desktop keyring.</li>
+        <li>Benchmark history stays in a local SQLite database.</li>
+        <li>Attached runtimes are read-only and no root is required.</li>
+      </ul>
+    </section>
+
+    <section class="wrap" id="status" aria-labelledby="status-title">
+      <div class="section-head reveal">
+        <h2 id="status-title">Status of the 0.1.3 beta</h2>
+        <p class="section-lede">Implemented means the code exists and its tests pass. Validated
+          means someone ran it on the stated hardware and recorded the result.</p>
+      </div>
+      <ul class="milestones">
+        <li class="reveal">
+          <span class="milestone-id">M0</span>
+          <div><h3>Hardware, memory fit, Ollama, Quick Benchmark</h3><p>Complete for the accepted baseline: an RTX 4050 laptop.</p></div>
+          <span class="state state-done">Complete</span>
+        </li>
+        <li class="reveal">
+          <span class="milestone-id">M1</span>
+          <div><h3>Models, catalog, downloads, token</h3><p>Implemented, with a live run recorded.</p></div>
+          <span class="state state-impl">Implemented</span>
+        </li>
+        <li class="reveal">
+          <span class="milestone-id">M2</span>
+          <div><h3>Managed llama.cpp, exports</h3><p>Implemented, with a CPU build served in a live run.</p></div>
+          <span class="state state-impl">Implemented</span>
+        </li>
+        <li class="reveal">
+          <span class="milestone-id">M3</span>
+          <div><h3>Experiments</h3><p>Implemented, with a toy model on CPU in a live run.</p></div>
+          <span class="state state-impl">Implemented</span>
+        </li>
+        <li class="reveal">
+          <span class="milestone-id">M4</span>
+          <div><h3>LM Studio and vLLM, accessibility, packaging</h3><p>Implemented, with validation pending.</p></div>
+          <span class="state state-pending">Pending validation</span>
+        </li>
+      </ul>
+      <div class="status-foot reveal">
+        <h3>Not yet validated</h3>
+        <p>AMD GPUs and APUs, a CPU-only AVX2 machine, GPU builds of llama.cpp, a real chat model
+          in Experiments, LM Studio and vLLM against live servers, a real GNOME session, and a
+          screen-reader pass.</p>
+        <p><a class="text-link" href="https://github.com/dexterhere/kvlm/blob/main/docs/03-development/beta-status.md">Beta status</a>
+          <a class="text-link" href="https://github.com/dexterhere/kvlm/blob/main/docs/03-development/hardware-validation-procedures.md">Hardware validation procedures</a></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div class="footer-brand">
+        <img src="assets/logo.svg" alt="" width="32" height="32">
+        <p><strong>Kvlm</strong> is a Local AI Workstation. GPL-3.0-or-later. Independent
+          community project, not an official GNOME application or a GNOME Circle member.</p>
+      </div>
+      <nav aria-label="Project links">
+        <a href="https://github.com/dexterhere/kvlm">GitHub</a>
+        <a href="https://github.com/dexterhere/kvlm/blob/main/docs/README.md">Docs</a>
+        <a href="https://github.com/dexterhere/kvlm/issues">Issues</a>
+        <a href="https://github.com/dexterhere/kvlm/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/dexterhere/kvlm/blob/main/CONTRIBUTING.md">Contributing</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

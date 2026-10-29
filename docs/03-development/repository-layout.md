@@ -28,8 +28,16 @@
 │   ├── 04-roadmap/         # Status and milestone order
 │   └── 05-decisions/       # Accepted decisions and unresolved questions
 ├── scripts/                 # Small repository checks
-└── tests/fixtures/           # Shared test-data conventions
+├── site/                    # Static project site, no build step
+└── tests/                   # Python repository checks and fixtures
 ```
+
+`site/` holds the one-page project site deployed to GitHub Pages by
+`.github/workflows/pages.yml`. Everything is self-contained: no JavaScript, external fonts,
+or CDN. Assets use relative URLs because the site lives under `/kvlm/`. `tests/test_site.py`
+validates the page metadata, local links, asset copies, screenshot size, and the version
+badge against `Cargo.toml`. Update `docs/assets/logo.svg` first, then copy it to
+`site/assets/logo.svg`; the test compares the files byte for byte.
 
 Each source directory is registered as a Rust module. Planned leaf modules contain
 documentation only, not stub functions that panic or return made-up results.
