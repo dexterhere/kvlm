@@ -133,6 +133,18 @@ class SiteStructureTests(unittest.TestCase):
                 self.assertTrue(path.is_file(), value)
                 self.assertGreater(path.stat().st_size, 0, value)
 
+    def test_theme_switch_forces_both_schemes(self):
+        html = PAGE.read_text(encoding="utf-8")
+        css = (SITE / "styles.css").read_text(encoding="utf-8")
+        for control in ("theme-auto", "theme-light", "theme-dark"):
+            self.assertIn(f'id="{control}"', html)
+        self.assertIn('id="theme-auto" checked', html)
+        self.assertIn(":root:has(#theme-light:checked)", css)
+        self.assertIn("color-scheme: only light", css)
+        self.assertIn(":root:has(#theme-dark:checked)", css)
+        self.assertIn("color-scheme: only dark", css)
+        self.assertIn("--bg: light-dark(#f4f8f7, #1d1d1d)", css)
+
     def test_version_matches_cargo(self):
         with (ROOT / "Cargo.toml").open("rb") as manifest:
             version = tomllib.load(manifest)["workspace"]["package"]["version"]

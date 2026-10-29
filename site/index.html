@@ -8,7 +8,7 @@
   <meta name="description" content="Kvlm estimates whether a local model fits your memory and benchmarks the inference runtimes you already run, on your own Linux hardware. GTK4, no root, no telemetry.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#f4f8f7" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#08110f" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#1d1d1d" media="(prefers-color-scheme: dark)">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'">
   <link rel="canonical" href="https://dexterhere.github.io/kvlm/">
@@ -40,14 +40,22 @@
         <img src="assets/logo.svg" alt="" width="40" height="40">
         <span>Kvlm</span>
       </a>
-      <nav aria-label="Main">
-        <a href="#screens">Screenshots</a>
-        <a href="#features">What it does</a>
-        <a href="#fit">Memory fit</a>
-        <a href="#install">Install</a>
-        <a href="#status">Status</a>
-        <a class="nav-source" href="https://github.com/dexterhere/kvlm">Source</a>
-      </nav>
+      <div class="header-tools">
+        <nav aria-label="Main">
+          <a href="#screens">Screenshots</a>
+          <a href="#features">What it does</a>
+          <a href="#fit">Memory fit</a>
+          <a href="#install">Install</a>
+          <a href="#status">Status</a>
+          <a class="nav-source" href="https://github.com/dexterhere/kvlm" aria-label="Kvlm repository on GitHub">GitHub</a>
+        </nav>
+        <fieldset class="theme-switch">
+          <legend>Colour theme</legend>
+          <label><input type="radio" name="theme" id="theme-auto" checked><span>Auto</span></label>
+          <label><input type="radio" name="theme" id="theme-light"><span>Light</span></label>
+          <label><input type="radio" name="theme" id="theme-dark"><span>Dark</span></label>
+        </fieldset>
+      </div>
     </div>
   </header>
 
@@ -337,7 +345,7 @@ scripts/install.sh</code></pre>
           community project, not an official GNOME application or a GNOME Circle member.</p>
       </div>
       <nav aria-label="Project links">
-        <a href="https://github.com/dexterhere/kvlm">Source</a>
+        <a href="https://github.com/dexterhere/kvlm">GitHub</a>
         <a href="https://github.com/dexterhere/kvlm/blob/main/docs/README.md">Docs</a>
         <a href="https://github.com/dexterhere/kvlm/issues">Issues</a>
         <a href="https://github.com/dexterhere/kvlm/blob/main/CHANGELOG.md">Changelog</a>

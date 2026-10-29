@@ -8,40 +8,42 @@
   src: url("assets/fonts/figtree-latin.woff2") format("woff2");
 }
 
-/* Shape rule: one radius token; set --radius and --pill to soften the page. */
+/* Theme rule: every token resolves through light-dark(). Auto follows the
+   system, while the header switch forces one scheme. Dark sits on #1d1d1d. */
 :root {
   color-scheme: light dark;
-  --bg: #f4f8f7;
-  --surface: #ffffff;
-  --surface-2: #ecf3f2;
-  --surface-3: #e1ecea;
-  --text: #0f1614;
-  --muted: #4d5c59;
-  --line: #d7e3e0;
-  --line-strong: #bfd0cc;
-  --accent: #0f766e;
-  --accent-strong: #0b5a54;
-  --accent-soft: #e2f3f0;
-  --accent-ink: #ffffff;
-  --accent-2: #a36900;
-  --accent-2-soft: #fdf3d8;
-  --accent-2-bright: #e8b93e;
-  --ok: #17734a;
-  --warn: #8a5a00;
-  --bad: #a02a26;
-  --unknown: #566360;
-  --shadow-1: 0 1px 2px rgb(8 30 27 / 6%), 0 12px 32px rgb(8 30 27 / 8%);
-  --shadow-2: 0 24px 64px rgb(8 30 27 / 14%);
-  --shadow-lift: 0 34px 84px rgb(8 30 27 / 22%);
-  --glow-a: rgb(15 118 110 / 12%);
-  --glow-b: rgb(227 179 65 / 10%);
-  --glow-c: rgb(227 179 65 / 6%);
-  --grid-line: rgb(15 118 110 / 7%);
-  --sheen: rgb(255 255 255 / 24%);
-  --header-bg: rgb(244 248 247 / 82%);
-  --terminal: #0b1614;
-  --terminal-line: #263b37;
-  --terminal-text: #e6f1ee;
+  --bg: light-dark(#f4f8f7, #1d1d1d);
+  --surface: light-dark(#ffffff, #242424);
+  --surface-2: light-dark(#ecf3f2, #2b2b2b);
+  --surface-3: light-dark(#e1ecea, #333333);
+  --text: light-dark(#0f1614, #f0f2f1);
+  --muted: light-dark(#4d5c59, #b1b6b4);
+  --line: light-dark(#d7e3e0, #383838);
+  --line-strong: light-dark(#bfd0cc, #4a4a4a);
+  --accent: light-dark(#0f766e, #5eead4);
+  --accent-strong: light-dark(#0b5a54, #99f6e4);
+  --accent-soft: light-dark(#e2f3f0, #16332f);
+  --accent-ink: light-dark(#ffffff, #04211e);
+  --accent-2: light-dark(#a36900, #f5d061);
+  --accent-2-soft: light-dark(#fdf3d8, #332b12);
+  --accent-2-bright: light-dark(#e8b93e, #f5d061);
+  --ok: light-dark(#17734a, #6fd3a2);
+  --warn: light-dark(#8a5a00, #f5d061);
+  --bad: light-dark(#a02a26, #f08b86);
+  --unknown: light-dark(#566360, #b1b6b4);
+  --shadow-1: 0 1px 2px light-dark(rgb(8 30 27 / 6%), rgb(0 0 0 / 40%)),
+    0 12px 32px light-dark(rgb(8 30 27 / 8%), rgb(0 0 0 / 38%));
+  --shadow-2: 0 24px 64px light-dark(rgb(8 30 27 / 14%), rgb(0 0 0 / 52%));
+  --shadow-lift: 0 34px 84px light-dark(rgb(8 30 27 / 22%), rgb(0 0 0 / 62%));
+  --glow-a: light-dark(rgb(15 118 110 / 12%), rgb(94 234 212 / 10%));
+  --glow-b: light-dark(rgb(227 179 65 / 10%), rgb(245 208 97 / 7%));
+  --glow-c: light-dark(rgb(227 179 65 / 6%), rgb(245 208 97 / 4%));
+  --grid-line: light-dark(rgb(15 118 110 / 7%), rgb(94 234 212 / 7%));
+  --sheen: light-dark(rgb(255 255 255 / 24%), rgb(255 255 255 / 9%));
+  --header-bg: light-dark(rgb(244 248 247 / 82%), rgb(29 29 29 / 80%));
+  --terminal: light-dark(#0b1614, #141414);
+  --terminal-line: light-dark(#263b37, #303030);
+  --terminal-text: light-dark(#e6f1ee, #eef2f1);
   --radius: 0;
   --radius-sm: 0;
   --pill: 0;
@@ -53,39 +55,12 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #08110f;
-    --surface: #0f1a18;
-    --surface-2: #14211f;
-    --surface-3: #1a2926;
-    --text: #e7f2ef;
-    --muted: #9db0ac;
-    --line: #20322e;
-    --line-strong: #2e453f;
-    --accent: #5eead4;
-    --accent-strong: #a7f3e4;
-    --accent-soft: #0f2f2a;
-    --accent-ink: #04211e;
-    --accent-2: #f2c94c;
-    --accent-2-soft: #2e2610;
-    --accent-2-bright: #f2c94c;
-    --ok: #6fd3a2;
-    --warn: #f2c94c;
-    --bad: #f08b86;
-    --unknown: #9db0ac;
-    --shadow-1: 0 1px 2px rgb(0 0 0 / 30%), 0 14px 34px rgb(0 0 0 / 28%);
-    --shadow-2: 0 28px 70px rgb(0 0 0 / 48%);
-    --shadow-lift: 0 34px 84px rgb(0 0 0 / 58%);
-    --glow-a: rgb(94 234 212 / 14%);
-    --glow-b: rgb(242 201 76 / 8%);
-    --glow-c: rgb(242 201 76 / 5%);
-    --grid-line: rgb(94 234 212 / 8%);
-    --sheen: rgb(4 33 30 / 20%);
-    --header-bg: rgb(8 17 15 / 76%);
-    --terminal: #0a1211;
-    --terminal-line: #223530;
-  }
+:root:has(#theme-light:checked) {
+  color-scheme: only light;
+}
+
+:root:has(#theme-dark:checked) {
+  color-scheme: only dark;
 }
 
 * {
@@ -342,6 +317,75 @@ a:hover {
 
 .site-header nav a.nav-source {
   color: var(--text);
+}
+
+.header-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.15rem;
+}
+
+.theme-switch {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.theme-switch legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.theme-switch label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding-inline: 0.72rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.theme-switch label + label {
+  border-left: 1px solid var(--line);
+}
+
+.theme-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.theme-switch label:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.theme-switch label:has(input:checked) {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.theme-switch label:has(input:checked):hover {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.theme-switch label:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: -3px;
 }
 
 /* Hero */
@@ -1307,6 +1351,24 @@ kbd {
 @media (max-width: 39.99rem) {
   .site-header {
     position: static;
+  }
+
+  .header-tools {
+    display: contents;
+  }
+
+  .brand {
+    order: 1;
+  }
+
+  .theme-switch {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .site-header nav {
+    order: 3;
+    flex-basis: 100%;
   }
 
   .milestones li {
