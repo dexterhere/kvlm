@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-labelledby="t">
-  <title id="t">Kvlm — know what your machine can run, then measure it.</title>
+  <title id="t">Kvlm - know what your machine can run, then measure it.</title>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#12356f"/>
-      <stop offset="1" stop-color="#0b1220"/>
+      <stop offset="0" stop-color="#0d4a44"/>
+      <stop offset="1" stop-color="#07110f"/>
     </linearGradient>
     <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3a8bf0"/>
-      <stop offset="1" stop-color="#173f87"/>
+      <stop offset="0" stop-color="#14b8a6"/>
+      <stop offset="1" stop-color="#0f766e"/>
     </linearGradient>
     <radialGradient id="glow" cx="0.18" cy="0.1" r="0.9">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
@@ -28,8 +28,9 @@
     </g>
   </g>
   <text x="360" y="268" font-family="Liberation Sans, DejaVu Sans, sans-serif" font-size="104" font-weight="700" fill="#ffffff">Kvlm</text>
-  <text x="360" y="330" font-family="Liberation Sans, DejaVu Sans, sans-serif" font-size="34" fill="#c3d9ff">Local AI Workstation for GNOME</text>
+  <text x="360" y="330" font-family="Liberation Sans, DejaVu Sans, sans-serif" font-size="34" fill="#b7e6dd">Local AI Workstation for GNOME</text>
   <text x="360" y="402" font-family="Liberation Sans, DejaVu Sans, sans-serif" font-size="40" font-weight="700" fill="#ffffff">Know what your machine can run,</text>
   <text x="360" y="454" font-family="Liberation Sans, DejaVu Sans, sans-serif" font-size="40" font-weight="700" fill="#ffffff">then measure it.</text>
-  <text x="360" y="520" font-family="Liberation Sans, DejaVu Sans, sans-serif" font-size="26" fill="#a6b0c2">Memory fit and benchmarks for local models · 0.1.3 beta</text>
+  <circle cx="372" cy="511" r="9" fill="#f2c94c"/>
+  <text x="396" y="520" font-family="Liberation Sans, DejaVu Sans, sans-serif" font-size="26" fill="#a9bcb8">Memory fit and benchmarks for local models · 0.1.3 beta</text>
 </svg>

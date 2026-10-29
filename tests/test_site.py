@@ -2,6 +2,7 @@
 
 from html.parser import HTMLParser
 from pathlib import Path
+import re
 import tomllib
 import unittest
 import xml.etree.ElementTree as ElementTree
@@ -123,7 +124,14 @@ class SiteStructureTests(unittest.TestCase):
         self.assertNotIn("http://", css)
         self.assertNotIn("https://", css)
         self.assertNotIn("@import", css)
-        self.assertNotIn("url(", css)
+        for raw in re.findall(r"url\(([^)]+)\)", css):
+            value = raw.strip().strip("\"'")
+            with self.subTest(url=value):
+                self.assertFalse(value.startswith("//"), value)
+                path = (SITE / value).resolve()
+                self.assertTrue(path.is_relative_to(SITE.resolve()))
+                self.assertTrue(path.is_file(), value)
+                self.assertGreater(path.stat().st_size, 0, value)
 
     def test_version_matches_cargo(self):
         with (ROOT / "Cargo.toml").open("rb") as manifest:
@@ -162,6 +170,13 @@ class SiteAssetTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(path.is_file())
                 self.assertGreater(path.stat().st_size, 0)
+
+    def test_font_is_self_hosted_and_licensed(self):
+        font = SITE / "assets/fonts/figtree-latin.woff2"
+        self.assertEqual(font.read_bytes()[:4], b"wOF2")
+        self.assertTrue((SITE / "assets/fonts/Figtree-OFL.txt").is_file())
+        css = (SITE / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('font-family: "Figtree"', css)
 
     def test_screenshots_are_present_and_small(self):
         shots = sorted((SITE / "screenshots").glob("*.webp"))
