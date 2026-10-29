@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use adw::prelude::*;
 use gtk::{gio, glib};
@@ -12,6 +15,71 @@ use crate::{
     bridge::{self, UiEvent},
     lab,
 };
+
+/// A quick System/Light/Dark switch in the header. The Preferences row stays authoritative.
+fn appearance_menu() -> gtk::MenuButton {
+    use crate::prefs::Theme;
+
+    let button = gtk::MenuButton::builder()
+        .icon_name("display-brightness-symbolic")
+        .tooltip_text("Appearance")
+        .build();
+    let popover = gtk::Popover::new();
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    content.set_margin_top(6);
+    content.set_margin_bottom(6);
+    content.set_margin_start(6);
+    content.set_margin_end(6);
+    content.append(
+        &gtk::Label::builder()
+            .label("Appearance")
+            .xalign(0.0)
+            .css_classes(["heading"])
+            .margin_start(8)
+            .margin_bottom(4)
+            .build(),
+    );
+
+    let syncing = Rc::new(Cell::new(false));
+    let mut entries: Vec<(Theme, gtk::CheckButton)> = Vec::new();
+    for theme in Theme::ALL {
+        let check = gtk::CheckButton::with_label(theme.label());
+        if let Some((_, first)) = entries.first() {
+            check.set_group(Some(first));
+        }
+        let guard = Rc::clone(&syncing);
+        check.connect_toggled(move |check| {
+            if check.is_active() && !guard.get() {
+                crate::prefs::set_theme(theme);
+            }
+        });
+        content.append(&check);
+        entries.push((theme, check));
+    }
+
+    let sync_now = {
+        let entries = entries.clone();
+        let syncing = Rc::clone(&syncing);
+        Rc::new(move || {
+            syncing.set(true);
+            let current = crate::prefs::theme();
+            for (theme, check) in &entries {
+                check.set_active(*theme == current);
+            }
+            syncing.set(false);
+        })
+    };
+    sync_now();
+    popover.set_child(Some(&content));
+    let sync = Rc::clone(&sync_now);
+    popover.connect_visible_notify(move |popover| {
+        if popover.is_visible() {
+            sync();
+        }
+    });
+    button.set_popover(Some(&popover));
+    button
+}
 
 pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::ApplicationWindow {
     crate::prefs::theme().apply();
@@ -69,6 +137,7 @@ pub fn build(app: &adw::Application, runtime: &tokio::runtime::Handle) -> adw::A
     menu.append(Some("Preferences"), Some("win.preferences"));
     menu.append(Some("Setup guide"), Some("win.setup"));
     menu.append(Some("Quit"), Some("app.quit"));
+    header.pack_end(&appearance_menu());
     header.pack_end(
         &gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
