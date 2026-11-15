@@ -378,6 +378,7 @@ impl Explorer {
                 .subtitle(repo_subtitle(repo.downloads, repo.gated.as_str()))
                 .use_markup(false)
                 .build();
+            row.add_suffix(&access_chip(repo.gated.as_str()));
             let this = self.handle();
             let repo_id = repo.repo_id.clone();
             row.connect_expanded_notify(move |row| {
@@ -742,6 +743,29 @@ fn repo_subtitle(downloads: Option<u64>, gated: &str) -> String {
         "open" => downloads,
         other => format!("{downloads} · access: {other}"),
     }
+}
+
+/// The access verdict as a chip; the words stay in the row subtitle too.
+fn access_chip(gated: &str) -> gtk::Label {
+    let label = if gated == "open" {
+        "open".to_owned()
+    } else {
+        text(gated)
+    };
+    let chip = gtk::Label::builder()
+        .label(&label)
+        .valign(gtk::Align::Center)
+        .build();
+    chip.add_css_class("kvlm-chip");
+    if gated != "open" {
+        chip.add_css_class("neutral");
+        chip.set_tooltip_text(Some(
+            "Access is restricted; the download page may require a Hugging Face sign-in.",
+        ));
+    } else {
+        chip.set_tooltip_text(Some("Open access on Hugging Face."));
+    }
+    chip
 }
 
 fn release_title(release: &ModelRelease) -> String {

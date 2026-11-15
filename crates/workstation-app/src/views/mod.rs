@@ -8,6 +8,7 @@ pub mod attached;
 pub mod bench_lab;
 pub mod benchmark_history;
 pub mod catalog;
+pub mod charts;
 pub mod downloads;
 pub mod lab;
 mod lab_text;

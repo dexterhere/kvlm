@@ -1,0 +1,85 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* Dark palette. Teal is the primary accent; amber marks secondary data.
+   Keep in sync with Palette::DARK in theme.rs. */
+
+@define-color accent_bg_color #2dd4bf;
+@define-color accent_fg_color #04211e;
+@define-color accent_color #5eead4;
+
+@define-color kvlm_teal #5eead4;
+@define-color kvlm_kv #2dd4bf;
+@define-color kvlm_amber #f5d061;
+@define-color kvlm_brown #d99a1f;
+@define-color kvlm_neutral #9db0ac;
+@define-color kvlm_track #3a3a3a;
+
+.kvlm-chip {
+  padding: 1px 8px;
+  border-radius: 6px;
+  background-color: alpha(@accent_bg_color, 0.16);
+  color: @accent_color;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+.kvlm-chip.neutral {
+  background-color: alpha(@kvlm_neutral, 0.14);
+  color: @kvlm_neutral;
+}
+
+.kvlm-chip.secondary {
+  background-color: alpha(@kvlm_amber, 0.16);
+  color: @kvlm_amber;
+}
+
+.kvlm-chart-panel {
+  padding: 10px;
+  border: 1px solid alpha(@window_fg_color, 0.12);
+  border-radius: 9px;
+  background-color: alpha(@window_fg_color, 0.03);
+}
+
+.kvlm-chart-note {
+  font-size: 0.85em;
+}
+
+.kvlm-metric {
+  color: @accent_color;
+  font-size: 1.35em;
+  font-weight: 700;
+}
+
+.kvlm-swatch {
+  min-width: 10px;
+  min-height: 10px;
+  border-radius: 3px;
+}
+
+.kvlm-swatch.weights {
+  background-color: @kvlm_teal;
+}
+
+.kvlm-swatch.kv {
+  background-color: @kvlm_kv;
+}
+
+.kvlm-swatch.buffers {
+  background-color: @kvlm_amber;
+}
+
+.kvlm-swatch.runtime {
+  background-color: @kvlm_brown;
+}
+
+.kvlm-swatch.baseline {
+  background-color: @kvlm_amber;
+}
+
+.kvlm-swatch.candidate {
+  background-color: @kvlm_teal;
+}
+
+.kvlm-swatch.neutral {
+  background-color: @kvlm_neutral;
+}

@@ -3,7 +3,7 @@
 //! run did not measure reads "not measured".
 
 use workstation_core::{
-    compare::{Better, Comparison},
+    compare::{Better, Comparison, MetricDelta},
     experiments::{Experiment, Finding, FindingStatus, PassKind, Spread, State, Variable},
 };
 
@@ -156,6 +156,22 @@ pub(super) fn finding_detail(finding: &Finding) -> String {
     lines.join("\n")
 }
 
+/// The words shown next to a comparison: never stronger than the measured spread supports.
+pub(super) fn metric_verdict(metric: &MetricDelta) -> &'static str {
+    let (Some(a), Some(b)) = (&metric.a, &metric.b) else {
+        return "not measured on both runs";
+    };
+    match (metric.distinguishable, metric.better) {
+        (Some(true), Better::Higher) if b.median > a.median => "clearly better",
+        (Some(true), Better::Higher) => "clearly worse",
+        (Some(true), Better::Lower) if b.median < a.median => "clearly better",
+        (Some(true), Better::Lower) => "clearly worse",
+        (Some(true), Better::Neither) => "clearly different",
+        (Some(false), _) => "within run-to-run spread",
+        (None, _) => "too few passes to tell",
+    }
+}
+
 /// How the second run differs from the first, metric by metric.
 pub(super) fn comparison_text(comparison: &Comparison) -> String {
     let mut lines = vec![format!("#{} compared with #{}", comparison.a, comparison.b)];
@@ -176,15 +192,7 @@ pub(super) fn comparison_text(comparison: &Comparison) -> String {
         let change = metric
             .change_percent
             .map_or_else(String::new, |c| format!(" ({c:+.1}%)"));
-        let verdict = match (metric.distinguishable, metric.better) {
-            (Some(true), Better::Higher) if b.median > a.median => "clearly better",
-            (Some(true), Better::Higher) => "clearly worse",
-            (Some(true), Better::Lower) if b.median < a.median => "clearly better",
-            (Some(true), Better::Lower) => "clearly worse",
-            (Some(true), Better::Neither) => "clearly different",
-            (Some(false), _) => "within run-to-run spread",
-            (None, _) => "too few passes to tell",
-        };
+        let verdict = metric_verdict(metric);
         lines.push(format!(
             "{}: {:.1} \u{2192} {:.1} {}{change} \u{b7} {verdict}",
             metric.name, a.median, b.median, metric.unit

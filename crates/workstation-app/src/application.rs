@@ -7,6 +7,7 @@ use workstation_core::{APP_ID, APP_NAME};
 pub fn run(runtime: &tokio::runtime::Handle) -> glib::ExitCode {
     glib::set_application_name(APP_NAME);
     let app = adw::Application::builder().application_id(APP_ID).build();
+    app.connect_startup(|_| crate::theme::install());
     let signal_runtime = runtime.clone();
     let runtime = runtime.clone();
 

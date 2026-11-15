@@ -8,6 +8,7 @@ mod fit_workflow;
 mod lab;
 mod managed;
 mod prefs;
+mod theme;
 mod views;
 mod window;
 

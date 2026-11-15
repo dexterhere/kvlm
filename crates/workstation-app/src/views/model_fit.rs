@@ -4,6 +4,7 @@ use crate::{
     bridge::CoreCommand,
     fit_state::{Completion, FitState},
     fit_workflow::{FitReport, FitRequest, parse_scenario},
+    views::charts,
 };
 use adw::prelude::*;
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
@@ -48,6 +49,8 @@ struct Inner {
     metadata_label: gtk::Label,
     warning_label: gtk::Label,
     breakdown_label: gtk::Label,
+    fit_chart: charts::FitChart,
+    gpu_charts: gtk::Box,
 }
 
 pub struct ModelFit {
@@ -136,10 +139,14 @@ impl ModelFit {
             &status_label,
             &metadata_label,
             &warning_label,
-            &breakdown_label,
         ] {
             result_group.add(label);
         }
+        let fit_chart = charts::FitChart::new("Estimated memory · CPU RAM");
+        result_group.add(&fit_chart.widget);
+        result_group.add(&breakdown_label);
+        let gpu_charts = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        result_group.add(&gpu_charts);
 
         let widget = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -178,6 +185,8 @@ impl ModelFit {
             metadata_label,
             warning_label,
             breakdown_label,
+            fit_chart,
+            gpu_charts,
         });
 
         connect_controls(&inner);
@@ -427,7 +436,15 @@ fn clear_report_fields(inner: &Inner) {
     inner.breakdown_label.set_text("No memory breakdown.");
     inner.status_label.set_tooltip_text(None);
     inner.breakdown_label.set_tooltip_text(None);
+    inner.fit_chart.clear();
+    clear_children(&inner.gpu_charts);
     clear_fit_style(inner);
+}
+
+fn clear_children(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
 }
 
 fn refresh_calculate_button(inner: &Rc<Inner>) {
@@ -517,6 +534,13 @@ fn render_report(inner: &Inner, report: &FitReport) {
 
     let status = status_text(report.estimate.status);
     let assessment = &report.estimate.assessment;
+    inner.fit_chart.set(assessment);
+    clear_children(&inner.gpu_charts);
+    for gpu in &report.gpu_estimates {
+        let chart = charts::FitChart::new(&format!("Estimated memory · {} (VRAM)", gpu.name));
+        chart.set(&gpu.estimate.assessment);
+        inner.gpu_charts.append(&chart.widget);
+    }
     let class = fit_class_text(assessment.class);
     let reason = fit_reason_text(assessment.reason);
     inner.status_label.set_text(&format!(
